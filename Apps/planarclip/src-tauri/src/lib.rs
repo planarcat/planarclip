@@ -15,13 +15,19 @@ mod util;
 use clipboard::monitor::ClipboardMonitor;
 use clipboard::types::ClipboardSnapshot;
 use crypto::keys::KeyPair;
-use storage::json::{AppConfig, load_config, save_config};
+use storage::json::{self as storage_json, AppConfig, KeyPairData, PeerData};
 use sync::engine::SyncEngine;
+use network::webrtc::{ConnectionHandle, ConnectionManager};
+
+/// Default signalling server for MVP development.
+const SIGNALLING_SERVER: &str = "ws://localhost:8765";
 
 pub struct AppState {
     pub config: Arc<Mutex<AppConfig>>,
     pub key_pair: Arc<Mutex<Option<KeyPair>>>,
     pub connected: Arc<Mutex<bool>>,
+    pub connection: Arc<Mutex<Option<ConnectionHandle>>>,
+    pub clip_tx: broadcast::Sender<ClipboardSnapshot>,
 }
 
 #[tauri::command]
@@ -38,13 +44,12 @@ async fn get_status(state: tauri::State<'_, AppState>) -> Result<String, String>
 async fn get_pairing_code(state: tauri::State<'_, AppState>) -> Result<String, String> {
     let kp_guard = state.key_pair.lock().await;
     if let Some(ref kp) = *kp_guard {
-        let code = kp.fingerprint();
-        // Use last 6 chars of fingerprint as pairing code
-        let numeric: String = code.chars().filter(|c| c.is_ascii_digit()).collect();
+        let fp = kp.fingerprint();
+        let numeric: String = fp.chars().filter(|c| c.is_ascii_digit()).collect();
         let pairing = if numeric.len() >= 6 {
-            numeric[numeric.len()-6..].to_string()
+            numeric[numeric.len() - 6..].to_string()
         } else {
-            format!("{:06}", u32::from_str_radix(&code[..6], 16).unwrap_or(0) % 1_000_000)
+            format!("{:06}", u32::from_str_radix(&fp[..6], 16).unwrap_or(0) % 1_000_000)
         };
         Ok(pairing)
     } else {
@@ -54,38 +59,87 @@ async fn get_pairing_code(state: tauri::State<'_, AppState>) -> Result<String, S
 
 #[tauri::command]
 async fn pair(state: tauri::State<'_, AppState>, code: String) -> Result<String, String> {
-    if code.len() != 6 {
+    if code.len() != 6 || !code.chars().all(|c| c.is_ascii_digit()) {
         return Err("Pairing code must be 6 digits".into());
     }
-    // In MVP: accept any 6-digit code, mark as connected
-    // Full implementation would validate the code cryptographically
-    let mut connected = state.connected.lock().await;
-    *connected = true;
+
+    let peer_id = {
+        let kp = state.key_pair.lock().await;
+        match *kp {
+            Some(ref kp) => kp.fingerprint(),
+            None => return Err("Key pair not initialized".into()),
+        }
+    };
+
+    tracing::info!("Pairing: connecting to room {} as peer {}", code, peer_id);
+
+    let handle = ConnectionManager::connect(
+        SIGNALLING_SERVER,
+        &code,
+        &peer_id,
+        state.connected.clone(),
+        state.clip_tx.clone(),
+    )
+    .await
+    .map_err(|e| format!("Connection failed: {}", e))?;
+
+    // Persist peer info
+    {
+        let mut config = state.config.lock().await;
+        config.paired_peer = Some(PeerData {
+            name: "Paired Device".into(),
+            public_key: vec![],
+        });
+        storage_json::save_config(&config);
+    }
+
+    *state.connection.lock().await = Some(handle);
+
     Ok("paired".into())
 }
 
+fn load_or_create_key_pair(config: &mut AppConfig) -> KeyPair {
+    if let Some(ref stored) = config.key_pair {
+        if stored.secret_bytes.len() == 32 {
+            let mut secret_arr = [0u8; 32];
+            secret_arr.copy_from_slice(&stored.secret_bytes);
+            let secret = x25519_dalek::StaticSecret::from(secret_arr);
+            let public = x25519_dalek::PublicKey::from(&secret);
+            tracing::info!("Restored key pair from config");
+            return KeyPair { secret, public };
+        }
+    }
+
+    // Generate new key pair and persist
+    let kp = KeyPair::generate();
+    config.key_pair = Some(KeyPairData {
+        secret_bytes: kp.secret.as_bytes().to_vec(),
+        public_bytes: kp.public_bytes().to_vec(),
+    });
+    tracing::info!("Generated new key pair");
+    kp
+}
+
 pub fn run() {
-    // Initialize tracing for debug output
     tracing_subscriber::fmt::init();
 
-    // Load or create app config
-    let mut config = load_config();
-
-    // Generate key pair if not exists
-    let key_pair = KeyPair::generate();
+    let mut config = storage_json::load_config();
     if config.device_name.is_empty() {
         config.device_name = "My Device".into();
     }
-    save_config(&config);
+
+    let key_pair = load_or_create_key_pair(&mut config);
+    storage_json::save_config(&config);
+
+    let (clip_tx, _) = broadcast::channel::<ClipboardSnapshot>(16);
 
     let app_state = AppState {
         config: Arc::new(Mutex::new(config)),
         key_pair: Arc::new(Mutex::new(Some(key_pair))),
         connected: Arc::new(Mutex::new(false)),
+        connection: Arc::new(Mutex::new(None)),
+        clip_tx: clip_tx.clone(),
     };
-
-    // Clipboard broadcast channel
-    let (clip_tx, _) = broadcast::channel::<ClipboardSnapshot>(16);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -150,9 +204,9 @@ pub fn run() {
 
             // Spawn sync engine
             let clip_rx = clip_tx.subscribe();
-            let connected = app.state::<AppState>().connected.clone();
+            let connection = app.state::<AppState>().connection.clone();
             tokio::spawn(async move {
-                let engine = SyncEngine::new(clip_rx, connected);
+                let engine = SyncEngine::new(clip_rx, connection);
                 engine.run().await;
             });
 
