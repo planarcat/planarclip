@@ -195,19 +195,28 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Spawn clipboard monitor
+            // Spawn clipboard monitor and sync engine on a background thread
+            // (tokio::spawn not available in setup — need our own runtime)
             let clip_tx_monitor = clip_tx.clone();
-            tokio::spawn(async move {
-                let mut monitor = ClipboardMonitor::new(clip_tx_monitor);
-                monitor.run().await;
-            });
-
-            // Spawn sync engine
             let clip_rx = clip_tx.subscribe();
             let connection = app.state::<AppState>().connection.clone();
-            tokio::spawn(async move {
-                let engine = SyncEngine::new(clip_rx, connection);
-                engine.run().await;
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create background runtime");
+                rt.block_on(async move {
+                    tokio::join!(
+                        async {
+                            let mut monitor = ClipboardMonitor::new(clip_tx_monitor);
+                            monitor.run().await;
+                        },
+                        async {
+                            let engine = SyncEngine::new(clip_rx, connection);
+                            engine.run().await;
+                        },
+                    )
+                });
             });
 
             Ok(())
