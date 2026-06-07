@@ -13,12 +13,7 @@ node_modules/
 # GitNexus index cache
 .gitnexus/
 
-# Claude Code
-.claude/settings.local.json
-.claude/skills/generated/
-
 # IDE
-.vscode/
 .idea/
 
 # OS
