@@ -78,6 +78,40 @@
         padding: 8px;
       }
       .hint { font-size: 11px; color: #666; text-align: center; }
+      .lan-list { display: flex; flex-direction: column; gap: 6px; }
+      .lan-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 12px;
+        background: #111;
+        border: 1px solid #2a2a2a;
+        border-radius: 6px;
+      }
+      .lan-item .dev-name { font-size: 14px; color: #ddd; }
+      .lan-item .dev-ip { font-size: 11px; color: #666; }
+      .lan-item button {
+        width: auto;
+        padding: 5px 14px;
+        font-size: 12px;
+      }
+      .overlay {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0,0,0,0.7); display: flex; align-items: center;
+        justify-content: center; z-index: 100;
+      }
+      .overlay.hidden { display: none; }
+      .dialog {
+        background: #1a1a1a; border: 1px solid #333; border-radius: 12px;
+        padding: 24px; text-align: center; max-width: 300px; width: 100%;
+      }
+      .dialog h3 { font-size: 16px; margin-bottom: 8px; }
+      .dialog .pair-code { margin: 12px 0; }
+      .dialog .btn-row { display: flex; gap: 8px; margin-top: 12px; }
+      .dialog .btn-row button { flex: 1; }
+      .dialog .btn-row button.secondary { background: #333; }
+      .dialog .btn-row button.secondary:hover { background: #444; }
+      .empty-hint { text-align: center; color: #555; font-size: 12px; padding: 8px; }
     </style>
   </head>
   <body>
@@ -107,6 +141,40 @@
             <div class="hint" style="margin-bottom:6px;">Enter pairing code from other device</div>
             <input type="text" id="pairInput" maxlength="6" placeholder="000000" />
             <button style="margin-top:8px;" id="pairBtn">Pair</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" id="lanCard">
+        <h2>LAN Devices</h2>
+        <div class="lan-list" id="lanList">
+          <div class="empty-hint">Searching for devices...</div>
+        </div>
+      </div>
+
+      <!-- Initiator: pairing code input overlay -->
+      <div class="overlay hidden" id="codeOverlay">
+        <div class="dialog">
+          <h3>Enter Pairing Code</h3>
+          <div class="hint" style="margin-bottom:12px;">Check the other device's screen for the code</div>
+          <input type="text" id="codeInput" maxlength="6" placeholder="000000" />
+          <div class="btn-row">
+            <button class="secondary" id="codeCancel">Cancel</button>
+            <button id="codeSubmit">Submit</button>
+          </div>
+          <div class="hint" style="margin-top:8px;color:#f87171;" id="codeError"></div>
+        </div>
+      </div>
+
+      <!-- Responder: connection request overlay -->
+      <div class="overlay hidden" id="requestOverlay">
+        <div class="dialog">
+          <h3>Connection Request</h3>
+          <div class="hint" id="requestFrom"></div>
+          <div class="pair-code" id="requestCode">------</div>
+          <div class="hint">Enter this code on the requesting device</div>
+          <div class="btn-row">
+            <button class="secondary" id="requestReject">Reject</button>
           </div>
         </div>
       </div>
