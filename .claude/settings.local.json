@@ -32,7 +32,15 @@
       "Glob",
       "Grep",
       "PowerShell(git commit --amend -m $msg)",
-      "PowerShell($msg = \"fix: use dedicated runtime for Tauri setup background tasks`n`nReplace tokio::spawn with std::thread + dedicated Tokio runtime in setup hook, since no Tokio runtime exists at that point. Also add GitNexus code intelligence config to CLAUDE.md and skill files.\")"
+      "PowerShell($msg = \"fix: use dedicated runtime for Tauri setup background tasks`n`nReplace tokio::spawn with std::thread + dedicated Tokio runtime in setup hook, since no Tokio runtime exists at that point. Also add GitNexus code intelligence config to CLAUDE.md and skill files.\")",
+      "Bash(New-Item -ItemType Directory -Force -Path \"c:\\\\Users\\\\planarcat\\\\Documents\\\\Workspace\\\\planarclip\\\\Plans\\\\2026-06-05-lan-mdns-auto-discovery\")",
+      "Bash(git -C \"c:\\\\Users\\\\planarcat\\\\Documents\\\\Workspace\\\\planarclip\" diff)",
+      "Bash(git -C \"c:\\\\Users\\\\planarcat\\\\Documents\\\\Workspace\\\\planarclip\" diff --cached)",
+      "Bash(git -C \"c:\\\\Users\\\\planarcat\\\\Documents\\\\Workspace\\\\planarclip\" log --oneline -5)",
+      "Bash(git -C \"c:/Users/planarcat/Documents/Workspace/planarclip\" add .gitignore AGENTS.md CLAUDE.md README.md)",
+      "Bash(git -C c:/Users/planarcat/Documents/Workspace/planarclip commit -m '@ *)",
+      "Bash(git -C \"c:/Users/planarcat/Documents/Workspace/planarclip\" status)",
+      "Bash(mkdir -p .vscode)"
     ],
     "deny": [
       "Bash(rm -rf *)",
@@ -51,6 +59,9 @@
       "Read(**/.env)",
       "Read(**/credentials*)",
       "Read(**/secrets*)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\planarcat\\Documents\\Workspace\\planarclip"
     ]
   },
   "enableAllProjectMcpServers": true,

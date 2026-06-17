@@ -1,16 +1,29 @@
 # Dependencies
 node_modules/
 
+# Build output
+**/dist/
+
 # Rust build artifacts
 **/target/
 
-# Tauri generated schemas
-**/gen/schemas/
+# Tauri generated
+**/gen/
+
+# GitNexus index cache
+.gitnexus/
 
 # IDE
-.vscode/
 .idea/
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+.env.*.local

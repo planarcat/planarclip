@@ -6,6 +6,9 @@ pub struct AppConfig {
     pub device_name: String,
     pub key_pair: Option<KeyPairData>,
     pub paired_peer: Option<PeerData>,
+    pub tcp_port: Option<u16>,
+    pub lan_enabled: Option<bool>,
+    pub trusted_peers: Option<Vec<TrustedPeerData>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -18,6 +21,14 @@ pub struct KeyPairData {
 pub struct PeerData {
     pub name: String,
     pub public_key: Vec<u8>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TrustedPeerData {
+    pub name: String,
+    pub public_key: Vec<u8>,
+    pub peer_id: String,
+    pub last_ip: Option<String>,
 }
 
 pub fn config_path() -> PathBuf {

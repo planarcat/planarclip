@@ -1,6 +1,7 @@
 use rand::rngs::OsRng;
 use x25519_dalek::{PublicKey, StaticSecret};
 
+#[derive(Clone)]
 pub struct KeyPair {
     pub secret: StaticSecret,
     pub public: PublicKey,

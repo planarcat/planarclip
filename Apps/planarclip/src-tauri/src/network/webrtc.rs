@@ -3,6 +3,7 @@ use tokio::sync::{broadcast, Mutex};
 
 use crate::clipboard::monitor::ClipboardMonitor;
 use crate::clipboard::types::ClipboardSnapshot;
+use crate::network::direct::DirectConnection;
 use crate::network::protocol::SignalMessage;
 use crate::network::signalling;
 use crate::sync::dedup::DedupStore;
@@ -130,5 +131,72 @@ impl ConnectionManager {
         });
 
         Ok(handle)
+    }
+
+    /// Establish a connection over an existing TCP direct transport (post-handshake).
+    ///
+    /// Works identically to `connect()` but uses a `DirectConnection` instead of
+    /// a WebSocket signalling relay.
+    pub async fn connect_direct(
+        conn: DirectConnection,
+        connected: Arc<Mutex<bool>>,
+        clip_tx: broadcast::Sender<ClipboardSnapshot>,
+    ) -> ConnectionHandle {
+        let sig_tx = conn.tx;
+        let mut sig_rx = conn.rx;
+        let dedup = Arc::new(Mutex::new(DedupStore::new(128)));
+
+        let handle = ConnectionHandle {
+            sig_tx,
+            connected: connected.clone(),
+            dedup: dedup.clone(),
+        };
+
+        *connected.lock().await = true;
+
+        tokio::spawn(async move {
+            while let Some(msg) = sig_rx.recv().await {
+                match msg {
+                    SignalMessage::Clipboard { payload, hash } => {
+                        let hash_bytes = match hex::decode(&hash) {
+                            Ok(v) if v.len() == 32 => {
+                                let mut arr = [0u8; 32];
+                                arr.copy_from_slice(&v);
+                                arr
+                            }
+                            _ => {
+                                tracing::warn!("Invalid hash in clipboard message");
+                                continue;
+                            }
+                        };
+
+                        {
+                            let mut d = dedup.lock().await;
+                            if d.has_seen(&hash_bytes) {
+                                continue;
+                            }
+                            d.mark_seen(hash_bytes);
+                        }
+
+                        tracing::info!("Received remote clipboard: {} chars", payload.len());
+                        ClipboardMonitor::write_clipboard(&payload);
+                        let snapshot = ClipboardSnapshot::Text(payload);
+                        let _ = clip_tx.send(snapshot);
+                    }
+                    SignalMessage::PeerJoined { .. } => {
+                        // Not meaningful on direct connections; ignore.
+                    }
+                    SignalMessage::PeerLeft { .. } => {
+                        tracing::info!("Direct peer disconnected");
+                        *connected.lock().await = false;
+                    }
+                }
+            }
+
+            tracing::warn!("Direct connection lost");
+            *connected.lock().await = false;
+        });
+
+        handle
     }
 }
