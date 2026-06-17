@@ -30,16 +30,6 @@ pub fn start_discovery(
     let local_ip = local_ip_for_mdns();
     let host_name = hostname();
 
-    tracing::info!(
-        target: "planarclip::startup",
-        device_name = %device_name,
-        peer_id = %peer_id,
-        host_name = %host_name,
-        local_ip = %local_ip,
-        port,
-        "preparing mdns service info"
-    );
-
     let service_info = mdns_sd::ServiceInfo::new(
         SERVICE_TYPE,
         device_name,
@@ -119,13 +109,7 @@ fn hostname() -> String {
 
 fn local_ip_for_mdns() -> String {
     if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
-        if let Some((name, ip)) = interfaces.into_iter().find(|(_, ip)| is_preferred_mdns_ip(ip)) {
-            tracing::info!(
-                target: "planarclip::startup",
-                interface = %name,
-                selected_ip = %ip,
-                "selected mdns interface address"
-            );
+        if let Some((_, ip)) = interfaces.into_iter().find(|(_, ip)| is_preferred_mdns_ip(ip)) {
             return ip.to_string();
         }
     }

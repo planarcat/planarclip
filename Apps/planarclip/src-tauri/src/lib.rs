@@ -284,20 +284,6 @@ fn load_or_create_key_pair(config: &mut AppConfig) -> KeyPair {
     kp
 }
 
-fn log_startup_runtime(stage: &str) {
-    let current_thread = std::thread::current();
-    let runtime_available = tokio::runtime::Handle::try_current().is_ok();
-
-    tracing::info!(
-        target: "planarclip::startup",
-        stage = stage,
-        runtime_available,
-        thread_id = ?current_thread.id(),
-        thread_name = current_thread.name().unwrap_or("unnamed"),
-        "startup runtime checkpoint"
-    );
-}
-
 async fn handle_incoming_connection(
     req: direct::IncomingRequest,
     device_name: String,
@@ -454,8 +440,6 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(app_state)
         .setup(move |app| {
-            log_startup_runtime("setup.enter");
-
             let toggle = MenuItemBuilder::with_id("toggle", "Show PlanarClip").build(app)?;
             let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
@@ -510,39 +494,23 @@ pub fn run() {
             let connection = app.state::<AppState>().connection.clone();
             let config = app.state::<AppState>().config.clone();
 
-            tracing::info!(
-                target: "planarclip::startup",
-                device_name = %device_name,
-                peer_id = %peer_id,
-                tcp_port,
-                "setup state prepared"
-            );
-
             let (discovery_tx, mut discovery_rx) = mpsc::unbounded_channel::<DiscoveryEvent>();
 
             match discovery::start_discovery(&device_name, &peer_id, tcp_port, discovery_tx) {
                 Ok(_daemon) => {
-                    tracing::info!(target: "planarclip::startup", "mDNS discovery started successfully");
                     std::thread::spawn(move || loop {
                         std::thread::sleep(std::time::Duration::from_secs(3600));
                     });
                 }
                 Err(e) => {
-                    tracing::error!(
-                        target: "planarclip::startup",
-                        error = %e,
-                        "Failed to start mDNS discovery"
-                    );
+                    tracing::error!("Failed to start mDNS discovery: {}", e);
                 }
             }
-
-            log_startup_runtime("setup.before_discovery_forward_spawn");
 
             {
                 let lan_devices = lan_devices.clone();
                 let app_handle = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
-                    tracing::info!(target: "planarclip::startup", "discovery forwarder task started");
                     while let Some(event) = discovery_rx.recv().await {
                         let mut devices = lan_devices.lock().await;
                         match event {
@@ -564,10 +532,7 @@ pub fn run() {
 
             let (listener_tx, mut listener_rx) = mpsc::unbounded_channel::<ListenerEvent>();
 
-            log_startup_runtime("setup.before_listener_spawn");
-
             tauri::async_runtime::spawn(async move {
-                tracing::info!(target: "planarclip::startup", port = tcp_port, "listener task started");
                 if let Err(e) = direct::run_listener(tcp_port, listener_tx).await {
                     tracing::error!("TCP listener error: {}", e);
                 }
@@ -583,10 +548,7 @@ pub fn run() {
                 let key_pair = key_pair.clone();
                 let config = config.clone();
 
-                log_startup_runtime("setup.before_listener_coordinator_spawn");
-
                 tauri::async_runtime::spawn(async move {
-                    tracing::info!(target: "planarclip::startup", "listener coordinator task started");
                     while let Some(event) = listener_rx.recv().await {
                         match event {
                             ListenerEvent::Incoming(req) => {
