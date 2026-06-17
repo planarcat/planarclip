@@ -19,9 +19,6 @@
         "center": true
       }
     ],
-    "trayIcon": {
-      "iconPath": "icons/icon.png"
-    },
     "security": {
       "csp": null
     }

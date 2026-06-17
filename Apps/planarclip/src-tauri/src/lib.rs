@@ -1,6 +1,6 @@
 use std::sync::Arc;
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
@@ -21,7 +21,6 @@ use network::discovery::{self, DiscoveryEvent, LanDevice};
 use network::webrtc::{ConnectionHandle, ConnectionManager};
 use storage::json::{self as storage_json, AppConfig, KeyPairData, PeerData, TrustedPeerData};
 
-/// Default signalling server for MVP development.
 const SIGNALLING_SERVER: &str = "ws://localhost:8765";
 const DEFAULT_TCP_PORT: u16 = 19876;
 
@@ -31,14 +30,10 @@ pub struct AppState {
     pub connected: Arc<Mutex<bool>>,
     pub connection: Arc<Mutex<Option<ConnectionHandle>>>,
     pub clip_tx: broadcast::Sender<ClipboardSnapshot>,
-
-    // LAN discovery
     pub lan_devices: Arc<Mutex<Vec<LanDevice>>>,
     pub pending_initiator: Arc<Mutex<Option<TcpStream>>>,
     pub pending_reject_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 }
-
-// ── Existing commands ────────────────────────────────────────────────────
 
 #[tauri::command]
 async fn get_status(state: tauri::State<'_, AppState>) -> Result<String, String> {
@@ -107,8 +102,6 @@ async fn pair(state: tauri::State<'_, AppState>, code: String) -> Result<String,
     Ok("paired".into())
 }
 
-// ── New LAN commands ─────────────────────────────────────────────────────
-
 #[tauri::command]
 async fn get_lan_devices(state: tauri::State<'_, AppState>) -> Result<Vec<LanDevice>, String> {
     let devices = state.lan_devices.lock().await.clone();
@@ -135,7 +128,6 @@ async fn connect_lan(
             let peer_id = conn.peer_id.clone();
             let peer_pk = conn.peer_public_key.clone();
 
-            // Save to trusted peers
             {
                 let mut config = state.config.lock().await;
                 let mut peers = config.trusted_peers.clone().unwrap_or_default();
@@ -159,19 +151,25 @@ async fn connect_lan(
             .await;
             *state.connection.lock().await = Some(handle);
 
-            let _ = app.emit("connection-established", serde_json::json!({
-                "peer_name": peer_name,
-                "peer_id": peer_id,
-                "is_reconnect": true,
-            }));
+            let _ = app.emit(
+                "connection-established",
+                serde_json::json!({
+                    "peer_name": peer_name,
+                    "peer_id": peer_id,
+                    "is_reconnect": true,
+                }),
+            );
 
             Ok("connected".into())
         }
         Ok(InitiatorResult::AwaitingCode { stream }) => {
             *state.pending_initiator.lock().await = Some(stream);
-            let _ = app.emit("pairing-code-needed", serde_json::json!({
-                "peer_ip": ip,
-            }));
+            let _ = app.emit(
+                "pairing-code-needed",
+                serde_json::json!({
+                    "peer_ip": ip,
+                }),
+            );
             Ok("awaiting_code".into())
         }
         Err(e) => Err(format!("Connection failed: {}", e)),
@@ -224,11 +222,14 @@ async fn submit_pairing_code(
             .await;
             *state.connection.lock().await = Some(handle);
 
-            let _ = app.emit("connection-established", serde_json::json!({
-                "peer_name": peer_name,
-                "peer_id": peer_id,
-                "is_reconnect": false,
-            }));
+            let _ = app.emit(
+                "connection-established",
+                serde_json::json!({
+                    "peer_name": peer_name,
+                    "peer_id": peer_id,
+                    "is_reconnect": false,
+                }),
+            );
 
             Ok("connected".into())
         }
@@ -254,7 +255,6 @@ async fn disconnect(state: tauri::State<'_, AppState>) -> Result<(), String> {
     *state.connection.lock().await = None;
     *state.pending_initiator.lock().await = None;
 
-    // Clear any pending reject so the handshake task can exit
     let tx = state.pending_reject_tx.lock().await.take();
     if let Some(tx) = tx {
         let _ = tx.send(());
@@ -262,8 +262,6 @@ async fn disconnect(state: tauri::State<'_, AppState>) -> Result<(), String> {
 
     Ok(())
 }
-
-// ── Initialization ───────────────────────────────────────────────────────
 
 fn load_or_create_key_pair(config: &mut AppConfig) -> KeyPair {
     if let Some(ref stored) = config.key_pair {
@@ -286,9 +284,20 @@ fn load_or_create_key_pair(config: &mut AppConfig) -> KeyPair {
     kp
 }
 
-/// Handle an incoming TCP connection request from the LAN listener.
-///
-/// This runs as a background task spawned by the coordinator.
+fn log_startup_runtime(stage: &str) {
+    let current_thread = std::thread::current();
+    let runtime_available = tokio::runtime::Handle::try_current().is_ok();
+
+    tracing::info!(
+        target: "planarclip::startup",
+        stage = stage,
+        runtime_available,
+        thread_id = ?current_thread.id(),
+        thread_name = current_thread.name().unwrap_or("unnamed"),
+        "startup runtime checkpoint"
+    );
+}
+
 async fn handle_incoming_connection(
     req: direct::IncomingRequest,
     device_name: String,
@@ -304,9 +313,7 @@ async fn handle_incoming_connection(
     let initiator_name = req.initiator_name.clone();
     let initiator_pk = req.initiator_public_key.clone();
 
-    let is_trusted = trusted_peers
-        .iter()
-        .any(|tp| tp.public_key == initiator_pk);
+    let is_trusted = trusted_peers.iter().any(|tp| tp.public_key == initiator_pk);
 
     if is_trusted {
         tracing::info!("Auto-accepting trusted peer: {}", initiator_name);
@@ -328,11 +335,14 @@ async fn handle_incoming_connection(
                 .await;
                 *connection.lock().await = Some(handle);
 
-                let _ = app_handle.emit("connection-established", serde_json::json!({
-                    "peer_name": initiator_name,
-                    "peer_id": direct::short_fingerprint(&initiator_pk),
-                    "is_reconnect": true,
-                }));
+                let _ = app_handle.emit(
+                    "connection-established",
+                    serde_json::json!({
+                        "peer_name": initiator_name,
+                        "peer_id": direct::short_fingerprint(&initiator_pk),
+                        "is_reconnect": true,
+                    }),
+                );
             }
             Err(e) => {
                 tracing::warn!("Auto-accept handshake failed: {}", e);
@@ -341,7 +351,6 @@ async fn handle_incoming_connection(
         return;
     }
 
-    // Unknown peer — generate pairing code
     let pairing_code = direct::generate_pairing_code();
     tracing::info!(
         "Unknown peer {} — pairing code: {}",
@@ -349,11 +358,14 @@ async fn handle_incoming_connection(
         pairing_code
     );
 
-    let _ = app_handle.emit("connection-request", serde_json::json!({
-        "device_name": initiator_name,
-        "peer_id": req.initiator_peer_id,
-        "pairing_code": pairing_code,
-    }));
+    let _ = app_handle.emit(
+        "connection-request",
+        serde_json::json!({
+            "device_name": initiator_name,
+            "peer_id": req.initiator_peer_id,
+            "pairing_code": pairing_code,
+        }),
+    );
 
     let (reject_tx, reject_rx) = oneshot::channel();
     *pending_reject_tx.lock().await = Some(reject_tx);
@@ -370,7 +382,6 @@ async fn handle_incoming_connection(
     .await
     {
         Ok(conn) => {
-            // Save to trusted peers
             {
                 let mut cfg = config.lock().await;
                 let mut peers = cfg.trusted_peers.clone().unwrap_or_default();
@@ -394,11 +405,14 @@ async fn handle_incoming_connection(
             .await;
             *connection.lock().await = Some(handle);
 
-            let _ = app_handle.emit("connection-established", serde_json::json!({
-                "peer_name": initiator_name,
-                "peer_id": direct::short_fingerprint(&initiator_pk),
-                "is_reconnect": false,
-            }));
+            let _ = app_handle.emit(
+                "connection-established",
+                serde_json::json!({
+                    "peer_name": initiator_name,
+                    "peer_id": direct::short_fingerprint(&initiator_pk),
+                    "is_reconnect": false,
+                }),
+            );
         }
         Err(e) => {
             tracing::info!("Pairing failed: {}", e);
@@ -440,11 +454,11 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(app_state)
         .setup(move |app| {
-            let toggle = MenuItemBuilder::with_id("toggle", "Show PlanarClip")
-                .build(app)?;
+            log_startup_runtime("setup.enter");
+
+            let toggle = MenuItemBuilder::with_id("toggle", "Show PlanarClip").build(app)?;
             let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
-            let quit = MenuItemBuilder::with_id("quit", "Quit")
-                .build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
             let menu = MenuBuilder::new(app)
                 .items(&[&toggle, &separator, &quit])
@@ -473,19 +487,17 @@ pub fn run() {
                         }
                     }
                 })
-                .on_menu_event(|app, event| {
-                    match event.id().as_ref() {
-                        "toggle" => {
-                            if let Some(win) = app.get_webview_window("main") {
-                                let _ = win.show();
-                                let _ = win.set_focus();
-                            }
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "toggle" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
                         }
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        _ => {}
                     }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
                 })
                 .build(app)?;
 
@@ -498,34 +510,43 @@ pub fn run() {
             let connection = app.state::<AppState>().connection.clone();
             let config = app.state::<AppState>().config.clone();
 
-            // ── Start mDNS discovery ────────────────────────────────
+            tracing::info!(
+                target: "planarclip::startup",
+                device_name = %device_name,
+                peer_id = %peer_id,
+                tcp_port,
+                "setup state prepared"
+            );
 
             let (discovery_tx, mut discovery_rx) = mpsc::unbounded_channel::<DiscoveryEvent>();
 
             match discovery::start_discovery(&device_name, &peer_id, tcp_port, discovery_tx) {
                 Ok(_daemon) => {
-                    // Keep daemon alive for the session
-                    std::thread::spawn(move || {
-                        loop {
-                            std::thread::sleep(std::time::Duration::from_secs(3600));
-                        }
+                    tracing::info!(target: "planarclip::startup", "mDNS discovery started successfully");
+                    std::thread::spawn(move || loop {
+                        std::thread::sleep(std::time::Duration::from_secs(3600));
                     });
                 }
                 Err(e) => {
-                    tracing::error!("Failed to start mDNS discovery: {}", e);
+                    tracing::error!(
+                        target: "planarclip::startup",
+                        error = %e,
+                        "Failed to start mDNS discovery"
+                    );
                 }
             }
 
-            // Task: forward discovery events to lan_devices list and the frontend
+            log_startup_runtime("setup.before_discovery_forward_spawn");
+
             {
                 let lan_devices = lan_devices.clone();
                 let app_handle = app_handle.clone();
-                tokio::spawn(async move {
+                tauri::async_runtime::spawn(async move {
+                    tracing::info!(target: "planarclip::startup", "discovery forwarder task started");
                     while let Some(event) = discovery_rx.recv().await {
                         let mut devices = lan_devices.lock().await;
                         match event {
                             DiscoveryEvent::Added(dev) => {
-                                // Deduplicate by peer_id
                                 if !devices.iter().any(|d| d.peer_id == dev.peer_id) {
                                     tracing::info!("LAN device added: {} ({})", dev.name, dev.ip);
                                     devices.push(dev);
@@ -541,17 +562,17 @@ pub fn run() {
                 });
             }
 
-            // ── Start TCP listener ──────────────────────────────────
-
             let (listener_tx, mut listener_rx) = mpsc::unbounded_channel::<ListenerEvent>();
 
-            tokio::spawn(async move {
+            log_startup_runtime("setup.before_listener_spawn");
+
+            tauri::async_runtime::spawn(async move {
+                tracing::info!(target: "planarclip::startup", port = tcp_port, "listener task started");
                 if let Err(e) = direct::run_listener(tcp_port, listener_tx).await {
                     tracing::error!("TCP listener error: {}", e);
                 }
             });
 
-            // Task: coordinator — handle incoming TCP connections
             {
                 let app_handle = app_handle.clone();
                 let connected = connected.clone();
@@ -562,7 +583,10 @@ pub fn run() {
                 let key_pair = key_pair.clone();
                 let config = config.clone();
 
-                tokio::spawn(async move {
+                log_startup_runtime("setup.before_listener_coordinator_spawn");
+
+                tauri::async_runtime::spawn(async move {
+                    tracing::info!(target: "planarclip::startup", "listener coordinator task started");
                     while let Some(event) = listener_rx.recv().await {
                         match event {
                             ListenerEvent::Incoming(req) => {
@@ -584,8 +608,6 @@ pub fn run() {
                     }
                 });
             }
-
-            // ── Spawn clipboard monitor and sync engine ─────────────
 
             let clip_tx_monitor = clip_tx.clone();
             let clip_rx = clip_tx.subscribe();

@@ -1,10 +1,10 @@
+use std::net::IpAddr;
 use tokio::sync::mpsc;
 
 pub use mdns_sd::{ServiceDaemon, ServiceEvent};
 
 const SERVICE_TYPE: &str = "_planarclip._tcp.local.";
 
-/// A LAN device discovered via mDNS.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LanDevice {
     pub name: String,
@@ -13,17 +13,12 @@ pub struct LanDevice {
     pub port: u16,
 }
 
-/// Events pushed from the mDNS browser to the coordinator.
 #[derive(Debug, Clone)]
 pub enum DiscoveryEvent {
     Added(LanDevice),
     Removed(LanDevice),
 }
 
-/// Start mDNS advertisement (register our service) and browsing (discover peers).
-///
-/// Returns immediately after spawning background tasks. Discovered devices are
-/// sent through `event_tx`.
 pub fn start_discovery(
     device_name: &str,
     peer_id: &str,
@@ -33,17 +28,25 @@ pub fn start_discovery(
     let daemon = ServiceDaemon::new()?;
 
     let local_ip = local_ip_for_mdns();
+    let host_name = hostname();
+
+    tracing::info!(
+        target: "planarclip::startup",
+        device_name = %device_name,
+        peer_id = %peer_id,
+        host_name = %host_name,
+        local_ip = %local_ip,
+        port,
+        "preparing mdns service info"
+    );
 
     let service_info = mdns_sd::ServiceInfo::new(
         SERVICE_TYPE,
         device_name,
-        &hostname(),
+        &host_name,
         &local_ip,
         port,
-        &[
-            ("peer_id", peer_id),
-            ("device_name", device_name),
-        ][..],
+        &[("peer_id", peer_id), ("device_name", device_name)][..],
     )?;
 
     daemon.register(service_info)?;
@@ -54,7 +57,6 @@ pub fn start_discovery(
         port
     );
 
-    // Start browsing for peers
     let browse_rx = daemon.browse(SERVICE_TYPE)?;
     let tx = event_tx;
 
@@ -84,9 +86,6 @@ pub fn start_discovery(
                     }
                 }
                 ServiceEvent::ServiceRemoved(instance_name, _service_type) => {
-                    // The removed event only gives us the instance name — we
-                    // need to match it to a previously discovered device.
-                    // Emit a removed event with just the name; the UI can match.
                     let device = LanDevice {
                         name: instance_name,
                         peer_id: String::new(),
@@ -105,16 +104,44 @@ pub fn start_discovery(
 }
 
 fn hostname() -> String {
-    hostname::get()
+    let host = hostname::get()
         .ok()
         .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "unknown".to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let host = host.trim_end_matches('.');
+
+    if host.ends_with(".local") {
+        format!("{host}.")
+    } else {
+        format!("{host}.local.")
+    }
 }
 
 fn local_ip_for_mdns() -> String {
-    // Try to find a non-loopback IPv4 address.
-    // On most home LANs this returns 192.168.x.x or 10.x.x.x.
+    if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
+        if let Some((name, ip)) = interfaces.into_iter().find(|(_, ip)| is_preferred_mdns_ip(ip)) {
+            tracing::info!(
+                target: "planarclip::startup",
+                interface = %name,
+                selected_ip = %ip,
+                "selected mdns interface address"
+            );
+            return ip.to_string();
+        }
+    }
+
     local_ip_address::local_ip()
         .map(|ip| ip.to_string())
         .unwrap_or_else(|_| "127.0.0.1".to_string())
+}
+
+fn is_preferred_mdns_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            let is_benchmark = octets[0] == 198 && matches!(octets[1], 18 | 19);
+            !ip.is_loopback() && !ip.is_link_local() && ip.is_private() && !is_benchmark
+        }
+        IpAddr::V6(_) => false,
+    }
 }
