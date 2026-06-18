@@ -32,25 +32,34 @@ pnpm install
 
 ### 开发模式
 
+项目命令遵循以下约定：
+
+- `pnpm <动作>`：执行完整应用流程（前端 + Tauri / Rust）
+- `pnpm <动作>-web`：仅执行前端 Web 对应流程
+
 ```bash
-# 仅启动前端开发服务器（localhost:1420）
+# 启动完整应用（含 Tauri 与 Rust 后端）
 pnpm dev
 
-# 运行统一检查流程（格式、lint、类型检查）
+# 仅启动前端开发服务器（localhost:1420）
+pnpm dev-web
+
+# 运行完整检查（前端检查 + Rust cargo check）
 pnpm check
 
-# 启动完整 Tauri 应用（含 Rust 后端）
-pnpm tauri dev
+# 仅运行前端检查（格式、lint、类型检查）
+pnpm check-web
 ```
-
-如需直接调用底层命令，可使用：`pnpm exec vp dev`、`pnpm exec vp check`。
 
 ### 生产构建
 
 ```bash
-pnpm build       # 前端生产构建
-pnpm tauri build # 生成安装包（Windows: NSIS，macOS: DMG）
+pnpm build       # 生成完整桌面应用安装包
+pnpm build-web   # 仅构建前端产物
+pnpm preview-web # 预览前端构建结果
 ```
+
+底层命令仍可直接调用，例如：`pnpm tauri dev`、`pnpm tauri build`、`pnpm exec vp dev`。
 
 ## 使用方式
 

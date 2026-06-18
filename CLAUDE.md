@@ -7,15 +7,17 @@
 所有命令在 `Apps/planarclip/` 目录下执行：
 
 ```bash
-pnpm exec vp install # 安装依赖
-pnpm exec vp dev     # 启动前端开发服务器 (localhost:1420)
-pnpm exec vp check   # 运行格式、lint、类型检查
-pnpm exec vp build   # 前端生产构建
-npx tauri dev        # 启动 Tauri 开发模式（含 Rust 后端）
-npx tauri build      # 生产构建
+pnpm install         # 安装依赖
+pnpm dev             # 启动完整应用（Tauri + Rust 后端 + 前端）
+pnpm dev-web         # 仅启动前端开发服务器 (localhost:1420)
+pnpm check           # 前端检查 + Rust cargo check
+pnpm check-web       # 仅运行前端格式、lint、类型检查
+pnpm build           # 生成完整桌面应用安装包
+pnpm build-web       # 仅构建前端产物
+pnpm preview-web     # 预览前端构建结果
 ```
 
-也可以继续使用项目脚本别名：`pnpm dev`、`pnpm check`、`pnpm build`。前端开发服务器端口为 1420，HMR 端口为 1421。`tauri.conf.json` 已通过 `beforeDevCommand` / `beforeBuildCommand` 调用 `pnpm exec vp dev` 与 `pnpm exec vp build`。
+命名约定：`pnpm <动作>` 表示完整应用流程，`pnpm <动作>-web` 表示仅执行前端 Web 流程。前端开发服务器端口为 1420，HMR 端口为 1421。`tauri.conf.json` 仍通过 `beforeDevCommand` / `beforeBuildCommand` 调用 `pnpm exec vp dev` 与 `pnpm exec vp build`，避免 Tauri 子进程无法解析本地 Vite+ CLI。
 
 ## 技术栈
 
@@ -67,9 +69,9 @@ Apps/planarclip/
 
 ## 当前状态
 
-- 前端命令已统一切换到 Vite+ (`vp`)。
-- Tauri 的 `beforeDevCommand` / `beforeBuildCommand` 已改为 `pnpm exec vp dev` / `pnpm exec vp build`。
-- `cargo build`、`npx tauri dev`、`npx tauri build` 在用户本机均已验证通过。
+- 前端命令已统一切换到 Vite+ (`vp`)，并通过 `pnpm <动作>` / `pnpm <动作>-web` 做了统一封装。
+- Tauri 的 `beforeDevCommand` / `beforeBuildCommand` 仍使用 `pnpm exec vp dev` / `pnpm exec vp build`，确保子进程能解析本地 Vite+ CLI。
+- `cargo build`、`pnpm dev`、`pnpm build` 在用户本机均已验证通过。
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

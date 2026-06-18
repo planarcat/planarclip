@@ -4,10 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vp dev",
-    "build": "vp build",
-    "check": "vp check",
-    "preview": "vp preview",
+    "dev": "tauri dev",
+    "dev-web": "vp dev",
+    "build": "tauri build",
+    "build-web": "vp build",
+    "check": "pnpm check-web && cargo check --manifest-path src-tauri/Cargo.toml",
+    "check-web": "vp check",
+    "preview-web": "vp preview",
     "tauri": "tauri"
   },
   "dependencies": {
