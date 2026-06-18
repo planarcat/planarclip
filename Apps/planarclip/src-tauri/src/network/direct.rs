@@ -62,31 +62,31 @@ pub async fn tcp_connect(ip: &str, port: u16) -> Result<TcpStream, std::io::Erro
 
 #[derive(Debug, thiserror::Error)]
 pub enum FrameError {
-    #[error("I/O error: {0}")]
+    #[error("I/O 错误：{0}")]
     Io(#[from] std::io::Error),
-    #[error("JSON error: {0}")]
+    #[error("JSON 错误：{0}")]
     Json(#[from] serde_json::Error),
-    #[error("Payload too large: {0} bytes")]
+    #[error("负载过大：{0} 字节")]
     PayloadTooLarge(usize),
-    #[error("Unknown frame type: 0x{0:02x}")]
+    #[error("未知帧类型：0x{0:02x}")]
     UnknownFrameType(u8),
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum HandshakeError {
-    #[error("I/O error: {0}")]
+    #[error("I/O 错误：{0}")]
     Io(#[from] std::io::Error),
-    #[error("Frame error: {0}")]
+    #[error("帧错误：{0}")]
     Frame(#[from] FrameError),
-    #[error("Connection rejected by peer")]
+    #[error("对方已拒绝连接")]
     Rejected,
-    #[error("Invalid pairing code")]
+    #[error("配对码无效")]
     InvalidCode,
-    #[error("Pairing code expired")]
+    #[error("配对码已过期")]
     Timeout,
-    #[error("Cancelled by user")]
+    #[error("用户已取消")]
     Cancelled,
-    #[error("Protocol error: {0}")]
+    #[error("协议错误：{0}")]
     Protocol(&'static str),
 }
 
@@ -266,7 +266,7 @@ pub async fn read_connect_request(mut stream: TcpStream) -> Result<IncomingReque
             public_key,
         }) => {
             let pk_bytes = hex::decode(&public_key)
-                .map_err(|_| HandshakeError::Protocol("invalid public key hex"))?;
+                .map_err(|_| HandshakeError::Protocol("公钥十六进制格式无效"))?;
             Ok(IncomingRequest {
                 stream,
                 initiator_name: device_name,
@@ -274,7 +274,7 @@ pub async fn read_connect_request(mut stream: TcpStream) -> Result<IncomingReque
                 initiator_public_key: pk_bytes,
             })
         }
-        _ => Err(HandshakeError::Protocol("expected ConnectRequest")),
+        _ => Err(HandshakeError::Protocol("应收到连接请求消息")),
     }
 }
 
@@ -323,7 +323,7 @@ pub async fn responder_verify_code(
         frame = read_frame(&mut stream) => {
             match frame? {
                 Frame::Handshake(HandshakeMessage::AuthCode { code }) => code,
-                _ => return Err(HandshakeError::Protocol("expected AuthCode")),
+                _ => return Err(HandshakeError::Protocol("应收到配对码消息")),
             }
         }
         _ = reject_rx => {

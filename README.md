@@ -27,29 +27,29 @@ PlanarClip 是一个使用 **Tauri 2 + TypeScript + Rust** 构建的跨设备剪
 在 `Apps/planarclip/` 目录下执行：
 
 ```bash
-pnpm exec vp install
+pnpm install
 ```
 
 ### 开发模式
 
 ```bash
 # 仅启动前端开发服务器（localhost:1420）
-pnpm exec vp dev
+pnpm dev
 
 # 运行统一检查流程（格式、lint、类型检查）
-pnpm exec vp check
+pnpm check
 
 # 启动完整 Tauri 应用（含 Rust 后端）
-npx tauri dev
+pnpm tauri dev
 ```
 
-也可以继续使用项目脚本别名：`pnpm dev`、`pnpm check`、`pnpm build`。
+如需直接调用底层命令，可使用：`pnpm exec vp dev`、`pnpm exec vp check`。
 
 ### 生产构建
 
 ```bash
-pnpm exec vp build # 前端生产构建
-npx tauri build    # 生成安装包（Windows: NSIS，macOS: DMG）
+pnpm build       # 前端生产构建
+pnpm tauri build # 生成安装包（Windows: NSIS，macOS: DMG）
 ```
 
 ## 使用方式

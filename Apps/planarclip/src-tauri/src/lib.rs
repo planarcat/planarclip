@@ -57,21 +57,21 @@ async fn get_pairing_code(state: tauri::State<'_, AppState>) -> Result<String, S
         };
         Ok(pairing)
     } else {
-        Err("Key pair not initialized".into())
+        Err("密钥对尚未初始化".into())
     }
 }
 
 #[tauri::command]
 async fn pair(state: tauri::State<'_, AppState>, code: String) -> Result<String, String> {
     if code.len() != 6 || !code.chars().all(|c| c.is_ascii_digit()) {
-        return Err("Pairing code must be 6 digits".into());
+        return Err("配对码必须为 6 位数字".into());
     }
 
     let peer_id = {
         let kp = state.key_pair.lock().await;
         match *kp {
             Some(ref kp) => kp.fingerprint(),
-            None => return Err("Key pair not initialized".into()),
+            None => return Err("密钥对尚未初始化".into()),
         }
     };
 
@@ -85,12 +85,12 @@ async fn pair(state: tauri::State<'_, AppState>, code: String) -> Result<String,
         state.clip_tx.clone(),
     )
     .await
-    .map_err(|e| format!("Connection failed: {}", e))?;
+    .map_err(|e| format!("连接失败：{}", e))?;
 
     {
         let mut config = state.config.lock().await;
         config.paired_peer = Some(PeerData {
-            name: "Paired Device".into(),
+            name: "已配对设备".into(),
             public_key: vec![],
         });
         storage_json::save_config(&config);
@@ -117,7 +117,7 @@ async fn connect_lan(
     let (device_name, key_pair) = {
         let config = state.config.lock().await;
         let kp = state.key_pair.lock().await;
-        let kp = kp.clone().ok_or("Key pair not initialized")?;
+        let kp = kp.clone().ok_or("密钥对尚未初始化")?;
         (config.device_name.clone(), kp)
     };
 
@@ -171,7 +171,7 @@ async fn connect_lan(
             );
             Ok("awaiting_code".into())
         }
-        Err(e) => Err(format!("Connection failed: {}", e)),
+        Err(e) => Err(format!("连接失败：{}", e)),
     }
 }
 
@@ -182,7 +182,7 @@ async fn submit_pairing_code(
     code: String,
 ) -> Result<String, String> {
     if code.len() != 6 || !code.chars().all(|c| c.is_ascii_digit()) {
-        return Err("Pairing code must be 6 digits".into());
+        return Err("配对码必须为 6 位数字".into());
     }
 
     let stream = state
@@ -190,7 +190,7 @@ async fn submit_pairing_code(
         .lock()
         .await
         .take()
-        .ok_or("No pending connection")?;
+        .ok_or("当前没有待处理的连接")?;
 
     match direct::initiator_send_code(stream, code).await {
         Ok(conn) => {
@@ -234,7 +234,7 @@ async fn submit_pairing_code(
         }
         Err(e) => {
             let _ = app.emit("connection-failed", format!("{}", e));
-            Err(format!("Pairing failed: {}", e))
+            Err(format!("配对失败：{}", e))
         }
     }
 }
@@ -413,7 +413,7 @@ pub fn run() {
 
     let mut config = storage_json::load_config();
     if config.device_name.is_empty() {
-        config.device_name = "My Device".into();
+        config.device_name = "我的设备".into();
     }
 
     let key_pair = load_or_create_key_pair(&mut config);
@@ -439,9 +439,9 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(app_state)
         .setup(move |app| {
-            let toggle = MenuItemBuilder::with_id("toggle", "Show PlanarClip").build(app)?;
+            let toggle = MenuItemBuilder::with_id("toggle", "打开 PlanarClip").build(app)?;
             let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
-            let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
 
             let menu = MenuBuilder::new(app)
                 .items(&[&toggle, &separator, &quit])
@@ -449,7 +449,7 @@ pub fn run() {
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("PlanarClip")
+                .tooltip("PlanarClip 剪贴板同步")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_tray_icon_event(|tray, event| {

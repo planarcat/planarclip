@@ -29,9 +29,9 @@ const requestReject = document.getElementById("requestReject") as HTMLButtonElem
 function setStatus(state: "offline" | "connecting" | "online") {
   statusDot.className = `status-dot ${state}`;
   const labels: Record<string, string> = {
-    offline: "Offline",
-    connecting: "Connecting...",
-    online: "Connected",
+    offline: "未连接",
+    connecting: "连接中...",
+    online: "已连接",
   };
   statusText.textContent = labels[state];
 }
@@ -70,19 +70,19 @@ async function loadPairingCode() {
 pairBtn.addEventListener("click", async () => {
   const code = pairInput.value.trim();
   if (code.length !== 6 || !/^\d+$/.test(code)) {
-    lastSync.textContent = "Please enter a valid 6-digit code";
+    lastSync.textContent = "请输入有效的 6 位配对码";
     return;
   }
-  lastSync.textContent = `Pairing with ${code}...`;
+  lastSync.textContent = `正在与 ${code} 配对...`;
   setStatus("connecting");
   pairBtn.disabled = true;
 
   try {
     await invoke<string>("pair", { code });
-    lastSync.textContent = `Paired — ${formatTime()}`;
+    lastSync.textContent = `已配对 — ${formatTime()}`;
     setStatus("online");
   } catch (e) {
-    lastSync.textContent = `Pairing failed: ${e}`;
+    lastSync.textContent = `配对失败：${e}`;
     setStatus("offline");
   } finally {
     pairBtn.disabled = false;
@@ -107,7 +107,7 @@ function renderLanDevices(
   devices: Array<{ name: string; peer_id: string; ip: string; port: number }>,
 ) {
   if (devices.length === 0) {
-    lanList.innerHTML = '<div class="empty-hint">No devices found</div>';
+    lanList.innerHTML = '<div class="empty-hint">未发现设备</div>';
     return;
   }
   lanList.innerHTML = devices
@@ -118,7 +118,7 @@ function renderLanDevices(
         <div class="dev-name">${esc(d.name)}</div>
         <div class="dev-ip">${esc(d.ip)}:${d.port}</div>
       </div>
-      <button class="lan-connect" data-ip="${esc(d.ip)}" data-port="${d.port}">Connect</button>
+      <button class="lan-connect" data-ip="${esc(d.ip)}" data-port="${d.port}">连接</button>
     </div>`,
     )
     .join("");
@@ -135,7 +135,7 @@ function renderLanDevices(
 // ── Initiator: connect to LAN device ────────────────────────────────────
 
 async function startLanConnect(ip: string, port: number) {
-  lastSync.textContent = `Connecting to ${ip}...`;
+  lastSync.textContent = `正在连接 ${ip}...`;
   setStatus("connecting");
 
   try {
@@ -145,7 +145,7 @@ async function startLanConnect(ip: string, port: number) {
     }
     // "connected" is handled by the connection-established event
   } catch (e) {
-    lastSync.textContent = `Connection failed: ${e}`;
+    lastSync.textContent = `连接失败：${e}`;
     setStatus("offline");
   }
 }
@@ -166,7 +166,7 @@ function hideCodeOverlay() {
 codeSubmit.addEventListener("click", async () => {
   const code = codeInput.value.trim();
   if (code.length !== 6 || !/^\d+$/.test(code)) {
-    codeError.textContent = "Please enter a 6-digit code";
+    codeError.textContent = "请输入 6 位配对码";
     return;
   }
   codeSubmit.disabled = true;
@@ -217,7 +217,7 @@ listen("connection-request", (event) => {
     peer_id: string;
     pairing_code: string;
   };
-  requestFrom.textContent = `${device_name} wants to connect`;
+  requestFrom.textContent = `${device_name} 请求连接`;
   requestCode.textContent = pairing_code;
   requestOverlay.classList.remove("hidden");
 });
@@ -228,7 +228,7 @@ listen("connection-established", (event) => {
     peer_id: string;
     is_reconnect: boolean;
   };
-  const how = is_reconnect ? "Reconnected to" : "Connected to";
+  const how = is_reconnect ? "已重新连接到" : "已连接到";
   lastSync.textContent = `${how} ${peer_name} — ${formatTime()}`;
   setStatus("online");
   hideCodeOverlay();
@@ -236,7 +236,7 @@ listen("connection-established", (event) => {
 });
 
 listen("connection-failed", (event) => {
-  lastSync.textContent = `Connection failed: ${event.payload}`;
+  lastSync.textContent = `连接失败：${event.payload}`;
   setStatus("offline");
   hideCodeOverlay();
   requestOverlay.classList.add("hidden");

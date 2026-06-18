@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -222,47 +222,45 @@
       </div>
 
       <div class="card">
-        <h2>Connection Status</h2>
+        <h2>连接状态</h2>
         <div class="status-row">
           <div class="status-dot offline" id="statusDot"></div>
-          <span class="status-text" id="statusText">Offline</span>
+          <span class="status-text" id="statusText">未连接</span>
         </div>
       </div>
 
       <div class="card" id="pairCard">
-        <h2>Device Pairing</h2>
+        <h2>设备配对</h2>
         <div id="pairMode">
           <div id="myCodeSection" style="display: none">
-            <div class="hint" style="margin-bottom: 6px">Your pairing code</div>
+            <div class="hint" style="margin-bottom: 6px">你的配对码</div>
             <div class="pair-code" id="myCode">------</div>
-            <div class="hint">Enter this code on the other device</div>
+            <div class="hint">请在另一台设备上输入此配对码</div>
           </div>
           <div style="margin-top: 10px">
-            <div class="hint" style="margin-bottom: 6px">Enter pairing code from other device</div>
+            <div class="hint" style="margin-bottom: 6px">输入对方设备上的配对码</div>
             <input type="text" id="pairInput" maxlength="6" placeholder="000000" />
-            <button style="margin-top: 8px" id="pairBtn">Pair</button>
+            <button style="margin-top: 8px" id="pairBtn">配对</button>
           </div>
         </div>
       </div>
 
       <div class="card" id="lanCard">
-        <h2>LAN Devices</h2>
+        <h2>局域网设备</h2>
         <div class="lan-list" id="lanList">
-          <div class="empty-hint">Searching for devices...</div>
+          <div class="empty-hint">正在搜索设备...</div>
         </div>
       </div>
 
       <!-- Initiator: pairing code input overlay -->
       <div class="overlay hidden" id="codeOverlay">
         <div class="dialog">
-          <h3>Enter Pairing Code</h3>
-          <div class="hint" style="margin-bottom: 12px">
-            Check the other device's screen for the code
-          </div>
+          <h3>输入配对码</h3>
+          <div class="hint" style="margin-bottom: 12px">请查看对方设备屏幕上的配对码</div>
           <input type="text" id="codeInput" maxlength="6" placeholder="000000" />
           <div class="btn-row">
-            <button class="secondary" id="codeCancel">Cancel</button>
-            <button id="codeSubmit">Submit</button>
+            <button class="secondary" id="codeCancel">取消</button>
+            <button id="codeSubmit">提交</button>
           </div>
           <div class="hint" style="margin-top: 8px; color: #f87171" id="codeError"></div>
         </div>
@@ -271,19 +269,19 @@
       <!-- Responder: connection request overlay -->
       <div class="overlay hidden" id="requestOverlay">
         <div class="dialog">
-          <h3>Connection Request</h3>
+          <h3>连接请求</h3>
           <div class="hint" id="requestFrom"></div>
           <div class="pair-code" id="requestCode">------</div>
-          <div class="hint">Enter this code on the requesting device</div>
+          <div class="hint">请在发起连接的设备上输入此配对码</div>
           <div class="btn-row">
-            <button class="secondary" id="requestReject">Reject</button>
+            <button class="secondary" id="requestReject">拒绝</button>
           </div>
         </div>
       </div>
 
       <div class="card">
-        <h2>Last Sync</h2>
-        <div class="hint" id="lastSync">No sync yet</div>
+        <h2>最近同步</h2>
+        <div class="hint" id="lastSync">暂无同步记录</div>
       </div>
     </div>
 
