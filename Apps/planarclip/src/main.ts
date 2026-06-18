@@ -93,7 +93,10 @@ pairBtn.addEventListener("click", async () => {
 
 async function loadLanDevices() {
   try {
-    const devices = await invoke<Array<{ name: string; peer_id: string; ip: string; port: number }>>("get_lan_devices");
+    const devices =
+      await invoke<Array<{ name: string; peer_id: string; ip: string; port: number }>>(
+        "get_lan_devices",
+      );
     renderLanDevices(devices);
   } catch (e) {
     console.error("Failed to load LAN devices:", e);
@@ -101,7 +104,7 @@ async function loadLanDevices() {
 }
 
 function renderLanDevices(
-  devices: Array<{ name: string; peer_id: string; ip: string; port: number }>
+  devices: Array<{ name: string; peer_id: string; ip: string; port: number }>,
 ) {
   if (devices.length === 0) {
     lanList.innerHTML = '<div class="empty-hint">No devices found</div>';
@@ -116,7 +119,7 @@ function renderLanDevices(
         <div class="dev-ip">${esc(d.ip)}:${d.port}</div>
       </div>
       <button class="lan-connect" data-ip="${esc(d.ip)}" data-port="${d.port}">Connect</button>
-    </div>`
+    </div>`,
     )
     .join("");
 

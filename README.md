@@ -1,137 +1,82 @@
 # PlanarClip
 
-<<<<<<< HEAD
-跨设备剪贴板同步工具，基于 Tauri v2 构建。通过 WebSocket 信令服务器完成设备配对，使用 6 位数字配对码建立连接，实时同步两台设备之间的剪贴板文本内容。
+PlanarClip 是一个使用 **Tauri 2 + TypeScript + Rust** 构建的跨设备剪贴板同步桌面应用。
 
-## 功能特性
+当前版本聚焦在：
 
-- **实时同步** — 剪贴板变更在 500ms 内检测并推送到对端设备
-- **6 位配对码** — 蓝牙配对风格的设备连接体验，无需账号注册
-- **防循环写入** — 自写检测机制，程序自身写入剪贴板时不触发同步
-- **去重保护** — 环形去重集合防止相同内容反复同步
-- **系统托盘** — 后台常驻，左键点击托盘图标切换窗口显示/隐藏
-- **持久化配置** — 密钥对和配对信息本地保存，重启后自动恢复
+- 本地剪贴板变更监控
+- 基于 WebSocket 信令 / 局域网直连的设备通信
+- 配对码确认与可信设备持久化
+- 系统托盘入口与轻量状态 UI
 
 ## 技术栈
 
-| 层级 | 技术 |
-|------|------|
-| 桌面框架 | Tauri v2（Rust 后端 + WebView 前端） |
-| 前端 | Vite v6 + TypeScript |
-| 剪贴板 | arboard（跨平台 Rust 库） |
-| 内容哈希 | BLAKE3 |
-| 加密 | X25519 密钥交换（x25519-dalek） |
-| 网络传输 | WebSocket（tokio-tungstenite） |
-| 异步运行时 | Tokio |
-| 本地存储 | JSON 配置文件 |
+- **桌面框架**: Tauri 2
+- **前端**: TypeScript + Vite+
+- **后端**: Rust + Tokio
+- **发现/连接**: WebSocket 信令、mDNS、局域网 TCP 直连
+- **剪贴板**: arboard
+- **加密基础**: x25519-dalek + blake3
 
-## 快速开始
+## 安装与开发
 
-### 前置依赖
-
-- [Rust](https://rustup.rs/)（stable）
-- [Node.js](https://nodejs.org/) v18+
-- [Tauri CLI 前置依赖](https://tauri.app/start/prerequisites/)（平台相关）
+项目默认使用 **pnpm** 作为唯一包管理器。
 
 ### 安装依赖
 
 在 `Apps/planarclip/` 目录下执行：
 
 ```bash
-npm install
+pnpm exec vp install
 ```
 
 ### 开发模式
 
 ```bash
 # 仅启动前端开发服务器（localhost:1420）
-npm run dev
+pnpm exec vp dev
+
+# 运行统一检查流程（格式、lint、类型检查）
+pnpm exec vp check
 
 # 启动完整 Tauri 应用（含 Rust 后端）
 npx tauri dev
 ```
 
+也可以继续使用项目脚本别名：`pnpm dev`、`pnpm check`、`pnpm build`。
+
 ### 生产构建
 
 ```bash
-npm run build        # TypeScript 编译 + Vite 构建
-npx tauri build      # 生成安装包（Windows: NSIS，macOS: DMG）
+pnpm exec vp build # 前端生产构建
+npx tauri build    # 生成安装包（Windows: NSIS，macOS: DMG）
 ```
 
-## 使用方法
+## 使用方式
 
-1. 在两台设备上分别启动 PlanarClip
-2. 确保两台设备都能连接到同一个信令服务器（默认 `ws://localhost:8765`）
-3. 在设备 A 上，记录窗口中显示的**我的配对码**（6 位数字）
-4. 在设备 B 上，将设备 A 的配对码输入到**配对码输入框**，点击 Connect
-5. 连接建立后，任一设备的剪贴板文本变更都会自动同步到对端
-
-> 窗口默认隐藏，点击系统托盘图标可打开/关闭窗口。
-=======
-跨设备剪贴板同步工具，基于 Tauri v2 构建。通过 WebRTC 点对点连接在两台设备之间实时同步剪贴板文本内容，配合信令服务器进行设备发现和配对。
-
-## 功能
-
-- **实时剪贴板监控** — 每 500ms 轮询，BLAKE3 哈希去重
-- **加密配对** — X25519 密钥交换，6 位数字配对码
-- **P2P 数据传输** — WebRTC 直连，低延迟
-- **系统托盘驻留** — 后台运行，左键点击切换窗口显示
-- **自写检测** — 防止同步循环
-- **跨平台** — Windows / macOS
-
-## 技术栈
-
-| 层 | 技术 |
-|---|------|
-| 桌面框架 | Tauri v2 |
-| 后端 | Rust (Tokio 异步运行时) |
-| 前端 | Vite v6 + TypeScript，内联 CSS |
-| 剪贴板 | arboard |
-| 加密 | X25519 (x25519-dalek), BLAKE3 |
-| 信令 | WebSocket (tokio-tungstenite) |
-| P2P | WebRTC |
-
-## 前置条件
-
-- [Rust](https://www.rust-lang.org/) (stable)
-- [Node.js](https://nodejs.org/) >= 18
-- 平台构建依赖（Windows: Visual Studio Build Tools / macOS: Xcode Command Line Tools）
-
-## 构建与运行
-
-```bash
-cd Apps/planarclip
-
-# 开发模式
-npm install
-npx tauri dev
-
-# 生产构建
-npx tauri build
-```
-
-信令服务器默认连接 `ws://localhost:8765`。
->>>>>>> 4abd06969d39c708155241ee5d614376080b1575
+- 启动应用后，界面会显示当前设备的短配对码。
+- 若使用信令服务器模式，可输入房间号与另一台设备加入同一房间。
+- 若使用局域网直连模式，可从局域网设备列表中选择设备发起连接。
+- 当目标设备不是已信任设备时，需要输入或确认 6 位配对码。
+- 建立连接后，文本剪贴板内容会自动同步。
 
 ## 项目结构
 
-```
+```text
 Apps/planarclip/
 ├── src/
-<<<<<<< HEAD
-│   └── main.ts              # 前端逻辑（连接状态、配对输入）
+│   └── main.ts              # 前端入口，连接状态、配对与局域网设备列表 UI
 ├── src-tauri/
 │   ├── src/
 │   │   ├── main.rs          # Rust 入口
 │   │   ├── lib.rs           # Tauri 应用组装、状态管理、Tauri 命令
 │   │   ├── clipboard/       # 剪贴板监控与快照类型
-│   │   ├── crypto/          # X25519 密钥对生成与配对码
-│   │   ├── network/         # WebSocket 信令 + WebRTC 连接管理
+│   │   ├── crypto/          # X25519 密钥对生成与指纹
+│   │   ├── network/         # 信令连接、局域网发现与连接管理
 │   │   ├── sync/            # 同步引擎与去重集合
 │   │   ├── storage/         # AppConfig JSON 持久化
-│   │   ├── tray/            # 系统托盘菜单
-│   │   └── util/            # BLAKE3 哈希辅助
-│   └── tauri.conf.json      # 窗口 380×520、默认隐藏、托盘图标
+│   │   └── tray/            # 系统托盘菜单
+│   └── tauri.conf.json      # 窗口、托盘与构建配置
 └── index.html               # 前端入口（内联深色主题 CSS）
 ```
 
@@ -139,85 +84,19 @@ Apps/planarclip/
 
 | 平台 | 路径 |
 |------|------|
-| Windows | `%APPDATA%\planarclip_config.json` |
+| Windows | `%APPDATA%/planarclip_config.json` |
 | macOS | `~/Library/Application Support/planarclip_config.json` |
 | Linux | `~/.config/planarclip_config.json` |
 
-## 开发状态
+## 当前开发状态
 
 | 功能 | 状态 |
 |------|------|
 | 剪贴板监控与变更检测 | ✅ 完成 |
-| X25519 密钥对生成与配对码 | ✅ 完成 |
+| X25519 密钥对生成与设备指纹 | ✅ 完成 |
 | 系统托盘与窗口管理 | ✅ 完成 |
 | 前端基础 UI | ✅ 完成 |
 | WebSocket 信令客户端 | ✅ 完成 |
-| WebRTC P2P 数据传输 | 🚧 待实现 |
-| 完整加密配对与双向同步 | 🚧 待实现 |
-| 图片与文件同步 | 📋 规划中 |
-| 多设备支持 | 📋 规划中 |
-
-## 已知限制
-
-- 当前 MVP 阶段配对码接受任意 6 位码并标记为已连接，完整的 X25519 加密握手尚未实现
-- 仅支持文本内容同步，图片和文件同步待后续版本
-- 信令服务器默认指向 `ws://localhost:8765`，生产部署需修改 `lib.rs` 中的 `SIGNALLING_SERVER` 常量
-
-## License
-
-MIT
-=======
-│   └── main.ts                 # 前端入口，连接状态展示、配对 UI
-├── src-tauri/
-│   ├── src/
-│   │   ├── main.rs             # Rust 入口
-│   │   ├── lib.rs              # Tauri 组装：状态管理、Tauri 命令、系统托盘
-│   │   ├── clipboard/
-│   │   │   ├── monitor.rs      # ClipboardMonitor：轮询 + BLAKE3 哈希去重
-│   │   │   └── types.rs        # ClipboardSnapshot 枚举
-│   │   ├── crypto/
-│   │   │   └── keys.rs         # X25519 密钥对生成、配对码派生
-│   │   ├── network/
-│   │   │   ├── signalling.rs   # WebSocket 信令客户端
-│   │   │   └── webrtc.rs       # WebRTC 连接管理
-│   │   ├── sync/
-│   │   │   ├── engine.rs       # SyncEngine：变更转发
-│   │   │   └── dedup.rs        # DedupStore：环形去重集合
-│   │   ├── storage/
-│   │   │   └── json.rs         # 本地 JSON 配置持久化
-│   │   ├── util/
-│   │   │   └── hash.rs         # BLAKE3 哈希辅助函数
-│   │   └── tray/
-│   ├── tauri.conf.json         # Tauri 配置
-│   └── capabilities/
-└── index.html                  # HTML 入口，内联深色主题 CSS
-```
-
-## 数据流
-
-```
-剪贴板轮询 → BLAKE3 哈希 → broadcast channel → SyncEngine → WebRTC → 对端
-                                                                    ↓
-                             对端 SyncEngine ← broadcast channel ← 接收
-```
-
-自写检测通过全局 `AtomicBool` 标志实现，写入剪贴板时跳过本轮变更检测，防止同步循环。
-
-## 配对流程
-
-1. 设备 A 生成 X25519 密钥对，派生出 6 位配对码
-2. 设备 B 输入设备 A 的配对码
-3. 双方通过信令服务器建立 WebRTC 连接
-4. 连接建立后，剪贴板内容开始实时同步
-
-## 开发状态
-
-- [x] 剪贴板监控和变更检测
-- [x] X25519 密钥对生成和配对码
-- [x] 系统托盘和窗口管理
-- [x] 前端基础 UI
-- [x] WebSocket 信令客户端
-- [x] WebRTC P2P 连接管理
-- [ ] 端到端加密传输
-- [ ] 多格式剪贴板支持（图片、文件）
->>>>>>> 4abd06969d39c708155241ee5d614376080b1575
+| 局域网设备发现 | ✅ 完成 |
+| 局域网直连握手 | ✅ 完成 |
+| 配对码确认 | ✅ 完成 |

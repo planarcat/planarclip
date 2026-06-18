@@ -11,7 +11,6 @@ mod network;
 mod storage;
 mod sync;
 mod tray;
-mod util;
 
 use clipboard::monitor::ClipboardMonitor;
 use clipboard::types::ClipboardSnapshot;

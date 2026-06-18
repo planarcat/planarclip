@@ -1,13 +1,17 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PlanarClip</title>
     <style>
-      * { margin: 0; padding: 0; box-sizing: border-box; }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
       body {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
         background: #0f0f0f;
         color: #e0e0e0;
         display: flex;
@@ -27,22 +31,62 @@
         text-align: center;
         padding: 12px 0;
       }
-      .header h1 { font-size: 20px; font-weight: 600; color: #ffffff; }
-      .header .subtitle { font-size: 12px; color: #888; margin-top: 4px; }
+      .header h1 {
+        font-size: 20px;
+        font-weight: 600;
+        color: #ffffff;
+      }
+      .header .subtitle {
+        font-size: 12px;
+        color: #888;
+        margin-top: 4px;
+      }
       .card {
         background: #1a1a1a;
         border: 1px solid #2a2a2a;
         border-radius: 10px;
         padding: 16px;
       }
-      .card h2 { font-size: 13px; font-weight: 500; color: #999; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
-      .status-row { display: flex; align-items: center; gap: 8px; }
-      .status-dot { width: 8px; height: 8px; border-radius: 50%; }
-      .status-dot.online { background: #4ade80; }
-      .status-dot.offline { background: #f87171; }
-      .status-dot.connecting { background: #fbbf24; animation: pulse 1s infinite; }
-      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-      .status-text { font-size: 14px; }
+      .card h2 {
+        font-size: 13px;
+        font-weight: 500;
+        color: #999;
+        margin-bottom: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .status-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+      }
+      .status-dot.online {
+        background: #4ade80;
+      }
+      .status-dot.offline {
+        background: #f87171;
+      }
+      .status-dot.connecting {
+        background: #fbbf24;
+        animation: pulse 1s infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.3;
+        }
+      }
+      .status-text {
+        font-size: 14px;
+      }
       input {
         width: 100%;
         padding: 10px 12px;
@@ -55,7 +99,9 @@
         letter-spacing: 4px;
         outline: none;
       }
-      input:focus { border-color: #6366f1; }
+      input:focus {
+        border-color: #6366f1;
+      }
       button {
         width: 100%;
         padding: 10px;
@@ -67,8 +113,14 @@
         color: #fff;
         background: #6366f1;
       }
-      button:hover { background: #5558e6; }
-      button:disabled { background: #333; color: #666; cursor: default; }
+      button:hover {
+        background: #5558e6;
+      }
+      button:disabled {
+        background: #333;
+        color: #666;
+        cursor: default;
+      }
       .pair-code {
         font-size: 28px;
         font-weight: 700;
@@ -77,8 +129,16 @@
         color: #6366f1;
         padding: 8px;
       }
-      .hint { font-size: 11px; color: #666; text-align: center; }
-      .lan-list { display: flex; flex-direction: column; gap: 6px; }
+      .hint {
+        font-size: 11px;
+        color: #666;
+        text-align: center;
+      }
+      .lan-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
       .lan-item {
         display: flex;
         align-items: center;
@@ -88,30 +148,70 @@
         border: 1px solid #2a2a2a;
         border-radius: 6px;
       }
-      .lan-item .dev-name { font-size: 14px; color: #ddd; }
-      .lan-item .dev-ip { font-size: 11px; color: #666; }
+      .lan-item .dev-name {
+        font-size: 14px;
+        color: #ddd;
+      }
+      .lan-item .dev-ip {
+        font-size: 11px;
+        color: #666;
+      }
       .lan-item button {
         width: auto;
         padding: 5px 14px;
         font-size: 12px;
       }
       .overlay {
-        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-        background: rgba(0,0,0,0.7); display: flex; align-items: center;
-        justify-content: center; z-index: 100;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
       }
-      .overlay.hidden { display: none; }
+      .overlay.hidden {
+        display: none;
+      }
       .dialog {
-        background: #1a1a1a; border: 1px solid #333; border-radius: 12px;
-        padding: 24px; text-align: center; max-width: 300px; width: 100%;
+        background: #1a1a1a;
+        border: 1px solid #333;
+        border-radius: 12px;
+        padding: 24px;
+        text-align: center;
+        max-width: 300px;
+        width: 100%;
       }
-      .dialog h3 { font-size: 16px; margin-bottom: 8px; }
-      .dialog .pair-code { margin: 12px 0; }
-      .dialog .btn-row { display: flex; gap: 8px; margin-top: 12px; }
-      .dialog .btn-row button { flex: 1; }
-      .dialog .btn-row button.secondary { background: #333; }
-      .dialog .btn-row button.secondary:hover { background: #444; }
-      .empty-hint { text-align: center; color: #555; font-size: 12px; padding: 8px; }
+      .dialog h3 {
+        font-size: 16px;
+        margin-bottom: 8px;
+      }
+      .dialog .pair-code {
+        margin: 12px 0;
+      }
+      .dialog .btn-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .dialog .btn-row button {
+        flex: 1;
+      }
+      .dialog .btn-row button.secondary {
+        background: #333;
+      }
+      .dialog .btn-row button.secondary:hover {
+        background: #444;
+      }
+      .empty-hint {
+        text-align: center;
+        color: #555;
+        font-size: 12px;
+        padding: 8px;
+      }
     </style>
   </head>
   <body>
@@ -132,15 +232,15 @@
       <div class="card" id="pairCard">
         <h2>Device Pairing</h2>
         <div id="pairMode">
-          <div id="myCodeSection" style="display:none;">
-            <div class="hint" style="margin-bottom:6px;">Your pairing code</div>
+          <div id="myCodeSection" style="display: none">
+            <div class="hint" style="margin-bottom: 6px">Your pairing code</div>
             <div class="pair-code" id="myCode">------</div>
             <div class="hint">Enter this code on the other device</div>
           </div>
-          <div style="margin-top:10px;">
-            <div class="hint" style="margin-bottom:6px;">Enter pairing code from other device</div>
+          <div style="margin-top: 10px">
+            <div class="hint" style="margin-bottom: 6px">Enter pairing code from other device</div>
             <input type="text" id="pairInput" maxlength="6" placeholder="000000" />
-            <button style="margin-top:8px;" id="pairBtn">Pair</button>
+            <button style="margin-top: 8px" id="pairBtn">Pair</button>
           </div>
         </div>
       </div>
@@ -156,13 +256,15 @@
       <div class="overlay hidden" id="codeOverlay">
         <div class="dialog">
           <h3>Enter Pairing Code</h3>
-          <div class="hint" style="margin-bottom:12px;">Check the other device's screen for the code</div>
+          <div class="hint" style="margin-bottom: 12px">
+            Check the other device's screen for the code
+          </div>
           <input type="text" id="codeInput" maxlength="6" placeholder="000000" />
           <div class="btn-row">
             <button class="secondary" id="codeCancel">Cancel</button>
             <button id="codeSubmit">Submit</button>
           </div>
-          <div class="hint" style="margin-top:8px;color:#f87171;" id="codeError"></div>
+          <div class="hint" style="margin-top: 8px; color: #f87171" id="codeError"></div>
         </div>
       </div>
 
