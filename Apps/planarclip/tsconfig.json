@@ -9,6 +9,8 @@
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
     "noEmit": true,
     "strict": true,
     "noUnusedLocals": true,

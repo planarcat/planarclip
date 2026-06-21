@@ -5,23 +5,31 @@
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
-    "dev-web": "vp dev",
+    "dev:web": "vite",
     "build": "tauri build",
-    "build-web": "vp build",
-    "check": "pnpm check-web && cargo check --manifest-path src-tauri/Cargo.toml",
-    "check-web": "vp check",
-    "preview-web": "vp preview",
+    "build:web": "vite build",
+    "check": "pnpm check:web && cargo check --manifest-path src-tauri/Cargo.toml",
+    "check:web": "tsc --noEmit",
+    "preview:web": "vite preview",
     "tauri": "tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-shell": "^2"
+    "@tauri-apps/plugin-shell": "^2",
+    "lucide-react": "^0.542.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.1.12",
     "@tauri-apps/cli": "^2",
+    "@types/react": "^18.3.24",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^5.0.2",
+    "tailwindcss": "^4.1.12",
+    "tw-animate-css": "^1.3.7",
     "typescript": "^5.7",
-    "vite": "^8.0.16",
-    "vite-plus": "^0.1.24"
+    "vite": "^8.0.16"
   },
   "packageManager": "pnpm@11.4.0"
 }

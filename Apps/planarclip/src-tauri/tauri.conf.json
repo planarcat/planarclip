@@ -6,15 +6,17 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "pnpm exec vp dev",
-    "beforeBuildCommand": "pnpm exec vp build"
+    "beforeDevCommand": "pnpm dev:web",
+    "beforeBuildCommand": "pnpm build:web"
   },
   "app": {
     "windows": [
       {
         "title": "PlanarClip",
-        "width": 380,
-        "height": 520,
+        "width": 1280,
+        "height": 820,
+        "minWidth": 1120,
+        "minHeight": 720,
         "visible": false,
         "center": true
       }
