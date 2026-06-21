@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 
@@ -32,6 +33,16 @@ pub struct AppState {
     pub lan_devices: Arc<Mutex<Vec<LanDevice>>>,
     pub pending_initiator: Arc<Mutex<Option<TcpStream>>>,
     pub pending_reject_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+}
+
+fn emit_connection_failed(app: &tauri::AppHandle, error: &direct::HandshakeError) {
+    let _ = app.emit(
+        "connection-failed",
+        serde_json::json!({
+            "kind": error.reason_code(),
+            "message": error.user_message(),
+        }),
+    );
 }
 
 #[tauri::command]
@@ -146,6 +157,7 @@ async fn connect_lan(
                 conn,
                 state.connected.clone(),
                 state.clip_tx.clone(),
+                app.clone(),
             )
             .await;
             *state.connection.lock().await = Some(handle);
@@ -171,7 +183,10 @@ async fn connect_lan(
             );
             Ok("awaiting_code".into())
         }
-        Err(e) => Err(format!("连接失败：{}", e)),
+        Err(e) => {
+            emit_connection_failed(&app, &e);
+            Err(e.user_message())
+        }
     }
 }
 
@@ -217,6 +232,7 @@ async fn submit_pairing_code(
                 conn,
                 state.connected.clone(),
                 state.clip_tx.clone(),
+                app.clone(),
             )
             .await;
             *state.connection.lock().await = Some(handle);
@@ -233,8 +249,8 @@ async fn submit_pairing_code(
             Ok("connected".into())
         }
         Err(e) => {
-            let _ = app.emit("connection-failed", format!("{}", e));
-            Err(format!("配对失败：{}", e))
+            emit_connection_failed(&app, &e);
+            Err(e.user_message())
         }
     }
 }
@@ -252,7 +268,10 @@ async fn reject_connection(state: tauri::State<'_, AppState>) -> Result<(), Stri
 async fn disconnect(state: tauri::State<'_, AppState>) -> Result<(), String> {
     *state.connected.lock().await = false;
     *state.connection.lock().await = None;
-    *state.pending_initiator.lock().await = None;
+
+    if let Some(mut stream) = state.pending_initiator.lock().await.take() {
+        let _ = stream.shutdown().await;
+    }
 
     let tx = state.pending_reject_tx.lock().await.take();
     if let Some(tx) = tx {
@@ -287,7 +306,6 @@ async fn handle_incoming_connection(
     req: direct::IncomingRequest,
     device_name: String,
     key_pair: KeyPair,
-    trusted_peers: Vec<TrustedPeerData>,
     config: Arc<Mutex<AppConfig>>,
     app_handle: tauri::AppHandle,
     connected: Arc<Mutex<bool>>,
@@ -298,7 +316,15 @@ async fn handle_incoming_connection(
     let initiator_name = req.initiator_name.clone();
     let initiator_pk = req.initiator_public_key.clone();
 
-    let is_trusted = trusted_peers.iter().any(|tp| tp.public_key == initiator_pk);
+    // 这里每次都从配置里读取可信设备，避免首轮配对成功后必须重启才能命中自动接受。
+    let is_trusted = {
+        let cfg = config.lock().await;
+        cfg.trusted_peers
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .any(|tp| tp.public_key == initiator_pk)
+    };
 
     if is_trusted {
         tracing::info!("Auto-accepting trusted peer: {}", initiator_name);
@@ -316,6 +342,7 @@ async fn handle_incoming_connection(
                     conn,
                     connected.clone(),
                     clip_tx.clone(),
+                    app_handle.clone(),
                 )
                 .await;
                 *connection.lock().await = Some(handle);
@@ -386,6 +413,7 @@ async fn handle_incoming_connection(
                 conn,
                 connected.clone(),
                 clip_tx.clone(),
+                app_handle.clone(),
             )
             .await;
             *connection.lock().await = Some(handle);
@@ -401,7 +429,9 @@ async fn handle_incoming_connection(
         }
         Err(e) => {
             tracing::info!("Pairing failed: {}", e);
-            let _ = app_handle.emit("connection-failed", format!("{}", e));
+            if !matches!(e, direct::HandshakeError::Cancelled) {
+                emit_connection_failed(&app_handle, &e);
+            }
         }
     }
 
@@ -420,7 +450,6 @@ pub fn run() {
     storage_json::save_config(&config);
 
     let tcp_port = config.tcp_port.unwrap_or(DEFAULT_TCP_PORT);
-    let trusted_peers = config.trusted_peers.clone().unwrap_or_default();
 
     let (clip_tx, _) = broadcast::channel::<ClipboardSnapshot>(16);
 
@@ -543,7 +572,6 @@ pub fn run() {
                 let connection = connection.clone();
                 let clip_tx = clip_tx.clone();
                 let pending_reject_tx = pending_reject_tx.clone();
-                let trusted_peers = trusted_peers.clone();
                 let key_pair = key_pair.clone();
                 let config = config.clone();
 
@@ -555,7 +583,6 @@ pub fn run() {
                                     req,
                                     device_name.clone(),
                                     key_pair.clone(),
-                                    trusted_peers.clone(),
                                     config.clone(),
                                     app_handle.clone(),
                                     connected.clone(),
