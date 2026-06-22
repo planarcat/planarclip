@@ -10,6 +10,7 @@ pub struct LanDevice {
     pub name: String,
     pub peer_id: String,
     pub ip: String,
+    pub host_name: String,
     pub port: u16,
 }
 
@@ -63,19 +64,24 @@ pub fn start_discovery(
                         .get_property_val_str("peer_id")
                         .unwrap_or("")
                         .to_string();
+                    let host_name = normalize_host_name(info.get_hostname());
                     let ip = info.get_addresses().iter().next().map(|a| a.to_string());
 
-                    if let (Some(ip), true) = (
-                        ip,
-                        !peer_id.is_empty() && peer_id != local_peer_id,
-                    ) {
+                    if let (Some(ip), true) = (ip, !peer_id.is_empty() && peer_id != local_peer_id) {
                         let device = LanDevice {
                             name,
                             peer_id,
                             ip: ip.clone(),
+                            host_name,
                             port: info.get_port(),
                         };
-                        tracing::info!("mDNS discovered: {} at {}:{}", device.name, ip, device.port);
+                        tracing::info!(
+                            "mDNS discovered: {} at {}:{} ({})",
+                            device.name,
+                            ip,
+                            device.port,
+                            device.host_name
+                        );
                         let _ = tx.send(DiscoveryEvent::Added(device));
                     }
                 }
@@ -84,6 +90,7 @@ pub fn start_discovery(
                         name: instance_name,
                         peer_id: String::new(),
                         ip: String::new(),
+                        host_name: String::new(),
                         port: 0,
                     };
                     let _ = tx.send(DiscoveryEvent::Removed(device));
@@ -111,6 +118,13 @@ fn hostname() -> String {
     }
 }
 
+fn normalize_host_name(host_name: &str) -> String {
+    host_name
+        .trim_end_matches('.')
+        .trim_end_matches(".local")
+        .to_string()
+}
+
 fn local_ip_for_mdns() -> String {
     if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
         if let Some((_, ip)) = interfaces.into_iter().find(|(_, ip)| is_preferred_mdns_ip(ip)) {
@@ -125,11 +139,7 @@ fn local_ip_for_mdns() -> String {
 
 fn is_preferred_mdns_ip(ip: &IpAddr) -> bool {
     match ip {
-        IpAddr::V4(ip) => {
-            let octets = ip.octets();
-            let is_benchmark = octets[0] == 198 && matches!(octets[1], 18 | 19);
-            !ip.is_loopback() && !ip.is_link_local() && ip.is_private() && !is_benchmark
-        }
-        IpAddr::V6(_) => false,
+        IpAddr::V4(v4) => !v4.is_loopback() && !v4.is_link_local(),
+        IpAddr::V6(v6) => !v6.is_loopback() && !v6.is_unspecified(),
     }
 }

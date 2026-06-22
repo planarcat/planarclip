@@ -1,4 +1,4 @@
-import { Plus, Smartphone } from "lucide-react";
+import { Plus, PlugZap, RefreshCw, Smartphone, Unplug } from "lucide-react";
 import type { AppConnectionStatus, Device } from "../../types";
 import { OsIcon } from "../common/OsIcon";
 import { StatusDot } from "../common/StatusDot";
@@ -7,11 +7,21 @@ type DevicesPageProps = {
   devices: Device[];
   connectionStatus: AppConnectionStatus;
   onShowPairing: () => void;
+  onRefreshDevices: () => void;
   onConnectDevice: (device: Device) => void;
   onDisconnect: () => void;
+  isRefreshingDevices: boolean;
 };
 
-export function DevicesPage({ devices, connectionStatus, onShowPairing, onConnectDevice, onDisconnect }: DevicesPageProps) {
+export function DevicesPage({
+  devices,
+  connectionStatus,
+  onShowPairing,
+  onRefreshDevices,
+  onConnectDevice,
+  onDisconnect,
+  isRefreshingDevices,
+}: DevicesPageProps) {
   const busyConnecting = connectionStatus === "connecting";
   const hasActiveSession = connectionStatus === "online";
 
@@ -25,19 +35,39 @@ export function DevicesPage({ devices, connectionStatus, onShowPairing, onConnec
         <button
           onClick={onShowPairing}
           disabled={busyConnecting}
-          className="ml-4 flex shrink-0 items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+          aria-label={busyConnecting ? "正在连接新设备" : "连接新设备"}
+          className="ml-4 shrink-0 rounded-lg bg-primary p-2 text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+          title={busyConnecting ? "正在连接新设备" : "连接新设备"}
           type="button"
         >
-          <Plus size={14} />
-          {busyConnecting ? "正在连接…" : "连接新设备"}
+          <Plus size={16} />
         </button>
       </div>
 
       <div className="max-w-3xl space-y-2">
-        <p className="mb-3 text-[13px] font-medium text-muted-foreground">设备列表</p>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <p className="text-[13px] font-medium text-muted-foreground">设备列表</p>
+          <button
+            onClick={onRefreshDevices}
+            disabled={isRefreshingDevices}
+            aria-label="刷新设备列表"
+            className="rounded-md p-1.5 text-secondary-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40"
+            title="刷新设备列表"
+            type="button"
+          >
+            <RefreshCw size={14} className={isRefreshingDevices ? "animate-spin" : undefined} />
+          </button>
+        </div>
         {devices.map((device) => {
           const connectDisabled = busyConnecting || hasActiveSession;
-          const connectLabel = busyConnecting ? "处理中" : hasActiveSession ? "先断开再连接" : "连接设备";
+          const actionTitle =
+            device.status === "connected"
+              ? `断开与 ${device.name} 的连接`
+              : busyConnecting
+                ? `正在处理 ${device.name} 的连接`
+                : hasActiveSession
+                  ? "请先断开当前连接"
+                  : `连接到 ${device.name}`;
 
           return (
             <div
@@ -49,27 +79,36 @@ export function DevicesPage({ devices, connectionStatus, onShowPairing, onConnec
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-foreground">{device.name}</p>
+                <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">
+                  {device.hostName ? `主机名 ${device.hostName}` : device.os === "macos" ? "macOS 系统" : "Windows 系统"}
+                </p>
                 <p className="font-mono text-[13px] font-medium text-secondary-foreground">{device.address}</p>
               </div>
-              <StatusDot status={device.status} size="lg" />
-              {device.status === "connected" ? (
-                <button
-                  onClick={onDisconnect}
-                  className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
-                  type="button"
-                >
-                  断开连接
-                </button>
-              ) : (
-                <button
-                  onClick={() => onConnectDevice(device)}
-                  disabled={connectDisabled}
-                  className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
-                  type="button"
-                >
-                  {connectLabel}
-                </button>
-              )}
+              <div className="flex shrink-0 items-center gap-2">
+                <StatusDot status={device.status} size="md" />
+                {device.status === "connected" ? (
+                  <button
+                    onClick={onDisconnect}
+                    aria-label={actionTitle}
+                    className="rounded-lg border border-border p-2 text-foreground transition-colors hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
+                    title={actionTitle}
+                    type="button"
+                  >
+                    <Unplug size={15} />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => onConnectDevice(device)}
+                    disabled={connectDisabled}
+                    aria-label={actionTitle}
+                    className="rounded-lg bg-primary p-2 text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+                    title={actionTitle}
+                    type="button"
+                  >
+                    <PlugZap size={15} />
+                  </button>
+                )}
+              </div>
             </div>
           );
         })}

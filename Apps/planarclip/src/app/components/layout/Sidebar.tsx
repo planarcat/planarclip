@@ -1,4 +1,4 @@
-import { Clipboard, Moon, Palette, Radio, Settings, Sun, SunMoon } from "lucide-react";
+import { Clipboard, Moon, Palette, PlugZap, Radio, RefreshCw, Settings, Sun, SunMoon, Unplug } from "lucide-react";
 import { THEME_COLORS } from "../../constants/theme";
 import type { AppConnectionStatus, ColorScheme, Device, NavId, ThemeColor } from "../../types";
 import { StatusDot } from "../common/StatusDot";
@@ -15,6 +15,10 @@ type SidebarProps = {
   isDark: boolean;
   onThemeChange: (theme: ThemeColor) => void;
   onNavigate: (nav: NavId) => void;
+  onRefreshDevices: () => void;
+  onConnectDevice: (device: Device) => void;
+  onDisconnect: () => void;
+  isRefreshingDevices: boolean;
   tauriAvailable: boolean;
 };
 
@@ -29,6 +33,10 @@ export function Sidebar({
   isDark,
   onThemeChange,
   onNavigate,
+  onRefreshDevices,
+  onConnectDevice,
+  onDisconnect,
+  isRefreshingDevices,
   tauriAvailable,
 }: SidebarProps) {
   const navItems = [
@@ -82,15 +90,66 @@ export function Sidebar({
       </nav>
 
       <div className="px-4 pb-2 pt-4">
-        <p className="mb-2 text-[13px] font-medium text-muted-foreground">设备列表</p>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="text-[13px] font-medium text-muted-foreground">设备列表</p>
+          <button
+            onClick={onRefreshDevices}
+            disabled={isRefreshingDevices}
+            aria-label="刷新设备列表"
+            className="rounded-md p-1.5 text-secondary-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40"
+            title="刷新设备列表"
+            type="button"
+          >
+            <RefreshCw size={13} className={isRefreshingDevices ? "animate-spin" : undefined} />
+          </button>
+        </div>
         {devices.length > 0 ? (
           <div className="space-y-1.5">
-            {devices.map((device) => (
-              <div key={device.id} className="flex items-center justify-between gap-2">
-                <span className="truncate text-[13px] font-medium text-foreground">{device.name}</span>
-                <StatusDot status={device.status} size="lg" />
-              </div>
-            ))}
+            {devices.map((device) => {
+              const connectDisabled = status === "connecting" || (status === "online" && device.status !== "connected");
+              const actionTitle =
+                device.status === "connected"
+                  ? `断开与 ${device.name} 的连接`
+                  : status === "connecting"
+                    ? `正在处理 ${device.name} 的连接`
+                    : status === "online"
+                      ? "请先断开当前连接"
+                      : `连接到 ${device.name}`;
+
+              return (
+                <div key={device.id} className="flex items-center justify-between gap-2 rounded-lg px-1 py-1 hover:bg-secondary/40">
+                  <div className="min-w-0 flex-1" title={device.hostName ? `${device.name} · ${device.hostName}` : device.name}>
+                    <p className="truncate text-[13px] font-medium text-foreground">{device.name}</p>
+                    {device.hostName && <p className="truncate text-[11px] font-medium text-muted-foreground">{device.hostName}</p>}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <StatusDot status={device.status} size="md" />
+                    {device.status === "connected" ? (
+                      <button
+                        onClick={onDisconnect}
+                        aria-label={actionTitle}
+                        className="rounded-md p-1.5 text-secondary-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                        title={actionTitle}
+                        type="button"
+                      >
+                        <Unplug size={13} />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => onConnectDevice(device)}
+                        disabled={connectDisabled}
+                        aria-label={actionTitle}
+                        className="rounded-md p-1.5 text-secondary-foreground transition-colors hover:bg-primary/10 hover:text-primary disabled:opacity-40"
+                        title={actionTitle}
+                        type="button"
+                      >
+                        <PlugZap size={13} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         ) : (
           <div className="rounded-lg border border-dashed border-border px-3 py-3 text-[13px] font-medium text-muted-foreground">

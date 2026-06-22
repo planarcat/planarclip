@@ -19,6 +19,7 @@ export type Device = {
   name: string;
   os: OS;
   host?: string;
+  hostName?: string;
   port?: number;
   peerId?: string;
   address: string;
@@ -64,6 +65,7 @@ export type LanDevicePayload = {
   name: string;
   peer_id: string;
   ip: string;
+  host_name: string;
   port: number;
 };
 

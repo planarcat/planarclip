@@ -21,6 +21,7 @@ export function buildDevices(lanDevices: LanDevicePayload[], connectedPeer: Conn
       name: device.name,
       os: inferOs(device.name),
       host: device.ip,
+      hostName: device.host_name || undefined,
       port: device.port,
       peerId: device.peer_id,
       address: `${device.ip}:${device.port}`,

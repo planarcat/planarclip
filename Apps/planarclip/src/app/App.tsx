@@ -1,5 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { DevicesPanel } from "./components/layout/DevicesPanel";
 import { Sidebar } from "./components/layout/Sidebar";
 import { PairingModal } from "./components/overlays/PairingModal";
@@ -65,6 +65,7 @@ export default function App() {
   const [pairingHelperText, setPairingHelperText] = useState("通过配对码或设备列表建立连接。");
   const [pairingError, setPairingError] = useState<string | null>(null);
   const [incomingRequest, setIncomingRequest] = useState<ConnectionRequestPayload | null>(null);
+  const [isRefreshingDevices, setIsRefreshingDevices] = useState(false);
 
   const devices = useMemo(() => buildDevices(lanDevices, connectedPeer), [lanDevices, connectedPeer]);
   const discoveredDevices = useMemo(() => devices.filter((device) => device.source === "discovery"), [devices]);
@@ -123,6 +124,29 @@ export default function App() {
     setIncomingRequest,
   });
 
+  const handleRefreshDevices = useCallback(async () => {
+    if (!TAURI_AVAILABLE) {
+      setLastMessage("当前是浏览器预览模式，设备刷新需在桌面应用中体验。");
+      return;
+    }
+
+    setIsRefreshingDevices(true);
+
+    try {
+      const refreshedDevices = await callCommand<LanDevicePayload[]>("get_lan_devices");
+      setLanDevices(refreshedDevices);
+      setLastMessage(
+        refreshedDevices.length > 0
+          ? `已刷新设备列表，当前发现 ${refreshedDevices.length} 台设备。`
+          : "已刷新设备列表，暂时还没有发现附近设备。",
+      );
+    } catch (error) {
+      setLastMessage(normalizeUserMessage(error, "刷新设备列表失败，请稍后重试。"));
+    } finally {
+      setIsRefreshingDevices(false);
+    }
+  }, [setLanDevices, setLastMessage]);
+
   useConnectionBridge({
     tauriAvailable: TAURI_AVAILABLE,
     callCommand,
@@ -157,6 +181,16 @@ export default function App() {
         isDark={isDark}
         onThemeChange={handleThemeChange}
         onNavigate={setActiveNav}
+        onRefreshDevices={() => {
+          void handleRefreshDevices();
+        }}
+        onConnectDevice={(device) => {
+          void handleConnectLan(device);
+        }}
+        onDisconnect={() => {
+          void handleDisconnect();
+        }}
+        isRefreshingDevices={isRefreshingDevices}
         tauriAvailable={TAURI_AVAILABLE}
       />
 
@@ -179,12 +213,16 @@ export default function App() {
             devices={devices}
             connectionStatus={status}
             onShowPairing={openPairingModal}
+            onRefreshDevices={() => {
+              void handleRefreshDevices();
+            }}
             onConnectDevice={(device) => {
               void handleConnectLan(device);
             }}
             onDisconnect={() => {
               void handleDisconnect();
             }}
+            isRefreshingDevices={isRefreshingDevices}
           />
         )}
         {activeNav === "settings" && (

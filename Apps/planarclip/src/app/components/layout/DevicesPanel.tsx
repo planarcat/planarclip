@@ -31,7 +31,7 @@ export function DevicesPanel({ devices, pairingCode, status }: DevicesPanelProps
                   <div>
                     <p className="text-[13px] font-medium leading-none text-foreground">{device.name}</p>
                     <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">
-                      {device.os === "macos" ? "macOS 系统" : "Windows 系统"}
+                      {device.hostName ? `主机名 ${device.hostName}` : device.os === "macos" ? "macOS 系统" : "Windows 系统"}
                     </p>
                   </div>
                 </div>
@@ -40,6 +40,7 @@ export function DevicesPanel({ devices, pairingCode, status }: DevicesPanelProps
               <div className="space-y-1.5">
                 {[
                   { label: "连接地址", value: device.address, className: "text-secondary-foreground", mono: true },
+                  { label: "主机名", value: device.hostName ?? "暂未提供", className: "text-secondary-foreground", mono: false },
                   { label: "最近活跃", value: relativeTime(device.lastSeen), className: "text-secondary-foreground", mono: false },
                 ].map((row) => (
                   <div key={row.label} className="flex items-center justify-between gap-3 leading-5">
