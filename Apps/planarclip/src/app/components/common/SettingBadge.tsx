@@ -21,5 +21,5 @@ export function SettingBadge({ availability }: SettingBadgeProps) {
             className: "border-border bg-secondary text-muted-foreground",
           };
 
-  return <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-medium ${config.className}`}>{config.label}</span>;
+  return <span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium ${config.className}`}>{config.label}</span>;
 }

@@ -1,8 +1,8 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useMemo, useState } from "react";
-import { PairingModal } from "./components/overlays/PairingModal";
 import { DevicesPanel } from "./components/layout/DevicesPanel";
 import { Sidebar } from "./components/layout/Sidebar";
+import { PairingModal } from "./components/overlays/PairingModal";
 import { ClipboardPage } from "./components/pages/ClipboardPage";
 import { DevicesPage } from "./components/pages/DevicesPage";
 import { SettingsPage } from "./components/pages/SettingsPage";
@@ -135,7 +135,7 @@ export default function App() {
   });
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background text-foreground" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+    <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
       <Sidebar
         activeNav={activeNav}
         devices={devices}

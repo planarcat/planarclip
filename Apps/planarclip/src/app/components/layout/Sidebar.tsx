@@ -58,7 +58,7 @@ export function Sidebar({
           </div>
           <div>
             <p className="text-sm font-semibold leading-none tracking-tight text-foreground">PlanarClip</p>
-            <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">{identityLabel}</p>
+            <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">{identityLabel}</p>
           </div>
         </div>
       </div>
@@ -68,10 +68,10 @@ export function Sidebar({
           <button
             key={item.id}
             onClick={() => onNavigate(item.id)}
-            className={`flex w-full items-center gap-2.5 rounded px-2.5 py-2 text-sm transition-colors ${
+            className={`flex w-full items-center gap-2.5 rounded px-2.5 py-2 text-sm font-medium transition-colors ${
               activeNav === item.id
                 ? "bg-primary/10 text-primary"
-                : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                : "text-secondary-foreground hover:bg-secondary hover:text-foreground"
             }`}
             type="button"
           >
@@ -82,23 +82,23 @@ export function Sidebar({
       </nav>
 
       <div className="px-4 pb-2 pt-4">
-        <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">局域网设备</p>
+        <p className="mb-2 text-[13px] font-medium text-muted-foreground">局域网设备</p>
         {devices.length > 0 ? (
           <div className="space-y-1.5">
             {devices.map((device) => (
               <div key={device.id} className="flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
                   <StatusDot status={device.status} />
-                  <span className="truncate text-xs text-foreground">{device.name}</span>
+                  <span className="truncate text-[13px] font-medium text-foreground">{device.name}</span>
                 </div>
-                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                <span className="shrink-0 text-[13px] font-medium text-secondary-foreground">
                   {device.status === "connected" ? "在线" : "可发现"}
                 </span>
               </div>
             ))}
           </div>
         ) : (
-          <div className="rounded-lg border border-dashed border-border px-3 py-3 text-xs text-muted-foreground">
+          <div className="rounded-lg border border-dashed border-border px-3 py-3 text-[13px] font-medium text-muted-foreground">
             暂时还没有发现附近设备
           </div>
         )}
@@ -106,7 +106,7 @@ export function Sidebar({
 
       <div className="mt-auto space-y-3 border-t border-border px-3 pb-3 pt-3">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] text-muted-foreground">背景</span>
+          <span className="text-[13px] font-medium text-muted-foreground">背景</span>
           <div className="flex items-center rounded-md bg-secondary p-0.5">
             {[
               { id: "light" as const, label: "浅色", icon: <Sun size={13} /> },
@@ -117,7 +117,7 @@ export function Sidebar({
                 key={option.id}
                 onClick={() => setColorScheme(option.id)}
                 title={option.label}
-                className={`rounded p-1.5 transition-colors ${colorScheme === option.id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                className={`rounded p-1.5 transition-colors ${colorScheme === option.id ? "bg-card text-foreground shadow-sm" : "text-secondary-foreground hover:text-foreground"}`}
                 type="button"
               >
                 {option.icon}
@@ -127,9 +127,9 @@ export function Sidebar({
         </div>
         <div className="flex items-center gap-2">
           <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusClassName}`} />
-          <span className="text-[11px] text-muted-foreground">{statusLabel}</span>
+          <span className="text-[13px] font-medium text-secondary-foreground">{statusLabel}</span>
           <div className="ml-auto flex items-center gap-2">
-            <Palette size={12} className="text-muted-foreground" />
+            <Palette size={12} className="text-secondary-foreground" />
             <div className="flex items-center gap-2">
               {THEME_COLORS.map((currentTheme) => (
                 <ThemeSwatch

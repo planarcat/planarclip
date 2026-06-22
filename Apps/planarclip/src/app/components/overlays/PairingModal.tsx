@@ -42,9 +42,9 @@ export function PairingModal({
         }
       : stage === "awaiting_code"
         ? {
-            icon: <ShieldCheck size={14} className="shrink-0 text-amber-400" />,
+            icon: <ShieldCheck size={14} className="shrink-0 text-amber-500" />,
             text: "等待输入配对码",
-            className: "text-amber-400",
+            className: "text-amber-500",
           }
         : stage === "incoming_request"
           ? {
@@ -84,12 +84,12 @@ export function PairingModal({
         <div className="flex items-center justify-between border-b border-border px-5 pb-4 pt-5">
           <div>
             <p className="text-sm font-semibold text-foreground">连接新设备</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">通过配对码与另一台设备建立连接</p>
+            <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">通过配对码与另一台设备建立连接</p>
           </div>
           <button
             onClick={onClose}
             title={closeLabel}
-            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+            className="rounded-lg p-1.5 text-secondary-foreground transition-colors hover:bg-secondary hover:text-foreground"
             type="button"
           >
             <X size={15} />
@@ -99,11 +99,11 @@ export function PairingModal({
         <div className="max-h-[80vh] space-y-5 overflow-y-auto p-5">
           <div className="flex items-center gap-3 rounded-xl border border-border bg-secondary/30 p-3">
             {statusConfig.icon}
-            <span className={`text-xs ${statusConfig.className}`}>{statusConfig.text}</span>
+            <span className={`text-[13px] font-medium ${statusConfig.className}`}>{statusConfig.text}</span>
           </div>
 
           <div className="text-center">
-            <p className="mb-3 font-mono text-[11px] uppercase tracking-widest text-muted-foreground">你的配对码</p>
+            <p className="mb-3 text-[13px] font-medium text-muted-foreground">你的配对码</p>
             <div className="mb-3 flex items-center justify-center gap-2">
               {pairingCode.split("").map((digit, index) => (
                 <span
@@ -114,18 +114,18 @@ export function PairingModal({
                 </span>
               ))}
             </div>
-            <p className="text-[11px] text-muted-foreground">请在另一台设备上输入此配对码</p>
+            <p className="text-[13px] font-medium text-muted-foreground">请在另一台设备上输入此配对码</p>
           </div>
 
           {incomingRequest ? (
             <div className="space-y-3 rounded-xl border border-primary/20 bg-primary/5 p-4">
               <div>
                 <p className="text-sm font-medium text-foreground">{incomingRequest.device_name} 想要连接这台设备</p>
-                <p className="mt-1 text-xs leading-6 text-muted-foreground">
+                <p className="mt-1 text-[13px] font-medium leading-6 text-muted-foreground">
                   请在对方设备上输入下方配对码；如果这不是你发起的连接，可以直接拒绝。
                 </p>
               </div>
-              <div className="rounded-lg border border-border bg-card px-3 py-2.5 font-mono text-center text-lg tracking-[0.3em] text-primary">
+              <div className="rounded-lg border border-border bg-card px-3 py-2.5 font-mono text-center text-lg tracking-[0.24em] text-primary">
                 {incomingRequest.pairing_code}
               </div>
               <button
@@ -140,12 +140,12 @@ export function PairingModal({
             <>
               <div className="flex items-center gap-3">
                 <div className="h-px flex-1 bg-border" />
-                <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">或</span>
+                <span className="text-[13px] font-medium text-muted-foreground">或</span>
                 <div className="h-px flex-1 bg-border" />
               </div>
 
               <div>
-                <p className="mb-2 font-mono text-[11px] uppercase tracking-widest text-muted-foreground">输入对方设备上的配对码</p>
+                <p className="mb-2 text-[13px] font-medium text-muted-foreground">输入对方设备上的配对码</p>
                 <div className="flex gap-2">
                   <input
                     type="text"
@@ -155,7 +155,7 @@ export function PairingModal({
                     value={input}
                     onChange={(event) => onInputChange(event.target.value.replace(/\D/g, "").slice(0, 6))}
                     disabled={submitting}
-                    className="flex-1 rounded-lg border border-border bg-secondary px-3 py-2.5 text-center font-mono text-lg tracking-[0.25em] text-foreground transition-colors placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none disabled:opacity-50"
+                    className="flex-1 rounded-lg border border-border bg-secondary px-3 py-2.5 text-center font-mono text-lg tracking-[0.2em] text-foreground transition-colors placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none disabled:opacity-50"
                   />
                   <button
                     onClick={stage === "awaiting_code" ? onSubmitPairingCode : onManualPair}
@@ -166,15 +166,15 @@ export function PairingModal({
                     {submitting ? <Loader2 size={15} className="animate-spin" /> : submitLabel}
                   </button>
                 </div>
-                <p className={`mt-2 text-xs ${errorMessage ? "text-destructive" : "text-muted-foreground"}`}>
+                <p className={`mt-2 text-[13px] font-medium ${errorMessage ? "text-destructive" : "text-muted-foreground"}`}>
                   {errorMessage ?? helperText}
                 </p>
               </div>
 
               <div>
                 <div className="mb-2 flex items-center justify-between">
-                  <p className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">局域网设备</p>
-                  <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <p className="text-[13px] font-medium text-muted-foreground">局域网设备</p>
+                  <span className="flex items-center gap-1 text-[13px] font-medium text-muted-foreground">
                     <Wifi size={10} />
                     自动发现
                   </span>
@@ -190,13 +190,13 @@ export function PairingModal({
                           <OsIcon os={device.os} size={14} />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="text-xs font-medium text-foreground">{device.name}</p>
-                          <p className="font-mono text-[10px] text-muted-foreground">{device.address}</p>
+                          <p className="text-[13px] font-medium text-foreground">{device.name}</p>
+                          <p className="font-mono text-[13px] font-medium text-secondary-foreground">{device.address}</p>
                         </div>
                         <button
                           onClick={() => onConnectLan(device)}
                           disabled={submitting}
-                          className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+                          className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
                           type="button"
                         >
                           {deviceActionLabel}
@@ -204,7 +204,7 @@ export function PairingModal({
                       </div>
                     ))
                   ) : (
-                    <div className="rounded-xl border border-dashed border-border px-3 py-5 text-center text-xs text-muted-foreground">
+                    <div className="rounded-xl border border-dashed border-border px-3 py-5 text-center text-[13px] font-medium text-muted-foreground">
                       暂时还没有发现附近设备
                     </div>
                   )}

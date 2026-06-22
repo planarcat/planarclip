@@ -12,18 +12,16 @@ export function ThemeSwatch({ currentTheme, selectedTheme, isDark, onChange }: T
 
   return (
     <button
+      aria-label={currentTheme.label}
       onClick={() => onChange(currentTheme)}
-      className="group flex flex-col items-center gap-1.5"
+      className="group flex h-6 w-6 items-center justify-center rounded-md"
       title={currentTheme.label}
       type="button"
     >
       <span
-        className={`h-6 w-6 rounded-full border-2 transition-transform group-hover:scale-110 ${selectedTheme.id === currentTheme.id ? "scale-110 border-foreground" : "border-transparent"}`}
+        className={`h-[18px] w-[18px] rounded-full border-2 transition-transform group-hover:scale-105 ${selectedTheme.id === currentTheme.id ? "scale-105 border-foreground" : "border-transparent"}`}
         style={{ background: color, boxShadow: selectedTheme.id === currentTheme.id ? `0 0 8px ${color}` : "none" }}
       />
-      <span className={`font-mono text-[10px] ${selectedTheme.id === currentTheme.id ? "text-primary" : "text-muted-foreground"}`}>
-        {currentTheme.label}
-      </span>
     </button>
   );
 }

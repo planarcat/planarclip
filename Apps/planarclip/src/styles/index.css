@@ -19,7 +19,7 @@
   --secondary: #e4eaf3;
   --secondary-foreground: #334155;
   --muted: #e8edf5;
-  --muted-foreground: #64748b;
+  --muted-foreground: #55657d;
   --accent: #e0f2fe;
   --accent-foreground: #0c4a6e;
   --destructive: #dc2626;
@@ -59,7 +59,7 @@
   --secondary: #161b2e;
   --secondary-foreground: #a8b0c8;
   --muted: #141826;
-  --muted-foreground: #5e6a88;
+  --muted-foreground: #7a88a7;
   --accent: #0e7490;
   --accent-foreground: #e8eaf0;
   --destructive: #ef4444;
@@ -141,6 +141,10 @@
     margin: 0;
     min-width: 100vw;
     min-height: 100vh;
+    font-family: "Plus Jakarta Sans", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", sans-serif;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
   #root {
@@ -174,18 +178,5 @@
   label {
     font-size: var(--text-base);
     font-weight: var(--font-weight-medium);
-    line-height: 1.5;
-  }
-
-  button {
-    font-size: var(--text-base);
-    font-weight: var(--font-weight-medium);
-    line-height: 1.5;
-  }
-
-  input {
-    font-size: var(--text-base);
-    font-weight: var(--font-weight-normal);
-    line-height: 1.5;
   }
 }

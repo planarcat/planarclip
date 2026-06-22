@@ -20,7 +20,7 @@ export function DevicesPage({ devices, connectionStatus, onShowPairing, onConnec
       <div className="mb-6 flex max-w-3xl items-start justify-between gap-4">
         <div>
           <h2 className="mb-1 text-base font-semibold text-foreground">设备管理</h2>
-          <p className="text-sm text-muted-foreground">查看真实局域网发现结果，并直接发起连接或断开当前会话。</p>
+          <p className="text-sm text-secondary-foreground">查看真实局域网发现结果，并直接发起连接或断开当前会话。</p>
         </div>
         <button
           onClick={onShowPairing}
@@ -34,7 +34,7 @@ export function DevicesPage({ devices, connectionStatus, onShowPairing, onConnec
       </div>
 
       <div className="max-w-3xl space-y-2">
-        <p className="mb-3 font-mono text-[11px] uppercase tracking-widest text-muted-foreground">已发现设备</p>
+        <p className="mb-3 text-[13px] font-medium text-muted-foreground">已发现设备</p>
         {devices.map((device) => {
           const connectDisabled = busyConnecting || hasActiveSession;
           const connectLabel = busyConnecting ? "处理中" : hasActiveSession ? "先断开再连接" : "连接设备";
@@ -49,18 +49,18 @@ export function DevicesPage({ devices, connectionStatus, onShowPairing, onConnec
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-foreground">{device.name}</p>
-                <p className="font-mono text-[11px] text-muted-foreground">{device.address}</p>
+                <p className="font-mono text-[13px] font-medium text-secondary-foreground">{device.address}</p>
               </div>
               <div className="flex items-center gap-2">
                 <StatusDot status={device.status} />
-                <span className="text-xs text-muted-foreground">
+                <span className="text-[13px] font-medium text-secondary-foreground">
                   {device.status === "connected" ? "已连接" : device.status === "idle" ? "可连接" : "离线"}
                 </span>
               </div>
               {device.status === "connected" ? (
                 <button
                   onClick={onDisconnect}
-                  className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
+                  className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
                   type="button"
                 >
                   断开连接
@@ -69,7 +69,7 @@ export function DevicesPage({ devices, connectionStatus, onShowPairing, onConnec
                 <button
                   onClick={() => onConnectDevice(device)}
                   disabled={connectDisabled}
-                  className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+                  className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
                   type="button"
                 >
                   {connectLabel}
@@ -81,8 +81,8 @@ export function DevicesPage({ devices, connectionStatus, onShowPairing, onConnec
         {devices.length === 0 && (
           <div className="py-12 text-center text-muted-foreground">
             <Smartphone size={32} className="mx-auto mb-3 opacity-30" />
-            <p className="text-sm">暂无可连接设备</p>
-            <p className="mt-1 text-xs">保持双方在同一局域网，并确认对方应用已打开</p>
+            <p className="text-sm font-medium text-foreground">暂无可连接设备</p>
+            <p className="mt-1 text-[13px] font-medium text-muted-foreground">保持双方在同一局域网，并确认对方应用已打开</p>
           </div>
         )}
       </div>
