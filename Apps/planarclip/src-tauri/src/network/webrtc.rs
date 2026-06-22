@@ -4,7 +4,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::clipboard::monitor::ClipboardMonitor;
-use crate::clipboard::types::ClipboardSnapshot;
+use crate::clipboard::types::{ClipboardEvent, ClipboardSnapshot};
 use crate::network::direct::DirectConnection;
 use crate::network::protocol::SignalMessage;
 use crate::network::signalling;
@@ -54,7 +54,7 @@ impl ConnectionManager {
         room: &str,
         peer_id: &str,
         connected: Arc<Mutex<bool>>,
-        clip_tx: broadcast::Sender<ClipboardSnapshot>,
+        clip_tx: broadcast::Sender<ClipboardEvent>,
     ) -> Result<ConnectionHandle, Box<dyn std::error::Error>> {
         let client = signalling::connect(server_url, room, peer_id).await?;
 
@@ -97,7 +97,7 @@ impl ConnectionManager {
                         tracing::info!("Received remote clipboard: {} chars", payload.len());
                         ClipboardMonitor::write_clipboard(&payload);
                         let snapshot = ClipboardSnapshot::Text(payload);
-                        let _ = clip_tx.send(snapshot);
+                        let _ = clip_tx.send(ClipboardEvent::remote(snapshot, "已配对设备".to_string()));
                     }
                     SignalMessage::PeerJoined { peer_id } => {
                         tracing::info!("Peer joined room: {}", peer_id);
@@ -119,7 +119,7 @@ impl ConnectionManager {
     pub async fn connect_direct(
         conn: DirectConnection,
         connected: Arc<Mutex<bool>>,
-        clip_tx: broadcast::Sender<ClipboardSnapshot>,
+        clip_tx: broadcast::Sender<ClipboardEvent>,
         app_handle: AppHandle,
     ) -> ConnectionHandle {
         let peer_name = conn.peer_name.clone();
@@ -164,7 +164,7 @@ impl ConnectionManager {
                         tracing::info!("Received remote clipboard: {} chars", payload.len());
                         ClipboardMonitor::write_clipboard(&payload);
                         let snapshot = ClipboardSnapshot::Text(payload);
-                        let _ = clip_tx.send(snapshot);
+                        let _ = clip_tx.send(ClipboardEvent::remote(snapshot, peer_name.clone()));
                     }
                     SignalMessage::PeerJoined { .. } => {}
                     SignalMessage::PeerLeft { .. } => {

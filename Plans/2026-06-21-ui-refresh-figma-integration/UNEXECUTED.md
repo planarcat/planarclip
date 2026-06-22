@@ -1,6 +1,6 @@
 # 未执行 / 遗留事项
 
-> 生成时间: 2026-06-21
+> 生成时间: 2026-06-22
 > 来源主题: 2026-06-21-ui-refresh-figma-integration
 > 说明: 本文档记录当前主题执行后仍未完成、未处理或计划未来处理的事项
 
@@ -17,10 +17,10 @@
 
 ### ⚠️ 未开发完成 / 完成度不足
 
+当前阶段无。
+
 | 事项 | 当前状态 | 差距描述 | 后续建议 |
 |:---|:---|:---|:---|
-| 新前端仍使用演示态设备与剪贴板数据 | 已完成 UI 壳层迁移 | 尚未接入 Tauri commands/events，页面仍未反映真实运行状态 | 在 Phase 2 建立前端状态适配层并去 mock 化 |
-| 设置页同步开关仍为前端占位态 | 已完成设置页结构 | 未区分真实可配项与后端持久化项 | 在 Phase 3 按“真实可配 / 本地可配 / 暂不支持”重新收口 |
 
 ### 📅 被移出本次开发节奏
 
@@ -33,11 +33,6 @@
 
 | 事项 | 计划版本/Phase | 参考讨论 |
 |:---|:---|:---|
-| 去 mock 化并接回连接主链路 | Phase 2 | [execution-plan.md](execution-plan.md) |
-| 建立统一 Tauri API 封装与事件订阅层 | Phase 2 | [execution-plan.md](execution-plan.md) |
-| 设置页最小可用化与配置持久化 | Phase 3 | [execution-plan.md](execution-plan.md) |
-| 剪贴板页真实收敛与会话级历史摘要 | Phase 4 | [execution-plan.md](execution-plan.md) |
-| 产品收口、托盘恢复与完整回归 | Phase 5 | [execution-plan.md](execution-plan.md) |
 | 在建立测试基线后补 `vp test` | 后续工程化补充 | 继承自上一主题 |
 
 ---

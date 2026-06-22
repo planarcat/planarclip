@@ -1,17 +1,17 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::broadcast;
 
-use crate::clipboard::types::ClipboardSnapshot;
+use crate::clipboard::types::{ClipboardEvent, ClipboardSnapshot};
 
 static SELF_WRITING: AtomicBool = AtomicBool::new(false);
 
 pub struct ClipboardMonitor {
-    tx: broadcast::Sender<ClipboardSnapshot>,
+    tx: broadcast::Sender<ClipboardEvent>,
     last_hash: [u8; 32],
 }
 
 impl ClipboardMonitor {
-    pub fn new(tx: broadcast::Sender<ClipboardSnapshot>) -> Self {
+    pub fn new(tx: broadcast::Sender<ClipboardEvent>) -> Self {
         Self {
             tx,
             last_hash: [0u8; 32],
@@ -37,7 +37,7 @@ impl ClipboardMonitor {
                 let hash = snapshot.content_hash();
                 if hash != self.last_hash {
                     self.last_hash = hash;
-                    let _ = self.tx.send(snapshot);
+                    let _ = self.tx.send(ClipboardEvent::local(snapshot));
                 }
             }
         }

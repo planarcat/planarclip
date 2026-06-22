@@ -1,16 +1,18 @@
 use std::sync::Arc;
+
 use tokio::sync::{broadcast, Mutex};
-use crate::clipboard::types::ClipboardSnapshot;
+
+use crate::clipboard::types::ClipboardEvent;
 use crate::network::webrtc::ConnectionHandle;
 
 pub struct SyncEngine {
-    rx: broadcast::Receiver<ClipboardSnapshot>,
+    rx: broadcast::Receiver<ClipboardEvent>,
     connection: Arc<Mutex<Option<ConnectionHandle>>>,
 }
 
 impl SyncEngine {
     pub fn new(
-        rx: broadcast::Receiver<ClipboardSnapshot>,
+        rx: broadcast::Receiver<ClipboardEvent>,
         connection: Arc<Mutex<Option<ConnectionHandle>>>,
     ) -> Self {
         Self { rx, connection }
@@ -19,10 +21,10 @@ impl SyncEngine {
     pub async fn run(mut self) {
         loop {
             match self.rx.recv().await {
-                Ok(snapshot) => {
+                Ok(event) => {
                     let conn = self.connection.lock().await;
                     if let Some(ref handle) = *conn {
-                        handle.send_clipboard(&snapshot);
+                        handle.send_clipboard(&event.snapshot);
                     }
                 }
                 Err(e) => {

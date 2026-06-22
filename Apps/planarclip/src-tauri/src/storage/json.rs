@@ -9,6 +9,8 @@ pub struct AppConfig {
     pub tcp_port: Option<u16>,
     pub lan_enabled: Option<bool>,
     pub trusted_peers: Option<Vec<TrustedPeerData>>,
+    pub ui_color_scheme: Option<String>,
+    pub ui_theme_color: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, WindowEvent};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
@@ -14,7 +14,7 @@ mod sync;
 mod tray;
 
 use clipboard::monitor::ClipboardMonitor;
-use clipboard::types::ClipboardSnapshot;
+use clipboard::types::{ClipboardEvent, ClipboardHistoryEntry, ClipboardOrigin};
 use crypto::keys::KeyPair;
 use network::direct::{self, InitiatorResult, ListenerEvent};
 use network::discovery::{self, DiscoveryEvent, LanDevice};
@@ -23,16 +23,129 @@ use storage::json::{self as storage_json, AppConfig, KeyPairData, PeerData, Trus
 
 const SIGNALLING_SERVER: &str = "ws://localhost:8765";
 const DEFAULT_TCP_PORT: u16 = 19876;
+const DEFAULT_UI_COLOR_SCHEME: &str = "dark";
+const DEFAULT_UI_THEME_COLOR: &str = "cyan";
+const MAX_CLIPBOARD_HISTORY: usize = 12;
 
 pub struct AppState {
     pub config: Arc<Mutex<AppConfig>>,
     pub key_pair: Arc<Mutex<Option<KeyPair>>>,
     pub connected: Arc<Mutex<bool>>,
     pub connection: Arc<Mutex<Option<ConnectionHandle>>>,
-    pub clip_tx: broadcast::Sender<ClipboardSnapshot>,
+    pub clip_tx: broadcast::Sender<ClipboardEvent>,
+    pub clipboard_history: Arc<Mutex<Vec<ClipboardHistoryEntry>>>,
     pub lan_devices: Arc<Mutex<Vec<LanDevice>>>,
     pub pending_initiator: Arc<Mutex<Option<TcpStream>>>,
     pub pending_reject_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct UiSettingsPayload {
+    color_scheme: String,
+    theme_color: String,
+}
+
+fn normalized_color_scheme(value: &str) -> Option<&'static str> {
+    match value {
+        "light" => Some("light"),
+        "dark" => Some("dark"),
+        "system" => Some("system"),
+        _ => None,
+    }
+}
+
+fn normalized_theme_color(value: &str) -> Option<&'static str> {
+    match value {
+        "cyan" => Some("cyan"),
+        "violet" => Some("violet"),
+        "emerald" => Some("emerald"),
+        "rose" => Some("rose"),
+        _ => None,
+    }
+}
+
+fn ui_settings_from_config(config: &AppConfig) -> UiSettingsPayload {
+    UiSettingsPayload {
+        color_scheme: config
+            .ui_color_scheme
+            .as_deref()
+            .and_then(normalized_color_scheme)
+            .unwrap_or(DEFAULT_UI_COLOR_SCHEME)
+            .to_string(),
+        theme_color: config
+            .ui_theme_color
+            .as_deref()
+            .and_then(normalized_theme_color)
+            .unwrap_or(DEFAULT_UI_THEME_COLOR)
+            .to_string(),
+    }
+}
+
+fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHistoryEntry> {
+    let content = event.snapshot.text()?.trim().to_string();
+    if content.is_empty() {
+        return None;
+    }
+
+    let hash = hex::encode(event.content_hash());
+    let (source_label, direction) = match &event.origin {
+        ClipboardOrigin::Local => ("这台设备".to_string(), "sent".to_string()),
+        ClipboardOrigin::Remote { peer_name } => {
+            let label = if peer_name.trim().is_empty() {
+                "已连接设备".to_string()
+            } else {
+                peer_name.clone()
+            };
+            (label, "received".to_string())
+        }
+    };
+
+    Some(ClipboardHistoryEntry {
+        id: format!("{}-{}", event.timestamp_ms, &hash[..8]),
+        content,
+        source_label,
+        direction,
+        timestamp_ms: event.timestamp_ms,
+    })
+}
+
+fn merge_clipboard_history(history: &mut Vec<ClipboardHistoryEntry>, entry: ClipboardHistoryEntry) {
+    if history.first().map(|item| item.content.as_str()) == Some(entry.content.as_str())
+        && history.first().map(|item| item.direction.as_str()) == Some(entry.direction.as_str())
+        && history.first().map(|item| item.source_label.as_str()) == Some(entry.source_label.as_str())
+    {
+        return;
+    }
+
+    history.insert(0, entry);
+    history.truncate(MAX_CLIPBOARD_HISTORY);
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
+
+fn hide_main_window(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.hide();
+    }
+}
+
+fn toggle_main_window(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let visible = win.is_visible().unwrap_or(false);
+        let minimized = win.is_minimized().unwrap_or(false);
+
+        if visible && !minimized {
+            let _ = win.hide();
+        } else {
+            show_main_window(app);
+        }
+    }
 }
 
 fn emit_connection_failed(app: &tauri::AppHandle, error: &direct::HandshakeError) {
@@ -70,6 +183,39 @@ async fn get_pairing_code(state: tauri::State<'_, AppState>) -> Result<String, S
     } else {
         Err("密钥对尚未初始化".into())
     }
+}
+
+#[tauri::command]
+async fn get_ui_settings(state: tauri::State<'_, AppState>) -> Result<UiSettingsPayload, String> {
+    let config = state.config.lock().await;
+    Ok(ui_settings_from_config(&config))
+}
+
+#[tauri::command]
+async fn get_clipboard_history(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ClipboardHistoryEntry>, String> {
+    let history = state.clipboard_history.lock().await.clone();
+    Ok(history)
+}
+
+#[tauri::command]
+async fn save_ui_settings(
+    state: tauri::State<'_, AppState>,
+    color_scheme: String,
+    theme_color: String,
+) -> Result<UiSettingsPayload, String> {
+    let color_scheme = normalized_color_scheme(&color_scheme)
+        .ok_or_else(|| "当前背景模式无效，请重新选择后再试。".to_string())?;
+    let theme_color = normalized_theme_color(&theme_color)
+        .ok_or_else(|| "当前主题色无效，请重新选择后再试。".to_string())?;
+
+    let mut config = state.config.lock().await;
+    config.ui_color_scheme = Some(color_scheme.to_string());
+    config.ui_theme_color = Some(theme_color.to_string());
+    storage_json::save_config(&config);
+
+    Ok(ui_settings_from_config(&config))
 }
 
 #[tauri::command]
@@ -310,7 +456,7 @@ async fn handle_incoming_connection(
     app_handle: tauri::AppHandle,
     connected: Arc<Mutex<bool>>,
     connection: Arc<Mutex<Option<ConnectionHandle>>>,
-    clip_tx: broadcast::Sender<ClipboardSnapshot>,
+    clip_tx: broadcast::Sender<ClipboardEvent>,
     pending_reject_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 ) {
     let initiator_name = req.initiator_name.clone();
@@ -451,7 +597,7 @@ pub fn run() {
 
     let tcp_port = config.tcp_port.unwrap_or(DEFAULT_TCP_PORT);
 
-    let (clip_tx, _) = broadcast::channel::<ClipboardSnapshot>(16);
+    let (clip_tx, _) = broadcast::channel::<ClipboardEvent>(16);
 
     let app_state = AppState {
         config: Arc::new(Mutex::new(config)),
@@ -459,6 +605,7 @@ pub fn run() {
         connected: Arc::new(Mutex::new(false)),
         connection: Arc::new(Mutex::new(None)),
         clip_tx: clip_tx.clone(),
+        clipboard_history: Arc::new(Mutex::new(Vec::new())),
         lan_devices: Arc::new(Mutex::new(Vec::new())),
         pending_initiator: Arc::new(Mutex::new(None)),
         pending_reject_tx: Arc::new(Mutex::new(None)),
@@ -468,6 +615,17 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(app_state)
         .setup(move |app| {
+            if let Some(win) = app.get_webview_window("main") {
+                let app_handle = app.handle().clone();
+                win.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        // 桌面端关闭主窗时改为收回托盘，避免误触后直接退出同步会话。
+                        api.prevent_close();
+                        hide_main_window(&app_handle);
+                    }
+                });
+            }
+
             let toggle = MenuItemBuilder::with_id("toggle", "打开 PlanarClip").build(app)?;
             let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
             let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
@@ -488,23 +646,12 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        let app = tray.app_handle();
-                        if let Some(win) = app.get_webview_window("main") {
-                            if win.is_visible().unwrap_or(false) {
-                                let _ = win.hide();
-                            } else {
-                                let _ = win.show();
-                                let _ = win.set_focus();
-                            }
-                        }
+                        toggle_main_window(&tray.app_handle());
                     }
                 })
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "toggle" => {
-                        if let Some(win) = app.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.set_focus();
-                        }
+                        show_main_window(app);
                     }
                     "quit" => {
                         app.exit(0);
@@ -517,6 +664,7 @@ pub fn run() {
             let device_name = app.state::<AppState>().config.blocking_lock().device_name.clone();
             let peer_id = key_pair.fingerprint();
             let lan_devices = app.state::<AppState>().lan_devices.clone();
+            let clipboard_history = app.state::<AppState>().clipboard_history.clone();
             let pending_reject_tx = app.state::<AppState>().pending_reject_tx.clone();
             let connected = app.state::<AppState>().connected.clone();
             let connection = app.state::<AppState>().connection.clone();
@@ -597,6 +745,26 @@ pub fn run() {
                 });
             }
 
+            {
+                let app_handle = app_handle.clone();
+                let clipboard_history = clipboard_history.clone();
+                let mut clip_history_rx = clip_tx.subscribe();
+
+                tauri::async_runtime::spawn(async move {
+                    // 统一从广播流汇总本机会话内的文本历史，前端只消费这份裁剪后的摘要列表。
+                    while let Ok(event) = clip_history_rx.recv().await {
+                        if let Some(entry) = build_clipboard_history_entry(&event) {
+                            let updated_history = {
+                                let mut history = clipboard_history.lock().await;
+                                merge_clipboard_history(&mut history, entry);
+                                history.clone()
+                            };
+                            let _ = app_handle.emit("clipboard-history-changed", updated_history);
+                        }
+                    }
+                });
+            }
+
             let clip_tx_monitor = clip_tx.clone();
             let clip_rx = clip_tx.subscribe();
             let connection_bg = connection.clone();
@@ -624,6 +792,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_status,
             get_pairing_code,
+            get_ui_settings,
+            get_clipboard_history,
+            save_ui_settings,
             pair,
             get_lan_devices,
             connect_lan,
