@@ -82,18 +82,13 @@ export function Sidebar({
       </nav>
 
       <div className="px-4 pb-2 pt-4">
-        <p className="mb-2 text-[13px] font-medium text-muted-foreground">局域网设备</p>
+        <p className="mb-2 text-[13px] font-medium text-muted-foreground">设备列表</p>
         {devices.length > 0 ? (
           <div className="space-y-1.5">
             {devices.map((device) => (
               <div key={device.id} className="flex items-center justify-between gap-2">
-                <div className="flex min-w-0 items-center gap-2">
-                  <StatusDot status={device.status} />
-                  <span className="truncate text-[13px] font-medium text-foreground">{device.name}</span>
-                </div>
-                <span className="shrink-0 text-[13px] font-medium text-secondary-foreground">
-                  {device.status === "connected" ? "在线" : "可发现"}
-                </span>
+                <span className="truncate text-[13px] font-medium text-foreground">{device.name}</span>
+                <StatusDot status={device.status} size="lg" />
               </div>
             ))}
           </div>

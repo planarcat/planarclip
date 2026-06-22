@@ -23,6 +23,7 @@ use storage::json::{self as storage_json, AppConfig, KeyPairData, PeerData, Trus
 
 const SIGNALLING_SERVER: &str = "ws://localhost:8765";
 const DEFAULT_TCP_PORT: u16 = 19876;
+const DEFAULT_DEVICE_NAME: &str = "我的设备";
 const DEFAULT_UI_COLOR_SCHEME: &str = "dark";
 const DEFAULT_UI_THEME_COLOR: &str = "cyan";
 const MAX_CLIPBOARD_HISTORY: usize = 12;
@@ -43,6 +44,7 @@ pub struct AppState {
 struct UiSettingsPayload {
     color_scheme: String,
     theme_color: String,
+    device_name: String,
 }
 
 fn normalized_color_scheme(value: &str) -> Option<&'static str> {
@@ -64,6 +66,28 @@ fn normalized_theme_color(value: &str) -> Option<&'static str> {
     }
 }
 
+fn normalize_stored_device_name(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("My Device") {
+        DEFAULT_DEVICE_NAME.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn validate_device_name(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(DEFAULT_DEVICE_NAME.to_string());
+    }
+
+    if trimmed.chars().count() > 24 {
+        return Err("设备名称最多 24 个字符，请缩短后再试。".to_string());
+    }
+
+    Ok(trimmed.to_string())
+}
+
 fn ui_settings_from_config(config: &AppConfig) -> UiSettingsPayload {
     UiSettingsPayload {
         color_scheme: config
@@ -78,6 +102,7 @@ fn ui_settings_from_config(config: &AppConfig) -> UiSettingsPayload {
             .and_then(normalized_theme_color)
             .unwrap_or(DEFAULT_UI_THEME_COLOR)
             .to_string(),
+        device_name: normalize_stored_device_name(&config.device_name),
     }
 }
 
@@ -204,15 +229,18 @@ async fn save_ui_settings(
     state: tauri::State<'_, AppState>,
     color_scheme: String,
     theme_color: String,
+    device_name: String,
 ) -> Result<UiSettingsPayload, String> {
     let color_scheme = normalized_color_scheme(&color_scheme)
         .ok_or_else(|| "当前背景模式无效，请重新选择后再试。".to_string())?;
     let theme_color = normalized_theme_color(&theme_color)
         .ok_or_else(|| "当前主题色无效，请重新选择后再试。".to_string())?;
+    let device_name = validate_device_name(&device_name)?;
 
     let mut config = state.config.lock().await;
     config.ui_color_scheme = Some(color_scheme.to_string());
     config.ui_theme_color = Some(theme_color.to_string());
+    config.device_name = device_name;
     storage_json::save_config(&config);
 
     Ok(ui_settings_from_config(&config))
@@ -450,7 +478,6 @@ fn load_or_create_key_pair(config: &mut AppConfig) -> KeyPair {
 
 async fn handle_incoming_connection(
     req: direct::IncomingRequest,
-    device_name: String,
     key_pair: KeyPair,
     config: Arc<Mutex<AppConfig>>,
     app_handle: tauri::AppHandle,
@@ -462,14 +489,16 @@ async fn handle_incoming_connection(
     let initiator_name = req.initiator_name.clone();
     let initiator_pk = req.initiator_public_key.clone();
 
-    // 这里每次都从配置里读取可信设备，避免首轮配对成功后必须重启才能命中自动接受。
-    let is_trusted = {
+    // 这里每次都从配置里读取设备名称与可信设备，避免改名或首轮配对后必须重启才能生效。
+    let (device_name, is_trusted) = {
         let cfg = config.lock().await;
-        cfg.trusted_peers
+        let is_trusted = cfg
+            .trusted_peers
             .clone()
             .unwrap_or_default()
             .iter()
-            .any(|tp| tp.public_key == initiator_pk)
+            .any(|tp| tp.public_key == initiator_pk);
+        (normalize_stored_device_name(&cfg.device_name), is_trusted)
     };
 
     if is_trusted {
@@ -588,9 +617,7 @@ pub fn run() {
     tracing_subscriber::fmt::init();
 
     let mut config = storage_json::load_config();
-    if config.device_name.is_empty() {
-        config.device_name = "我的设备".into();
-    }
+    config.device_name = normalize_stored_device_name(&config.device_name);
 
     let key_pair = load_or_create_key_pair(&mut config);
     storage_json::save_config(&config);
@@ -661,7 +688,7 @@ pub fn run() {
                 .build(app)?;
 
             let app_handle = app.handle().clone();
-            let device_name = app.state::<AppState>().config.blocking_lock().device_name.clone();
+            let device_name = normalize_stored_device_name(&app.state::<AppState>().config.blocking_lock().device_name);
             let peer_id = key_pair.fingerprint();
             let lan_devices = app.state::<AppState>().lan_devices.clone();
             let clipboard_history = app.state::<AppState>().clipboard_history.clone();
@@ -729,7 +756,6 @@ pub fn run() {
                             ListenerEvent::Incoming(req) => {
                                 handle_incoming_connection(
                                     req,
-                                    device_name.clone(),
                                     key_pair.clone(),
                                     config.clone(),
                                     app_handle.clone(),

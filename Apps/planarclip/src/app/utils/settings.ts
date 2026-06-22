@@ -1,5 +1,16 @@
-import { DEFAULT_UI_SETTINGS, PREVIEW_UI_SETTINGS_KEY, getThemeById, normalizeColorScheme } from "../constants/theme";
+import {
+  DEFAULT_DEVICE_NAME,
+  DEFAULT_UI_SETTINGS,
+  PREVIEW_UI_SETTINGS_KEY,
+  getThemeById,
+  normalizeColorScheme,
+} from "../constants/theme";
 import type { ColorScheme, ThemeColor, UiSettingsPayload } from "../types";
+
+export function normalizeDeviceName(value?: string) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : DEFAULT_DEVICE_NAME;
+}
 
 export function loadPreviewUiSettings(): UiSettingsPayload {
   if (typeof window === "undefined") {
@@ -16,6 +27,7 @@ export function loadPreviewUiSettings(): UiSettingsPayload {
     return {
       color_scheme: normalizeColorScheme(parsed.color_scheme),
       theme_color: getThemeById(parsed.theme_color).id,
+      device_name: normalizeDeviceName(parsed.device_name),
     };
   } catch {
     return DEFAULT_UI_SETTINGS;
@@ -28,7 +40,13 @@ export function savePreviewUiSettings(settings: UiSettingsPayload) {
   }
 
   try {
-    window.localStorage.setItem(PREVIEW_UI_SETTINGS_KEY, JSON.stringify(settings));
+    window.localStorage.setItem(
+      PREVIEW_UI_SETTINGS_KEY,
+      JSON.stringify({
+        ...settings,
+        device_name: normalizeDeviceName(settings.device_name),
+      }),
+    );
   } catch {
     // 忽略预览态下的本地存储失败，保持界面继续可用。
   }

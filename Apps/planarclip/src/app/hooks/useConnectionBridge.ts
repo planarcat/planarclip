@@ -131,7 +131,7 @@ export function useConnectionBridge({
         setLastMessage(
           initialStatus === "connected"
             ? "已恢复现有连接，可以继续同步剪贴板。"
-            : "正在监听局域网设备与连接请求。",
+            : "正在监听设备列表与连接请求。",
         );
       } catch (error) {
         if (!disposed) {

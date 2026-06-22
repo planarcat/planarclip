@@ -21,7 +21,7 @@ pub enum DiscoveryEvent {
 
 pub fn start_discovery(
     device_name: &str,
-    peer_id: &str,
+    local_peer_id: &str,
     port: u16,
     event_tx: mpsc::UnboundedSender<DiscoveryEvent>,
 ) -> Result<ServiceDaemon, mdns_sd::Error> {
@@ -36,7 +36,7 @@ pub fn start_discovery(
         &host_name,
         &local_ip,
         port,
-        &[("peer_id", peer_id), ("device_name", device_name)][..],
+        &[("peer_id", local_peer_id), ("device_name", device_name)][..],
     )?;
 
     daemon.register(service_info)?;
@@ -49,6 +49,7 @@ pub fn start_discovery(
 
     let browse_rx = daemon.browse(SERVICE_TYPE)?;
     let tx = event_tx;
+    let local_peer_id = local_peer_id.to_string();
 
     std::thread::spawn(move || {
         while let Ok(event) = browse_rx.recv() {
@@ -64,7 +65,10 @@ pub fn start_discovery(
                         .to_string();
                     let ip = info.get_addresses().iter().next().map(|a| a.to_string());
 
-                    if let (Some(ip), true) = (ip, !peer_id.is_empty()) {
+                    if let (Some(ip), true) = (
+                        ip,
+                        !peer_id.is_empty() && peer_id != local_peer_id,
+                    ) {
                         let device = LanDevice {
                             name,
                             peer_id,

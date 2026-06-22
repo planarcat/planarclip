@@ -1,4 +1,4 @@
-import { Moon, Sun, SunMoon } from "lucide-react";
+import { Moon, Save, Sun, SunMoon } from "lucide-react";
 import { THEME_COLORS } from "../../constants/theme";
 import type { ColorScheme, SettingAvailability, ThemeColor } from "../../types";
 import { SettingBadge } from "../common/SettingBadge";
@@ -6,22 +6,28 @@ import { ThemeSwatch } from "../common/ThemeSwatch";
 
 type SettingsPageProps = {
   colorScheme: ColorScheme;
+  deviceName: string;
   isDark: boolean;
   theme: ThemeColor;
   settingsMessage: string;
   isSaving: boolean;
   onSchemeChange: (scheme: ColorScheme) => void;
   onThemeChange: (theme: ThemeColor) => void;
+  onDeviceNameChange: (deviceName: string) => void;
+  onDeviceNameSave: () => void;
 };
 
 export function SettingsPage({
   colorScheme,
+  deviceName,
   isDark,
   theme,
   settingsMessage,
   isSaving,
   onSchemeChange,
   onThemeChange,
+  onDeviceNameChange,
+  onDeviceNameSave,
 }: SettingsPageProps) {
   const settingRows: Array<{
     label: string;
@@ -58,11 +64,46 @@ export function SettingsPage({
   return (
     <div className="max-w-3xl flex-1 overflow-y-auto px-4 pt-6 md:px-6 md:pt-8 xl:px-8">
       <h2 className="mb-1 text-base font-semibold text-foreground">设置</h2>
-      <p className="mb-6 text-sm text-secondary-foreground">管理已落地的外观项，并查看当前版本可用的同步能力边界。</p>
+      <p className="mb-6 text-sm text-secondary-foreground">管理已落地的外观项、设备名称，并查看当前版本可用的同步能力边界。</p>
 
       <div className="mb-6">
-        <p className="mb-3 text-[13px] font-medium text-muted-foreground">外观</p>
+        <p className="mb-3 text-[13px] font-medium text-muted-foreground">外观与设备</p>
         <div className="space-y-5 rounded-xl border border-border bg-card p-4">
+          <div>
+            <div className="mb-3 flex items-start justify-between gap-4">
+              <div>
+                <p className="mb-0.5 text-sm font-medium text-foreground">设备名称</p>
+                <p className="text-[13px] font-medium text-muted-foreground">其他设备会在设备列表与连接请求中看到这个名称。</p>
+              </div>
+              <SettingBadge availability="editable" />
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={deviceName}
+                maxLength={24}
+                placeholder="我的设备"
+                autoComplete="off"
+                onChange={(event) => onDeviceNameChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    onDeviceNameSave();
+                  }
+                }}
+                className="flex-1 rounded-lg border border-border bg-secondary px-3 py-2.5 text-sm font-medium text-foreground transition-colors placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none"
+              />
+              <button
+                onClick={onDeviceNameSave}
+                className="flex shrink-0 items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                type="button"
+              >
+                <Save size={14} />
+                保存名称
+              </button>
+            </div>
+          </div>
+
           <div>
             <div className="mb-3 flex items-start justify-between gap-4">
               <div>
@@ -116,7 +157,7 @@ export function SettingsPage({
           </div>
 
           <div className="rounded-lg border border-dashed border-border bg-secondary/20 px-3 py-3 text-[13px] font-medium text-muted-foreground">
-            {isSaving ? "正在保存外观设置…" : settingsMessage}
+            {isSaving ? "正在保存设置…" : settingsMessage}
           </div>
         </div>
       </div>

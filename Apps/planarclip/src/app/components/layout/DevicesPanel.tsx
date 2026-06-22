@@ -35,17 +35,11 @@ export function DevicesPanel({ devices, pairingCode, status }: DevicesPanelProps
                     </p>
                   </div>
                 </div>
-                <StatusDot status={device.status} />
+                <StatusDot status={device.status} size="lg" />
               </div>
               <div className="space-y-1.5">
                 {[
                   { label: "连接地址", value: device.address, className: "text-secondary-foreground", mono: true },
-                  {
-                    label: "状态",
-                    value: device.status === "connected" ? "已连接" : device.source === "discovery" ? "已发现" : "离线",
-                    className: device.status === "connected" ? "text-emerald-500" : "text-amber-500",
-                    mono: false,
-                  },
                   { label: "最近活跃", value: relativeTime(device.lastSeen), className: "text-secondary-foreground", mono: false },
                 ].map((row) => (
                   <div key={row.label} className="flex items-center justify-between gap-3 leading-5">
@@ -53,6 +47,10 @@ export function DevicesPanel({ devices, pairingCode, status }: DevicesPanelProps
                     <span className={`truncate text-[13px] font-medium ${row.mono ? "font-mono" : ""} ${row.className}`}>{row.value}</span>
                   </div>
                 ))}
+                <div className="flex items-center justify-between gap-3 leading-5">
+                  <span className="text-[13px] font-medium text-muted-foreground">状态</span>
+                  <StatusDot status={device.status} size="md" />
+                </div>
               </div>
             </div>
           ))

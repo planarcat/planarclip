@@ -27,9 +27,12 @@ export const THEME_COLORS: ThemeColor[] = [
   },
 ];
 
+export const DEFAULT_DEVICE_NAME = "我的设备";
+
 export const DEFAULT_UI_SETTINGS: UiSettingsPayload = {
   color_scheme: "dark",
   theme_color: THEME_COLORS[0].id,
+  device_name: DEFAULT_DEVICE_NAME,
 };
 
 export const PREVIEW_UI_SETTINGS_KEY = "planarclip-ui-settings";

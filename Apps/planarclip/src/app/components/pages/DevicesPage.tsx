@@ -20,7 +20,7 @@ export function DevicesPage({ devices, connectionStatus, onShowPairing, onConnec
       <div className="mb-6 flex max-w-3xl items-start justify-between gap-4">
         <div>
           <h2 className="mb-1 text-base font-semibold text-foreground">设备管理</h2>
-          <p className="text-sm text-secondary-foreground">查看真实局域网发现结果，并直接发起连接或断开当前会话。</p>
+          <p className="text-sm text-secondary-foreground">查看设备列表，并直接发起连接或断开当前会话。</p>
         </div>
         <button
           onClick={onShowPairing}
@@ -34,7 +34,7 @@ export function DevicesPage({ devices, connectionStatus, onShowPairing, onConnec
       </div>
 
       <div className="max-w-3xl space-y-2">
-        <p className="mb-3 text-[13px] font-medium text-muted-foreground">已发现设备</p>
+        <p className="mb-3 text-[13px] font-medium text-muted-foreground">设备列表</p>
         {devices.map((device) => {
           const connectDisabled = busyConnecting || hasActiveSession;
           const connectLabel = busyConnecting ? "处理中" : hasActiveSession ? "先断开再连接" : "连接设备";
@@ -51,12 +51,7 @@ export function DevicesPage({ devices, connectionStatus, onShowPairing, onConnec
                 <p className="text-sm font-medium text-foreground">{device.name}</p>
                 <p className="font-mono text-[13px] font-medium text-secondary-foreground">{device.address}</p>
               </div>
-              <div className="flex items-center gap-2">
-                <StatusDot status={device.status} />
-                <span className="text-[13px] font-medium text-secondary-foreground">
-                  {device.status === "connected" ? "已连接" : device.status === "idle" ? "可连接" : "离线"}
-                </span>
-              </div>
+              <StatusDot status={device.status} size="lg" />
               {device.status === "connected" ? (
                 <button
                   onClick={onDisconnect}

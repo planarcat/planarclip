@@ -45,6 +45,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [theme, setTheme] = useState<ThemeColor>(() => getThemeById(previewUiSettings.theme_color));
   const [colorScheme, setColorScheme] = useState<ColorScheme>(() => normalizeColorScheme(previewUiSettings.color_scheme));
+  const [deviceName, setDeviceName] = useState(previewUiSettings.device_name);
   const [isDark, setIsDark] = useState(true);
   const [settingsMessage, setSettingsMessage] = useState(
     TAURI_AVAILABLE ? "正在同步桌面端设置…" : "当前是浏览器预览模式，外观设置会暂存到浏览器本地。",
@@ -61,21 +62,30 @@ export default function App() {
   const [pairingInput, setPairingInput] = useState("");
   const [pairingStage, setPairingStage] = useState<PairingStage>("idle");
   const [pairingTargetName, setPairingTargetName] = useState<string | null>(null);
-  const [pairingHelperText, setPairingHelperText] = useState("通过配对码或局域网设备建立连接。");
+  const [pairingHelperText, setPairingHelperText] = useState("通过配对码或设备列表建立连接。");
   const [pairingError, setPairingError] = useState<string | null>(null);
   const [incomingRequest, setIncomingRequest] = useState<ConnectionRequestPayload | null>(null);
 
   const devices = useMemo(() => buildDevices(lanDevices, connectedPeer), [lanDevices, connectedPeer]);
   const discoveredDevices = useMemo(() => devices.filter((device) => device.source === "discovery"), [devices]);
-  const identityLabel = pairingCode === "------" ? "连接信息准备中" : `配对码 ${pairingCode}`;
+  const identityLabel = pairingCode === "------" ? `${deviceName} · 连接信息准备中` : `${deviceName} · 配对码 ${pairingCode}`;
 
-  const { handleColorSchemeChange, handleThemeChange, applyDesktopUiSettings, applyUiSettingsFallback } = useUiTheme({
+  const {
+    handleColorSchemeChange,
+    handleThemeChange,
+    handleDeviceNameChange,
+    handleDeviceNameSave,
+    applyDesktopUiSettings,
+    applyUiSettingsFallback,
+  } = useUiTheme({
     tauriAvailable: TAURI_AVAILABLE,
     callCommand,
     colorScheme,
     theme,
+    deviceName,
     setColorScheme,
     setTheme,
+    setDeviceName,
     setIsDark,
     setSettingsMessage,
     setIsSavingSettings,
@@ -180,12 +190,15 @@ export default function App() {
         {activeNav === "settings" && (
           <SettingsPage
             colorScheme={colorScheme}
+            deviceName={deviceName}
             isDark={isDark}
             theme={theme}
             settingsMessage={settingsMessage}
             isSaving={isSavingSettings}
             onSchemeChange={handleColorSchemeChange}
             onThemeChange={handleThemeChange}
+            onDeviceNameChange={handleDeviceNameChange}
+            onDeviceNameSave={handleDeviceNameSave}
           />
         )}
       </main>

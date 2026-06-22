@@ -72,7 +72,7 @@ export function usePairingFlow({
       setPairingInput("");
       setPairingStage("idle");
       setPairingTargetName(null);
-      setPairingHelperText("通过配对码或局域网设备建立连接。");
+      setPairingHelperText("通过配对码或设备列表建立连接。");
       setPairingError(null);
       setIncomingRequest(null);
       if (closeModal) {

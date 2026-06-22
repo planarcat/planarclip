@@ -84,7 +84,7 @@ export function PairingModal({
         <div className="flex items-center justify-between border-b border-border px-5 pb-4 pt-5">
           <div>
             <p className="text-sm font-semibold text-foreground">连接新设备</p>
-            <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">通过配对码与另一台设备建立连接</p>
+            <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">通过配对码与设备列表建立连接</p>
           </div>
           <button
             onClick={onClose}
@@ -173,7 +173,7 @@ export function PairingModal({
 
               <div>
                 <div className="mb-2 flex items-center justify-between">
-                  <p className="text-[13px] font-medium text-muted-foreground">局域网设备</p>
+                  <p className="text-[13px] font-medium text-muted-foreground">设备列表</p>
                   <span className="flex items-center gap-1 text-[13px] font-medium text-muted-foreground">
                     <Wifi size={10} />
                     自动发现

@@ -47,6 +47,7 @@ export type ThemeColor = {
 export type UiSettingsPayload = {
   color_scheme: ColorScheme;
   theme_color: string;
+  device_name: string;
 };
 
 export type SettingAvailability = "editable" | "managed" | "planned";
