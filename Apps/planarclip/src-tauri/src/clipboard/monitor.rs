@@ -4,7 +4,7 @@ use std::sync::{
 };
 use tokio::sync::broadcast;
 
-use crate::clipboard::types::{debug_report, ClipboardEvent, ClipboardSnapshot};
+use crate::clipboard::types::{ClipboardEvent, ClipboardSnapshot};
 
 static SELF_WRITING: AtomicBool = AtomicBool::new(false);
 static SUPPRESSED_REMOTE_WRITE: Mutex<Option<SuppressedRemoteWrite>> = Mutex::new(None);
@@ -47,33 +47,10 @@ impl ClipboardMonitor {
                 let hash = snapshot.content_hash();
                 if Self::should_suppress_local_emit(hash) {
                     self.last_hash = hash;
-                    // #region debug-point A:monitor-local-suppressed
-                    debug_report(
-                        "A",
-                        "clipboard/monitor.rs:42",
-                        "[DEBUG] monitor suppressed local clipboard echo",
-                        serde_json::json!({
-                            "hash": hex::encode(hash),
-                            "text_len": snapshot.text().map(|text| text.len()).unwrap_or(0),
-                        }),
-                    );
-                    // #endregion
                     continue;
                 }
                 if hash != self.last_hash {
                     self.last_hash = hash;
-                    // #region debug-point A:monitor-local-emit
-                    debug_report(
-                        "A",
-                        "clipboard/monitor.rs:54",
-                        "[DEBUG] monitor emitted local clipboard event",
-                        serde_json::json!({
-                            "hash": hex::encode(hash),
-                            "self_writing": Self::is_self_writing(),
-                            "text_len": snapshot.text().map(|text| text.len()).unwrap_or(0),
-                        }),
-                    );
-                    // #endregion
                     let _ = self.tx.send(ClipboardEvent::local(snapshot));
                 }
             }
@@ -103,17 +80,6 @@ impl ClipboardMonitor {
 
     pub fn write_clipboard(text: &str) {
         let hash = *blake3::hash(text.as_bytes()).as_bytes();
-        // #region debug-point A:remote-write-start
-        debug_report(
-            "A",
-            "clipboard/monitor.rs:93",
-            "[DEBUG] write_clipboard started",
-            serde_json::json!({
-                "hash": hex::encode(hash),
-                "text_len": text.len(),
-            }),
-        );
-        // #endregion
         if let Ok(mut state) = SUPPRESSED_REMOTE_WRITE.lock() {
             *state = Some(SuppressedRemoteWrite {
                 hash,
@@ -125,18 +91,6 @@ impl ClipboardMonitor {
             let _ = clipboard.set_text(text);
         }
         Self::set_self_writing(false);
-        // #region debug-point A:remote-write-end
-        debug_report(
-            "A",
-            "clipboard/monitor.rs:112",
-            "[DEBUG] write_clipboard finished",
-            serde_json::json!({
-                "hash": hex::encode(hash),
-                "self_writing": Self::is_self_writing(),
-                "suppression_until_ms": now_ms() + REMOTE_WRITE_SUPPRESSION_MS,
-            }),
-        );
-        // #endregion
     }
 }
 

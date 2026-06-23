@@ -4,7 +4,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::clipboard::monitor::ClipboardMonitor;
-use crate::clipboard::types::{debug_report, ClipboardEvent, ClipboardSnapshot};
+use crate::clipboard::types::{ClipboardEvent, ClipboardSnapshot};
 use crate::network::direct::DirectConnection;
 use crate::network::protocol::SignalMessage;
 use crate::network::signalling;
@@ -95,32 +95,8 @@ impl ConnectionManager {
                         }
 
                         tracing::info!("Received remote clipboard: {} chars", payload.len());
-                        // #region debug-point A:remote-receive-signalling
-                        debug_report(
-                            "A",
-                            "network/webrtc.rs:96",
-                            "[DEBUG] received remote clipboard from signalling",
-                            serde_json::json!({
-                                "hash": hash,
-                                "text_len": payload.len(),
-                                "peer_name": "已配对设备",
-                            }),
-                        );
-                        // #endregion
                         ClipboardMonitor::write_clipboard(&payload);
                         let snapshot = ClipboardSnapshot::Text(payload);
-                        // #region debug-point B:remote-event-signalling
-                        debug_report(
-                            "B",
-                            "network/webrtc.rs:108",
-                            "[DEBUG] broadcasted remote clipboard event from signalling",
-                            serde_json::json!({
-                                "hash": hex::encode(snapshot.content_hash()),
-                                "text_len": snapshot.text().map(|text| text.len()).unwrap_or(0),
-                                "peer_name": "已配对设备",
-                            }),
-                        );
-                        // #endregion
                         let _ = clip_tx.send(ClipboardEvent::remote(snapshot, "已配对设备".to_string()));
                     }
                     SignalMessage::PeerJoined { peer_id } => {
@@ -186,32 +162,8 @@ impl ConnectionManager {
                         }
 
                         tracing::info!("Received remote clipboard: {} chars", payload.len());
-                        // #region debug-point A:remote-receive-direct
-                        debug_report(
-                            "A",
-                            "network/webrtc.rs:183",
-                            "[DEBUG] received remote clipboard from direct connection",
-                            serde_json::json!({
-                                "hash": hash,
-                                "text_len": payload.len(),
-                                "peer_name": peer_name,
-                            }),
-                        );
-                        // #endregion
                         ClipboardMonitor::write_clipboard(&payload);
                         let snapshot = ClipboardSnapshot::Text(payload);
-                        // #region debug-point B:remote-event-direct
-                        debug_report(
-                            "B",
-                            "network/webrtc.rs:195",
-                            "[DEBUG] broadcasted remote clipboard event from direct connection",
-                            serde_json::json!({
-                                "hash": hex::encode(snapshot.content_hash()),
-                                "text_len": snapshot.text().map(|text| text.len()).unwrap_or(0),
-                                "peer_name": peer_name,
-                            }),
-                        );
-                        // #endregion
                         let _ = clip_tx.send(ClipboardEvent::remote(snapshot, peer_name.clone()));
                     }
                     SignalMessage::PeerJoined { .. } => {}
