@@ -160,6 +160,19 @@ fn merge_clipboard_history(history: &mut Vec<ClipboardHistoryEntry>, entry: Clip
         return;
     }
 
+    if let Some(first) = history.first_mut() {
+        let is_recent_opposite_duplicate = first.content == entry.content
+            && first.direction != entry.direction
+            && first.timestamp_ms.abs_diff(entry.timestamp_ms) <= 2_000;
+
+        if is_recent_opposite_duplicate {
+            if entry.direction == "received" {
+                *first = entry;
+            }
+            return;
+        }
+    }
+
     history.insert(0, entry);
     history.truncate(MAX_CLIPBOARD_HISTORY);
 }

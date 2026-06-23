@@ -90,7 +90,7 @@ pub fn debug_report(hypothesis_id: &str, location: &str, msg: &str, data: serde_
 
     let payload = serde_json::json!({
         "sessionId": session_id,
-        "runId": "pre-fix",
+        "runId": "post-fix",
         "hypothesisId": hypothesis_id,
         "location": location,
         "msg": msg,
