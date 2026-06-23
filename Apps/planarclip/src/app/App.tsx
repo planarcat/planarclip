@@ -208,7 +208,7 @@ export default function App() {
               status={status}
               statusMessage={lastMessage}
             />
-            <DevicesPanel devices={devices} pairingCode={pairingCode} status={status} />
+            <DevicesPanel devices={devices} status={status} />
           </>
         )}
         {activeNav === "devices" && (

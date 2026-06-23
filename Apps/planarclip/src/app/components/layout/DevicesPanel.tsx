@@ -6,11 +6,10 @@ import { StatusDot } from "../common/StatusDot";
 
 type DevicesPanelProps = {
   devices: Device[];
-  pairingCode: string;
   status: AppConnectionStatus;
 };
 
-export function DevicesPanel({ devices, pairingCode, status }: DevicesPanelProps) {
+export function DevicesPanel({ devices, status }: DevicesPanelProps) {
   useRelativeTicker();
 
   return (
@@ -65,7 +64,6 @@ export function DevicesPanel({ devices, pairingCode, status }: DevicesPanelProps
         <p className="mb-2 text-[13px] font-medium text-primary">网络信息</p>
         <div className="space-y-1.5">
           {[
-            { label: "配对码", value: pairingCode, className: "text-primary", mono: true },
             {
               label: "连接状态",
               value: status === "online" ? "已连接" : status === "connecting" ? "连接中" : "等待连接",
@@ -73,7 +71,6 @@ export function DevicesPanel({ devices, pairingCode, status }: DevicesPanelProps
               mono: false,
             },
             { label: "发现设备", value: `${devices.length} 台`, className: "text-secondary-foreground", mono: false },
-            { label: "加密", value: "AES-256-GCM", className: "text-emerald-500", mono: true },
           ].map((row) => (
             <div key={row.label} className="flex justify-between gap-3 leading-5">
               <span className="text-[13px] font-medium text-muted-foreground">{row.label}</span>
