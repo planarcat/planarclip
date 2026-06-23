@@ -29,7 +29,7 @@ export function ClipboardPage({ clips, devices, viewMode, setViewMode, status, s
           <div className="flex items-center rounded-md bg-secondary p-0.5">
             <button
               onClick={() => setViewMode("list")}
-              className={`rounded p-1.5 transition-colors ${viewMode === "list" ? "bg-card text-foreground shadow-sm" : "text-secondary-foreground hover:text-foreground"}`}
+              className={`rounded p-1.5 transition-colors ${viewMode === "list" ? "bg-card text-primary shadow-sm" : "text-secondary-foreground hover:text-primary"}`}
               title="列表视图"
               type="button"
             >
@@ -37,15 +37,15 @@ export function ClipboardPage({ clips, devices, viewMode, setViewMode, status, s
             </button>
             <button
               onClick={() => setViewMode("grid")}
-              className={`rounded p-1.5 transition-colors ${viewMode === "grid" ? "bg-card text-foreground shadow-sm" : "text-secondary-foreground hover:text-foreground"}`}
+              className={`rounded p-1.5 transition-colors ${viewMode === "grid" ? "bg-card text-primary shadow-sm" : "text-secondary-foreground hover:text-primary"}`}
               title="网格视图"
               type="button"
             >
               <LayoutGrid size={14} />
             </button>
           </div>
-          <div className="flex items-center gap-1.5 rounded bg-secondary px-2.5 py-1.5 text-[13px] font-medium text-secondary-foreground">
-            <Shield size={11} className="text-emerald-500" />
+          <div className="flex items-center gap-1.5 rounded bg-secondary px-2.5 py-1.5 text-[13px] font-medium text-primary">
+            <Shield size={11} className="text-primary" />
             已连接 {connectedCount} 台
           </div>
         </div>

@@ -170,6 +170,8 @@ export function Sidebar({
           <div className="space-y-1.5">
             {devices.map((device) => {
               const connectDisabled = status === "connecting" || (status === "online" && device.status !== "connected");
+              const hostNameLabel = device.hostName?.trim();
+              const showHostName = Boolean(hostNameLabel && hostNameLabel.toLocaleLowerCase() !== device.name.trim().toLocaleLowerCase());
               const actionTitle =
                 device.status === "connected"
                   ? `断开与 ${device.name} 的连接`
@@ -181,9 +183,9 @@ export function Sidebar({
 
               return (
                 <div key={device.id} className="flex items-center justify-between gap-2 rounded-lg px-1 py-1 hover:bg-secondary/40">
-                  <div className="min-w-0 flex-1" title={device.hostName ? `${device.name} · ${device.hostName}` : device.name}>
+                  <div className="min-w-0 flex-1" title={showHostName ? `${device.name} · ${hostNameLabel}` : device.name}>
                     <p className="truncate text-[13px] font-medium text-primary">{device.name}</p>
-                    {device.hostName && <p className="truncate text-[11px] font-medium text-primary/65">{device.hostName}</p>}
+                    {showHostName && <p className="truncate text-[11px] font-medium text-primary/65">{hostNameLabel}</p>}
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
                     <StatusDot status={device.status} size="md" />
