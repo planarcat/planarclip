@@ -14,7 +14,7 @@ mod sync;
 mod tray;
 
 use clipboard::monitor::ClipboardMonitor;
-use clipboard::types::{ClipboardEvent, ClipboardHistoryEntry, ClipboardOrigin};
+use clipboard::types::{debug_report, ClipboardEvent, ClipboardHistoryEntry, ClipboardOrigin};
 use crypto::keys::KeyPair;
 use network::direct::{self, InitiatorResult, ListenerEvent};
 use network::discovery::{self, DiscoveryEvent, LanDevice};
@@ -780,6 +780,19 @@ pub fn run() {
                     // 统一从广播流汇总本机会话内的文本历史，前端只消费这份裁剪后的摘要列表。
                     while let Ok(event) = clip_history_rx.recv().await {
                         if let Some(entry) = build_clipboard_history_entry(&event) {
+                            // #region debug-point C:history-entry-built
+                            debug_report(
+                                "C",
+                                "lib.rs:782",
+                                "[DEBUG] built clipboard history entry",
+                                serde_json::json!({
+                                    "hash": hex::encode(event.content_hash()),
+                                    "direction": entry.direction,
+                                    "source_label": entry.source_label,
+                                    "text_len": entry.content.len(),
+                                }),
+                            );
+                            // #endregion
                             let updated_history = {
                                 let mut history = clipboard_history.lock().await;
                                 merge_clipboard_history(&mut history, entry);

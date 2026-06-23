@@ -1,3 +1,5 @@
+use std::io::Write;
+
 #[derive(Debug, Clone)]
 pub enum ClipboardSnapshot {
     Text(String),
@@ -62,6 +64,55 @@ pub struct ClipboardHistoryEntry {
     pub source_label: String,
     pub direction: String,
     pub timestamp_ms: u64,
+}
+
+pub fn debug_report(hypothesis_id: &str, location: &str, msg: &str, data: serde_json::Value) {
+    let env_path = std::path::Path::new(".dbg/clipboard-history-duplicate.env");
+    let mut debug_server_url = "http://127.0.0.1:7777/event".to_string();
+    let mut session_id = "clipboard-history-duplicate".to_string();
+
+    if let Ok(contents) = std::fs::read_to_string(env_path) {
+        for line in contents.lines() {
+            if let Some(value) = line.strip_prefix("DEBUG_SERVER_URL=") {
+                debug_server_url = value.trim().to_string();
+            } else if let Some(value) = line.strip_prefix("DEBUG_SESSION_ID=") {
+                session_id = value.trim().to_string();
+            }
+        }
+    }
+
+    let Some((authority, path)) = debug_server_url
+        .trim_start_matches("http://")
+        .split_once('/')
+    else {
+        return;
+    };
+
+    let payload = serde_json::json!({
+        "sessionId": session_id,
+        "runId": "pre-fix",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "msg": msg,
+        "data": data,
+        "ts": now_ms(),
+    });
+
+    let Ok(body) = serde_json::to_vec(&payload) else {
+        return;
+    };
+
+    if let Ok(mut stream) = std::net::TcpStream::connect(authority) {
+        let request = format!(
+            "POST /{} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            path,
+            authority,
+            body.len()
+        );
+        let _ = stream.write_all(request.as_bytes());
+        let _ = stream.write_all(&body);
+        let _ = stream.flush();
+    }
 }
 
 fn now_ms() -> u64 {
