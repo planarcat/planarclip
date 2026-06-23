@@ -4,7 +4,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::crypto::keys::KeyPair;
+use crate::crypto::keys::{peer_id_from_public_key, KeyPair};
 use crate::network::protocol::{HandshakeMessage, SignalMessage};
 
 const FRAME_HANDSHAKE: u8 = 0x00;
@@ -418,8 +418,7 @@ pub async fn run_listener(
 }
 
 pub(crate) fn short_fingerprint(pk_bytes: &[u8]) -> String {
-    let hex = hex::encode(pk_bytes);
-    hex[..6].to_string()
+    peer_id_from_public_key(pk_bytes)
 }
 
 pub(crate) fn generate_pairing_code() -> String {

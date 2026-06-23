@@ -7,6 +7,12 @@ pub struct KeyPair {
     pub public: PublicKey,
 }
 
+/// Builds the stable peer id shared by mDNS discovery, handshakes, and trusted-device storage.
+pub fn peer_id_from_public_key(public_key: &[u8]) -> String {
+    let hash = blake3::hash(public_key);
+    hex::encode(&hash.as_bytes()[..8])
+}
+
 impl KeyPair {
     pub fn generate() -> Self {
         let secret = StaticSecret::random_from_rng(OsRng);
@@ -19,7 +25,6 @@ impl KeyPair {
     }
 
     pub fn fingerprint(&self) -> String {
-        let hash = blake3::hash(self.public.as_bytes());
-        hex::encode(&hash.as_bytes()[..8])
+        peer_id_from_public_key(self.public.as_bytes())
     }
 }

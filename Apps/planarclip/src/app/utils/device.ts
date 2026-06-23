@@ -1,3 +1,4 @@
+import { DEFAULT_DEVICE_NAME } from "../constants/theme";
 import type { ConnectedPeer, Device, LanDevicePayload, OS, TrustedPeerPayload } from "../types";
 
 const TRUSTED_PEER_FALLBACK_PORT = 19876;
@@ -10,6 +11,15 @@ export function createDeviceId(prefix: string, value: string) {
   return `${prefix}:${value}`;
 }
 
+function isPlaceholderDeviceName(name?: string) {
+  const trimmed = name?.trim();
+  return !trimmed || trimmed === DEFAULT_DEVICE_NAME || trimmed.toLowerCase() === "my device";
+}
+
+function pickDeviceName(...names: Array<string | undefined>) {
+  return names.find((name) => !isPlaceholderDeviceName(name))?.trim() || names.find((name) => name?.trim())?.trim() || DEFAULT_DEVICE_NAME;
+}
+
 export function buildDevices(
   lanDevices: LanDevicePayload[],
   connectedPeer: ConnectedPeer | null,
@@ -20,14 +30,13 @@ export function buildDevices(
 
   lanDevices.forEach((device) => {
     const trustedPeer = trustedPeerMap.get(device.peer_id);
-    const isConnected =
-      connectedPeer != null &&
-      (connectedPeer.peerId === device.peer_id || connectedPeer.name === device.name);
+    const isConnected = connectedPeer != null && connectedPeer.peerId === device.peer_id;
+    const displayName = pickDeviceName(connectedPeer?.peerId === device.peer_id ? connectedPeer.name : undefined, trustedPeer?.name, device.name);
 
     deviceMap.set(device.peer_id, {
       id: createDeviceId(trustedPeer ? "trusted" : "lan", device.peer_id),
-      name: trustedPeer?.name || device.name,
-      os: inferOs(trustedPeer?.name || device.name),
+      name: displayName,
+      os: inferOs(displayName),
       host: device.ip,
       hostName: device.host_name || undefined,
       port: device.port,
@@ -65,7 +74,7 @@ export function buildDevices(
   if (connectedPeer) {
     const connectedKey = connectedPeer.peerId ?? connectedPeer.name;
     const hasConnectedDevice = [...deviceMap.values()].some(
-      (device) => device.name === connectedPeer.name || device.peerId === connectedPeer.peerId,
+      (device) => device.peerId != null && device.peerId === connectedPeer.peerId,
     );
 
     if (!hasConnectedDevice) {

@@ -15,7 +15,7 @@ mod tray;
 
 use clipboard::monitor::ClipboardMonitor;
 use clipboard::types::{ClipboardEvent, ClipboardHistoryEntry, ClipboardOrigin};
-use crypto::keys::KeyPair;
+use crypto::keys::{peer_id_from_public_key, KeyPair};
 use network::direct::{self, InitiatorResult, ListenerEvent};
 use network::discovery::{self, DiscoveryEvent, LanDevice};
 use network::webrtc::{ConnectionHandle, ConnectionManager};
@@ -100,9 +100,14 @@ fn normalize_stored_device_name(value: &str) -> String {
     }
 }
 
+fn is_default_device_name(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.is_empty() || trimmed.eq_ignore_ascii_case("My Device") || trimmed == DEFAULT_DEVICE_NAME
+}
+
 fn validate_device_name(value: &str) -> Result<String, String> {
     let trimmed = value.trim();
-    if trimmed.is_empty() {
+    if is_default_device_name(trimmed) {
         return Ok(default_device_name());
     }
 
@@ -140,6 +145,10 @@ fn trusted_peer_payload(peer: &TrustedPeerData) -> TrustedPeerPayload {
 }
 
 fn upsert_trusted_peer(config: &mut AppConfig, incoming: TrustedPeerData) -> bool {
+    let incoming = TrustedPeerData {
+        peer_id: peer_id_from_public_key(&incoming.public_key),
+        ..incoming
+    };
     let peers = config.trusted_peers.get_or_insert_with(Vec::new);
     if let Some(existing) = peers
         .iter_mut()
@@ -167,6 +176,27 @@ fn upsert_trusted_peer(config: &mut AppConfig, incoming: TrustedPeerData) -> boo
 
     peers.push(incoming);
     true
+}
+
+/// Migrates trusted-device records to the current peer id and display-name rules.
+fn normalize_trusted_peers(config: &mut AppConfig) -> bool {
+    let Some(peers) = config.trusted_peers.as_mut() else {
+        return false;
+    };
+
+    let mut changed = false;
+    for peer in peers {
+        let normalized_peer_id = peer_id_from_public_key(&peer.public_key);
+        if peer.peer_id != normalized_peer_id {
+            peer.peer_id = normalized_peer_id;
+            changed = true;
+        }
+        if is_default_device_name(&peer.name) {
+            peer.name = default_device_name();
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHistoryEntry> {
@@ -732,6 +762,7 @@ pub fn run() {
 
     let mut config = storage_json::load_config();
     config.device_name = normalize_stored_device_name(&config.device_name);
+    normalize_trusted_peers(&mut config);
 
     let key_pair = load_or_create_key_pair(&mut config);
     storage_json::save_config(&config);

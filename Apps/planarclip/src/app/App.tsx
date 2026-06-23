@@ -72,7 +72,10 @@ export default function App() {
   const [isRefreshingDevices, setIsRefreshingDevices] = useState(false);
 
   const devices = useMemo(() => buildDevices(lanDevices, connectedPeer, trustedPeers), [lanDevices, connectedPeer, trustedPeers]);
-  const discoveredDevices = useMemo(() => devices.filter((device) => device.source === "discovery"), [devices]);
+  const discoveredDevices = useMemo(
+    () => devices.filter((device) => device.source === "discovery" && device.status !== "connected"),
+    [devices],
+  );
   const identityLabel = deviceName;
 
   const {

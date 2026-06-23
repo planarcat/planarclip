@@ -221,7 +221,7 @@ export function DevicesPage({
   const busyConnecting = connectionStatus === "connecting";
   const hasActiveSession = connectionStatus === "online";
   const knownDevices = devices.filter((device) => device.isTrusted || device.status === "connected" || device.source === "connected");
-  const nearbyDevices = devices.filter((device) => !device.isTrusted && device.source === "discovery");
+  const nearbyDevices = devices.filter((device) => !device.isTrusted && device.source === "discovery" && device.status !== "connected");
 
   return (
     <div className="flex-1 overflow-y-auto px-4 pt-6 md:px-6 md:pt-8 xl:px-8">
