@@ -225,15 +225,36 @@ fn normalize_host_name(host_name: &str) -> String {
 
 fn local_ip_for_mdns() -> String {
     if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
-        if let Some((_, ip)) = interfaces.iter().find(|(_, ip)| is_preferred_mdns_ip(ip)) {
+        if let Some((_, ip)) = interfaces
+            .iter()
+            .find(|(name, ip)| is_preferred_mdns_ip(name, ip))
+        {
             return ip.to_string();
         }
 
-        if let Some((_, ip)) = interfaces.iter().find(|(_, ip)| is_fallback_ipv4_for_mdns(ip)) {
+        if let Some((_, ip)) = interfaces
+            .iter()
+            .find(|(name, ip)| is_fallback_ipv4_for_mdns(name, ip))
+        {
             return ip.to_string();
         }
 
-        if let Some((_, ip)) = interfaces.iter().find(|(_, ip)| is_fallback_ipv6_for_mdns(ip)) {
+        if let Some((_, ip)) = interfaces
+            .iter()
+            .find(|(name, ip)| is_fallback_ipv6_for_mdns(name, ip))
+        {
+            return ip.to_string();
+        }
+
+        if let Some((_, ip)) = interfaces.iter().find(|(_, ip)| is_private_ipv4(ip)) {
+            return ip.to_string();
+        }
+
+        if let Some((_, ip)) = interfaces.iter().find(|(_, ip)| is_routable_ipv4(ip)) {
+            return ip.to_string();
+        }
+
+        if let Some((_, ip)) = interfaces.iter().find(|(_, ip)| is_routable_ipv6(ip)) {
             return ip.to_string();
         }
     }
@@ -243,16 +264,54 @@ fn local_ip_for_mdns() -> String {
         .unwrap_or_else(|_| "127.0.0.1".to_string())
 }
 
-fn is_preferred_mdns_ip(ip: &IpAddr) -> bool {
+fn is_preferred_mdns_ip(interface_name: &str, ip: &IpAddr) -> bool {
+    !is_virtual_interface(interface_name) && is_private_ipv4(ip)
+}
+
+fn is_fallback_ipv4_for_mdns(interface_name: &str, ip: &IpAddr) -> bool {
+    !is_virtual_interface(interface_name) && is_routable_ipv4(ip)
+}
+
+fn is_fallback_ipv6_for_mdns(interface_name: &str, ip: &IpAddr) -> bool {
+    !is_virtual_interface(interface_name) && is_routable_ipv6(ip)
+}
+
+fn is_private_ipv4(ip: &IpAddr) -> bool {
     matches!(ip, IpAddr::V4(v4) if v4.is_private())
 }
 
-fn is_fallback_ipv4_for_mdns(ip: &IpAddr) -> bool {
+fn is_routable_ipv4(ip: &IpAddr) -> bool {
     matches!(ip, IpAddr::V4(v4) if !v4.is_loopback() && !v4.is_link_local())
 }
 
-fn is_fallback_ipv6_for_mdns(ip: &IpAddr) -> bool {
-    matches!(ip, IpAddr::V6(v6) if !v6.is_loopback() && !v6.is_unspecified())
+fn is_routable_ipv6(ip: &IpAddr) -> bool {
+    matches!(ip, IpAddr::V6(v6) if !v6.is_loopback() && !v6.is_unspecified() && !v6.is_unicast_link_local())
+}
+
+fn is_virtual_interface(interface_name: &str) -> bool {
+    let name = interface_name.to_ascii_lowercase();
+    [
+        "mihomo",
+        "vethernet",
+        "hyper-v",
+        "wsl",
+        "docker",
+        "podman",
+        "vmware",
+        "virtualbox",
+        "tailscale",
+        "zerotier",
+        "loopback",
+        "bluetooth",
+        "蓝牙",
+        "tun",
+        "tap",
+        "utun",
+        "bridge",
+        "hamachi",
+    ]
+    .iter()
+    .any(|keyword| name.contains(keyword))
 }
 
 pub(crate) fn debug_report_lan(hypothesis_id: &str, location: &str, msg: &str, data: serde_json::Value) {
