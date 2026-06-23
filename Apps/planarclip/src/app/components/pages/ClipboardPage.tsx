@@ -60,7 +60,6 @@ export function ClipboardPage({ clips, devices, viewMode, setViewMode, status, s
             <p className="text-sm font-medium text-primary">
               {status === "online" ? "等待新的文本同步" : "连接建立后，这里会显示最近的文本同步摘要"}
             </p>
-            <p className="mt-2 text-[13px] font-medium leading-6 text-muted-foreground">{statusMessage}</p>
           </div>
         </div>
       ) : viewMode === "list" ? (
