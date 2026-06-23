@@ -1,6 +1,14 @@
 # CLAUDE.md
 
-本文件为在本仓库中协作的编码助手提供上下文与工作约定。
+本文件为在本仓库中协作的编码助手提供项目上下文、工作约定与安全边界。所有助手在执行任务前应优先遵守本文件；若与用户本轮明确要求冲突，应先向用户确认。
+
+## 基本协作约定
+
+- 默认使用简体中文回复；代码注释可使用英文或中文，优先使用英文。
+- 先确认用户意图：用户只问原因、方案、怎么改时，只分析不直接改；用户明确说“直接改”“开始做”“按方案执行”时再落地修改。
+- 修改代码前先阅读相关文件，避免基于猜测改动；写代码时保持与周围代码一致的命名、注释密度和风格。
+- 删除、覆盖、重置、推送、发布、外部调用等难以回退或对外可见的操作，必须先确认。
+- 如果本文件与 `AGENTS.md` 同时存在，应保持核心项目约定同步；`CLAUDE.md` 是 Claude Code 当前主要自动加载的项目说明，`AGENTS.md` 用于兼容其他 Agent 工具。
 
 ## 构建与运行
 
@@ -73,10 +81,36 @@ Apps/planarclip/
 - Tauri 的 `beforeDevCommand` / `beforeBuildCommand` 仍使用 `pnpm exec vp dev` / `pnpm exec vp build`，确保子进程能解析本地 Vite+ CLI。
 - `cargo build`、`pnpm dev`、`pnpm build` 在用户本机均已验证通过。
 
+## UI 文案与交互约定
+
+### 用户侧 UI 文案
+
+- 用户可见的界面文本、按钮文案、状态文案、成功提示、警告提示、错误提示，默认全部使用中文。
+- 提示文案必须使用自然语言，优先描述用户当前遇到的问题、系统正在做的事，以及用户下一步可以怎么做。
+- 禁止直接向用户暴露程序术语、底层异常、协议名、库报错、系统调用错误、英文错误原文，除非用户明确进入开发排障场景。
+- 如果底层返回的是技术错误，面向用户展示时必须先转换成自然语言；必要时可附带简短建议，例如检查网络、确认对端已启动、稍后重试。
+- 成功提示应简洁明确，例如“已连接到设备”“配对成功”“已完成同步”；不要使用生硬的工程术语。
+- 警告与失败提示应说明原因和影响，例如“未能连接到对方设备，请确认对方应用已打开”；不要只显示“连接失败”或原始错误对象。
+- 同一类状态提示保持口径一致，避免同一流程里中英混用、术语混乱或一个地方说“配对”另一个地方说“握手”。
+- 如果确实需要保留技术细节用于调试，应将技术细节写入日志或开发者输出，而不是直接展示在用户界面中。
+
+### 交互与按钮规范
+
+- 设计按钮等交互元素时，优先使用纯图标样式，尤其是刷新、增加、删除这类简单操作。
+- 能用图标准确表达的按钮默认不再附带文字，但必须提供清晰的悬浮提示或无障碍标签。
+- 连接、断开、刷新等高频动作应优先放在列表项右侧或标题操作区，保持就近操作与视觉统一。
+
+## Figma MCP 约定
+
+- 当前会话可使用 `figma-mcp-go` MCP 读取和操作 Figma 文件；使用前优先通过 `get_metadata` / `get_selection` / `get_design_context` 确认当前文件、页面与选区。
+- 读取设计时优先使用 `get_design_context`，避免直接读取过大的完整文档树；需要精确节点信息时再用 `get_node` 或 `get_nodes_info`。
+- 修改 Figma 前应确认目标节点、页面和操作意图；删除节点、删除页面、覆盖样式、批量重命名、导出文件等操作属于有副作用操作，需谨慎执行。
+- Figma MCP 工具权限白名单应配置在 Claude Code 的 `settings.json` / `settings.local.json`，不要只写在本文档中；本文档只记录项目协作约定。
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **planarclip** (1190 symbols, 1820 relationships, 73 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **planarclip** (1250 symbols, 1955 relationships, 83 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

@@ -65,6 +65,13 @@ struct UiSettingsPayload {
     device_name: String,
 }
 
+#[derive(Clone, Debug, serde::Serialize)]
+struct TrustedPeerPayload {
+    name: String,
+    peer_id: String,
+    last_ip: Option<String>,
+}
+
 fn normalized_color_scheme(value: &str) -> Option<&'static str> {
     match value {
         "light" => Some("light"),
@@ -122,6 +129,44 @@ fn ui_settings_from_config(config: &AppConfig) -> UiSettingsPayload {
             .to_string(),
         device_name: normalize_stored_device_name(&config.device_name),
     }
+}
+
+fn trusted_peer_payload(peer: &TrustedPeerData) -> TrustedPeerPayload {
+    TrustedPeerPayload {
+        name: peer.name.clone(),
+        peer_id: peer.peer_id.clone(),
+        last_ip: peer.last_ip.clone(),
+    }
+}
+
+fn upsert_trusted_peer(config: &mut AppConfig, incoming: TrustedPeerData) -> bool {
+    let peers = config.trusted_peers.get_or_insert_with(Vec::new);
+    if let Some(existing) = peers
+        .iter_mut()
+        .find(|peer| peer.public_key == incoming.public_key || peer.peer_id == incoming.peer_id)
+    {
+        let mut changed = false;
+        if existing.name != incoming.name {
+            existing.name = incoming.name;
+            changed = true;
+        }
+        if existing.public_key != incoming.public_key {
+            existing.public_key = incoming.public_key;
+            changed = true;
+        }
+        if existing.peer_id != incoming.peer_id {
+            existing.peer_id = incoming.peer_id;
+            changed = true;
+        }
+        if incoming.last_ip.is_some() && existing.last_ip != incoming.last_ip {
+            existing.last_ip = incoming.last_ip;
+            changed = true;
+        }
+        return changed;
+    }
+
+    peers.push(incoming);
+    true
 }
 
 fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHistoryEntry> {
@@ -324,6 +369,42 @@ async fn get_lan_devices(state: tauri::State<'_, AppState>) -> Result<Vec<LanDev
 }
 
 #[tauri::command]
+async fn get_trusted_peers(state: tauri::State<'_, AppState>) -> Result<Vec<TrustedPeerPayload>, String> {
+    let config = state.config.lock().await;
+    let mut peers = config
+        .trusted_peers
+        .clone()
+        .unwrap_or_default()
+        .iter()
+        .map(trusted_peer_payload)
+        .collect::<Vec<_>>();
+    peers.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(peers)
+}
+
+#[tauri::command]
+async fn remove_trusted_peer(state: tauri::State<'_, AppState>, peer_id: String) -> Result<bool, String> {
+    let peer_id = peer_id.trim();
+    if peer_id.is_empty() {
+        return Err("缺少要解除信任的设备标识。".to_string());
+    }
+
+    let mut config = state.config.lock().await;
+    let Some(peers) = config.trusted_peers.as_mut() else {
+        return Ok(false);
+    };
+
+    let before_len = peers.len();
+    peers.retain(|peer| peer.peer_id != peer_id);
+    let removed = peers.len() != before_len;
+    if removed {
+        storage_json::save_config(&config);
+    }
+
+    Ok(removed)
+}
+
+#[tauri::command]
 async fn connect_lan(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
@@ -345,15 +426,15 @@ async fn connect_lan(
 
             {
                 let mut config = state.config.lock().await;
-                let mut peers = config.trusted_peers.clone().unwrap_or_default();
-                if !peers.iter().any(|p| p.public_key == peer_pk) {
-                    peers.push(TrustedPeerData {
+                if upsert_trusted_peer(
+                    &mut config,
+                    TrustedPeerData {
                         name: peer_name.clone(),
                         public_key: peer_pk,
                         peer_id: peer_id.clone(),
                         last_ip: Some(ip),
-                    });
-                    config.trusted_peers = Some(peers);
+                    },
+                ) {
                     storage_json::save_config(&config);
                 }
             }
@@ -420,15 +501,15 @@ async fn submit_pairing_code(
 
             {
                 let mut config = state.config.lock().await;
-                let mut peers = config.trusted_peers.clone().unwrap_or_default();
-                if !peers.iter().any(|p| p.public_key == peer_pk) {
-                    peers.push(TrustedPeerData {
+                if upsert_trusted_peer(
+                    &mut config,
+                    TrustedPeerData {
                         name: peer_name.clone(),
                         public_key: peer_pk,
                         peer_id: peer_id.clone(),
                         last_ip: None,
-                    });
-                    config.trusted_peers = Some(peers);
+                    },
+                ) {
                     storage_json::save_config(&config);
                 }
             }
@@ -518,7 +599,9 @@ async fn handle_incoming_connection(
     pending_reject_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 ) {
     let initiator_name = req.initiator_name.clone();
+    let initiator_peer_id = req.initiator_peer_id.clone();
     let initiator_pk = req.initiator_public_key.clone();
+    let initiator_ip = req.stream.peer_addr().ok().map(|addr| addr.ip().to_string());
 
     // 这里每次都从配置里读取设备名称与可信设备，避免改名或首轮配对后必须重启才能生效。
     let (device_name, is_trusted) = {
@@ -580,7 +663,7 @@ async fn handle_incoming_connection(
         "connection-request",
         serde_json::json!({
             "device_name": initiator_name,
-            "peer_id": req.initiator_peer_id,
+            "peer_id": initiator_peer_id,
             "pairing_code": pairing_code,
         }),
     );
@@ -602,15 +685,15 @@ async fn handle_incoming_connection(
         Ok(conn) => {
             {
                 let mut cfg = config.lock().await;
-                let mut peers = cfg.trusted_peers.clone().unwrap_or_default();
-                if !peers.iter().any(|p| p.public_key == initiator_pk) {
-                    peers.push(TrustedPeerData {
+                if upsert_trusted_peer(
+                    &mut cfg,
+                    TrustedPeerData {
                         name: initiator_name.clone(),
                         public_key: initiator_pk.clone(),
-                        peer_id: direct::short_fingerprint(&initiator_pk),
-                        last_ip: None,
-                    });
-                    cfg.trusted_peers = Some(peers);
+                        peer_id: initiator_peer_id.clone(),
+                        last_ip: initiator_ip.clone(),
+                    },
+                ) {
                     storage_json::save_config(&cfg);
                 }
             }
@@ -857,6 +940,8 @@ pub fn run() {
             save_ui_settings,
             pair,
             get_lan_devices,
+            get_trusted_peers,
+            remove_trusted_peer,
             connect_lan,
             submit_pairing_code,
             reject_connection,

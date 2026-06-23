@@ -25,7 +25,9 @@ export type Device = {
   address: string;
   status: DeviceStatus;
   lastSeen?: Date;
-  source: "discovery" | "connected";
+  source: "discovery" | "connected" | "trusted";
+  isTrusted?: boolean;
+  lastIp?: string | null;
 };
 
 export type ClipEntry = {
@@ -67,6 +69,12 @@ export type LanDevicePayload = {
   ip: string;
   host_name: string;
   port: number;
+};
+
+export type TrustedPeerPayload = {
+  name: string;
+  peer_id: string;
+  last_ip?: string | null;
 };
 
 export type ConnectionRequestPayload = {

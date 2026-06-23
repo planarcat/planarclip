@@ -1,4 +1,6 @@
-import type { ConnectedPeer, Device, LanDevicePayload, OS } from "../types";
+import type { ConnectedPeer, Device, LanDevicePayload, OS, TrustedPeerPayload } from "../types";
+
+const TRUSTED_PEER_FALLBACK_PORT = 19876;
 
 export function inferOs(name: string): OS {
   return /mac|iphone|ipad|ios/i.test(name) ? "macos" : "windows";
@@ -8,18 +10,24 @@ export function createDeviceId(prefix: string, value: string) {
   return `${prefix}:${value}`;
 }
 
-export function buildDevices(lanDevices: LanDevicePayload[], connectedPeer: ConnectedPeer | null) {
+export function buildDevices(
+  lanDevices: LanDevicePayload[],
+  connectedPeer: ConnectedPeer | null,
+  trustedPeers: TrustedPeerPayload[],
+) {
   const deviceMap = new Map<string, Device>();
+  const trustedPeerMap = new Map(trustedPeers.map((peer) => [peer.peer_id, peer]));
 
   lanDevices.forEach((device) => {
+    const trustedPeer = trustedPeerMap.get(device.peer_id);
     const isConnected =
       connectedPeer != null &&
       (connectedPeer.peerId === device.peer_id || connectedPeer.name === device.name);
 
     deviceMap.set(device.peer_id, {
-      id: createDeviceId("lan", device.peer_id),
-      name: device.name,
-      os: inferOs(device.name),
+      id: createDeviceId(trustedPeer ? "trusted" : "lan", device.peer_id),
+      name: trustedPeer?.name || device.name,
+      os: inferOs(trustedPeer?.name || device.name),
       host: device.ip,
       hostName: device.host_name || undefined,
       port: device.port,
@@ -27,18 +35,42 @@ export function buildDevices(lanDevices: LanDevicePayload[], connectedPeer: Conn
       address: `${device.ip}:${device.port}`,
       status: isConnected ? "connected" : "idle",
       lastSeen: new Date(),
-      source: "discovery",
+      source: trustedPeer ? "trusted" : "discovery",
+      isTrusted: Boolean(trustedPeer),
+      lastIp: trustedPeer?.last_ip ?? null,
+    });
+  });
+
+  trustedPeers.forEach((peer) => {
+    if (deviceMap.has(peer.peer_id)) {
+      return;
+    }
+
+    const lastIp = peer.last_ip?.trim() || null;
+    deviceMap.set(peer.peer_id, {
+      id: createDeviceId("trusted", peer.peer_id),
+      name: peer.name,
+      os: inferOs(peer.name),
+      host: lastIp ?? undefined,
+      port: lastIp ? TRUSTED_PEER_FALLBACK_PORT : undefined,
+      peerId: peer.peer_id,
+      address: lastIp ? `${lastIp}:${TRUSTED_PEER_FALLBACK_PORT}` : "等待对方上线",
+      status: "offline",
+      source: "trusted",
+      isTrusted: true,
+      lastIp,
     });
   });
 
   if (connectedPeer) {
+    const connectedKey = connectedPeer.peerId ?? connectedPeer.name;
     const hasConnectedDevice = [...deviceMap.values()].some(
       (device) => device.name === connectedPeer.name || device.peerId === connectedPeer.peerId,
     );
 
     if (!hasConnectedDevice) {
-      deviceMap.set(connectedPeer.peerId ?? connectedPeer.name, {
-        id: createDeviceId("connected", connectedPeer.peerId ?? connectedPeer.name),
+      deviceMap.set(connectedKey, {
+        id: createDeviceId("connected", connectedKey),
         name: connectedPeer.name,
         os: connectedPeer.os,
         peerId: connectedPeer.peerId,
@@ -46,6 +78,7 @@ export function buildDevices(lanDevices: LanDevicePayload[], connectedPeer: Conn
         status: "connected",
         lastSeen: new Date(),
         source: "connected",
+        isTrusted: connectedPeer.peerId ? trustedPeerMap.has(connectedPeer.peerId) : false,
       });
     }
   }
@@ -53,6 +86,9 @@ export function buildDevices(lanDevices: LanDevicePayload[], connectedPeer: Conn
   return [...deviceMap.values()].sort((left, right) => {
     if (left.status !== right.status) {
       return left.status === "connected" ? -1 : 1;
+    }
+    if (left.isTrusted !== right.isTrusted) {
+      return left.isTrusted ? -1 : 1;
     }
     return left.name.localeCompare(right.name, "zh-CN");
   });
