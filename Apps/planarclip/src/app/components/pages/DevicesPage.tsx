@@ -59,7 +59,13 @@ export function DevicesPage({
           </button>
         </div>
         {devices.map((device) => {
-          const connectDisabled = busyConnecting || hasActiveSession;
+          const connectDisabled = busyConnecting || (hasActiveSession && device.status !== "connected");
+          const hostNameLabel = device.hostName?.trim();
+          const secondaryLabel = hostNameLabel && hostNameLabel.toLocaleLowerCase() !== device.name.trim().toLocaleLowerCase()
+            ? `主机名 ${hostNameLabel}`
+            : device.os === "macos"
+              ? "macOS"
+              : "Windows";
           const actionTitle =
             device.status === "connected"
               ? `断开与 ${device.name} 的连接`
@@ -79,9 +85,7 @@ export function DevicesPage({
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-primary">{device.name}</p>
-                <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">
-                  {device.hostName ? `主机名 ${device.hostName}` : device.os === "macos" ? "macOS 系统" : "Windows 系统"}
-                </p>
+                <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">{secondaryLabel}</p>
                 <p className="font-mono text-[13px] font-medium text-secondary-foreground">{device.address}</p>
               </div>
               <div className="flex shrink-0 items-center gap-2">

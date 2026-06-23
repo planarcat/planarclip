@@ -20,40 +20,44 @@ export function DevicesPanel({ devices, status }: DevicesPanelProps) {
       </div>
       <div className="space-y-2 p-3">
         {devices.length > 0 ? (
-          devices.map((device) => (
-            <div key={device.id} className="rounded-lg border border-border bg-secondary/30 p-3 transition-colors hover:border-primary/30">
-              <div className="mb-2 flex items-start justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="rounded bg-primary/10 p-1.5 text-primary">
-                    <OsIcon os={device.os} size={14} />
+          devices.map((device) => {
+            const hostNameLabel = device.hostName?.trim();
+            const showHostName = Boolean(hostNameLabel && hostNameLabel.toLocaleLowerCase() !== device.name.trim().toLocaleLowerCase());
+            const osLabel = device.os === "macos" ? "macOS" : "Windows";
+
+            return (
+              <div key={device.id} className="rounded-lg border border-border bg-secondary/30 p-3 transition-colors hover:border-primary/30">
+                <div className="mb-2 flex items-start justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="rounded bg-primary/10 p-1.5 text-primary">
+                      <OsIcon os={device.os} size={14} />
+                    </div>
+                    <div>
+                      <p className="text-[13px] font-medium leading-none text-primary">{device.name}</p>
+                      {showHostName && <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">主机名 {hostNameLabel}</p>}
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-[13px] font-medium leading-none text-primary">{device.name}</p>
-                    <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">
-                      {device.hostName ? `主机名 ${device.hostName}` : device.os === "macos" ? "macOS 系统" : "Windows 系统"}
-                    </p>
+                  <StatusDot status={device.status} size="lg" />
+                </div>
+                <div className="space-y-1.5">
+                  {[
+                    { label: "连接地址", value: device.address, className: "text-secondary-foreground", mono: true },
+                    { label: "系统", value: osLabel, className: "text-secondary-foreground", mono: false },
+                    { label: "最近活跃", value: relativeTime(device.lastSeen), className: "text-secondary-foreground", mono: false },
+                  ].map((row) => (
+                    <div key={row.label} className="flex items-center justify-between gap-3 leading-5">
+                      <span className="text-[13px] font-medium text-muted-foreground">{row.label}</span>
+                      <span className={`truncate text-[13px] font-medium ${row.mono ? "font-mono" : ""} ${row.className}`}>{row.value}</span>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between gap-3 leading-5">
+                    <span className="text-[13px] font-medium text-muted-foreground">状态</span>
+                    <StatusDot status={device.status} size="md" />
                   </div>
                 </div>
-                <StatusDot status={device.status} size="lg" />
               </div>
-              <div className="space-y-1.5">
-                {[
-                  { label: "连接地址", value: device.address, className: "text-secondary-foreground", mono: true },
-                  { label: "主机名", value: device.hostName ?? "暂未提供", className: "text-secondary-foreground", mono: false },
-                  { label: "最近活跃", value: relativeTime(device.lastSeen), className: "text-secondary-foreground", mono: false },
-                ].map((row) => (
-                  <div key={row.label} className="flex items-center justify-between gap-3 leading-5">
-                    <span className="text-[13px] font-medium text-muted-foreground">{row.label}</span>
-                    <span className={`truncate text-[13px] font-medium ${row.mono ? "font-mono" : ""} ${row.className}`}>{row.value}</span>
-                  </div>
-                ))}
-                <div className="flex items-center justify-between gap-3 leading-5">
-                  <span className="text-[13px] font-medium text-muted-foreground">状态</span>
-                  <StatusDot status={device.status} size="md" />
-                </div>
-              </div>
-            </div>
-          ))
+            );
+          })
         ) : (
           <div className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-[13px] font-medium text-muted-foreground">
             还没有发现附近设备
