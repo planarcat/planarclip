@@ -12,14 +12,16 @@
 ## Hypotheses & Verification
 | ID | Hypothesis | Likelihood | Effort | Evidence |
 |----|------------|------------|--------|----------|
-| A | mDNS 启动成功，但实际上没有收到任何浏览事件 | High | Low | Pending |
-| B | mDNS 收到了服务解析事件，但解析出的地址或 peer_id 被过滤掉了 | High | Low | Pending |
-| C | 应用选错了本机网卡 IP，广播到了错误网段 | Medium | Medium | Pending |
-| D | 前端没拿到后端事件，设备列表更新链路断了 | Medium | Low | Pending |
-| E | 网络环境本身屏蔽了 mDNS 组播，导致双方都无发现事件 | Medium | Medium | Pending |
+| A | mDNS 启动成功，但实际上没有收到任何浏览事件 | High | Low | Partially Rejected |
+| B | mDNS 收到了服务解析事件，但解析出的地址或 peer_id 被过滤掉了 | High | Low | Rejected |
+| C | 应用选错了本机网卡 IP，广播到了错误网段 | Medium | Medium | Confirmed |
+| D | 前端没拿到后端事件，设备列表更新链路断了 | Medium | Low | Rejected |
+| E | 网络环境本身屏蔽了 mDNS 组播，导致双方都无发现事件 | Medium | Medium | Inconclusive |
 
 ## Log Evidence
-Pending
+- line 1: 启动时 `selected_ip` 被选成 `fdfe:dcba:9876::1`，而接口列表里同时存在 `WLAN=192.168.0.28`，说明当前 IP 选择策略优先命中了非局域网私有 IPv4 地址。
+- line 2-9: 浏览阶段能够解析到服务，但全部是本机自身服务，且被 `is_self=true` 正常过滤；没有看到来自对端的服务解析事件。
+- line 1 与接口快照共同表明，发现注册很可能绑定在虚拟 / 非目标网段地址上，导致对端无法通过同一局域网正常发现本机。
 
 ## Verification Conclusion
-Pending
+已确认根因是 mDNS 选错本机地址。下一步改为优先选择私有 IPv4 地址，再做一轮 post-fix 复现验证。

@@ -215,7 +215,15 @@ fn normalize_host_name(host_name: &str) -> String {
 
 fn local_ip_for_mdns() -> String {
     if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
-        if let Some((_, ip)) = interfaces.into_iter().find(|(_, ip)| is_preferred_mdns_ip(ip)) {
+        if let Some((_, ip)) = interfaces.iter().find(|(_, ip)| is_preferred_mdns_ip(ip)) {
+            return ip.to_string();
+        }
+
+        if let Some((_, ip)) = interfaces.iter().find(|(_, ip)| is_fallback_ipv4_for_mdns(ip)) {
+            return ip.to_string();
+        }
+
+        if let Some((_, ip)) = interfaces.iter().find(|(_, ip)| is_fallback_ipv6_for_mdns(ip)) {
             return ip.to_string();
         }
     }
@@ -226,10 +234,15 @@ fn local_ip_for_mdns() -> String {
 }
 
 fn is_preferred_mdns_ip(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => !v4.is_loopback() && !v4.is_link_local(),
-        IpAddr::V6(v6) => !v6.is_loopback() && !v6.is_unspecified(),
-    }
+    matches!(ip, IpAddr::V4(v4) if v4.is_private())
+}
+
+fn is_fallback_ipv4_for_mdns(ip: &IpAddr) -> bool {
+    matches!(ip, IpAddr::V4(v4) if !v4.is_loopback() && !v4.is_link_local())
+}
+
+fn is_fallback_ipv6_for_mdns(ip: &IpAddr) -> bool {
+    matches!(ip, IpAddr::V6(v6) if !v6.is_loopback() && !v6.is_unspecified())
 }
 
 pub(crate) fn debug_report_lan(hypothesis_id: &str, location: &str, msg: &str, data: serde_json::Value) {
@@ -256,7 +269,7 @@ pub(crate) fn debug_report_lan(hypothesis_id: &str, location: &str, msg: &str, d
 
     let payload = serde_json::json!({
         "sessionId": session_id,
-        "runId": "pre-fix",
+        "runId": "post-fix",
         "hypothesisId": hypothesis_id,
         "location": location,
         "msg": msg,
