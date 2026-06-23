@@ -78,6 +78,16 @@ pub fn start_discovery(
 
     std::thread::spawn(move || {
         while let Ok(event) = browse_rx.recv() {
+            // #region debug-point B:browse-event
+            debug_report_lan(
+                "B",
+                "network/discovery.rs:browse-event",
+                "[DEBUG] discovery received raw browse event",
+                serde_json::json!({
+                    "event": format!("{:?}", &event),
+                }),
+            );
+            // #endregion
             match event {
                 ServiceEvent::ServiceResolved(info) => {
                     let name = info
