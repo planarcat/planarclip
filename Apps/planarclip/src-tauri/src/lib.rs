@@ -718,9 +718,12 @@ pub fn run() {
             let (discovery_tx, mut discovery_rx) = mpsc::unbounded_channel::<DiscoveryEvent>();
 
             match discovery::start_discovery(&device_name, &peer_id, tcp_port, discovery_tx) {
-                Ok(_daemon) => {
-                    std::thread::spawn(move || loop {
-                        std::thread::sleep(std::time::Duration::from_secs(3600));
+                Ok(daemon) => {
+                    std::thread::spawn(move || {
+                        let _daemon = daemon;
+                        loop {
+                            std::thread::sleep(std::time::Duration::from_secs(3600));
+                        }
                     });
                 }
                 Err(e) => {
