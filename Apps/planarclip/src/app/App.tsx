@@ -47,7 +47,7 @@ export default function App() {
   const [colorScheme, setColorScheme] = useState<ColorScheme>(() => normalizeColorScheme(previewUiSettings.color_scheme));
   const [deviceName, setDeviceName] = useState(previewUiSettings.device_name);
   const [isDark, setIsDark] = useState(true);
-  const [settingsMessage, setSettingsMessage] = useState(
+  const [, setSettingsMessage] = useState(
     TAURI_AVAILABLE ? "正在同步桌面端设置…" : "当前是浏览器预览模式，外观设置会暂存到浏览器本地。",
   );
   const [isSavingSettings, setIsSavingSettings] = useState(false);
@@ -69,7 +69,7 @@ export default function App() {
 
   const devices = useMemo(() => buildDevices(lanDevices, connectedPeer), [lanDevices, connectedPeer]);
   const discoveredDevices = useMemo(() => devices.filter((device) => device.source === "discovery"), [devices]);
-  const identityLabel = pairingCode === "------" ? `${deviceName} · 连接信息准备中` : `${deviceName} · 配对码 ${pairingCode}`;
+  const identityLabel = deviceName;
 
   const {
     handleColorSchemeChange,
@@ -137,11 +137,11 @@ export default function App() {
       setLanDevices(refreshedDevices);
       setLastMessage(
         refreshedDevices.length > 0
-          ? `已刷新设备列表，当前发现 ${refreshedDevices.length} 台设备。`
-          : "已刷新设备列表，暂时还没有发现附近设备。",
+          ? `已刷新，当前发现 ${refreshedDevices.length} 台设备。`
+          : "已刷新，暂无发现更多设备。",
       );
     } catch (error) {
-      setLastMessage(normalizeUserMessage(error, "刷新设备列表失败，请稍后重试。"));
+      setLastMessage(normalizeUserMessage(error, "刷新失败，请稍后重试。"));
     } finally {
       setIsRefreshingDevices(false);
     }
@@ -179,6 +179,7 @@ export default function App() {
         setColorScheme={handleColorSchemeChange}
         theme={theme}
         isDark={isDark}
+        isSavingDeviceName={isSavingSettings}
         onThemeChange={handleThemeChange}
         onNavigate={setActiveNav}
         onRefreshDevices={() => {
@@ -187,6 +188,8 @@ export default function App() {
         onConnectDevice={(device) => {
           void handleConnectLan(device);
         }}
+        onDeviceNameChange={handleDeviceNameChange}
+        onDeviceNameSave={handleDeviceNameSave}
         onDisconnect={() => {
           void handleDisconnect();
         }}
@@ -231,7 +234,6 @@ export default function App() {
             deviceName={deviceName}
             isDark={isDark}
             theme={theme}
-            settingsMessage={settingsMessage}
             isSaving={isSavingSettings}
             onSchemeChange={handleColorSchemeChange}
             onThemeChange={handleThemeChange}

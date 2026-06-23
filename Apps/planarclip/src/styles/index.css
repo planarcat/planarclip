@@ -179,4 +179,17 @@
     font-size: var(--text-base);
     font-weight: var(--font-weight-medium);
   }
+
+  button,
+  [role="button"],
+  input[type="button"],
+  input[type="submit"] {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  input[type="button"]:disabled,
+  input[type="submit"]:disabled {
+    cursor: not-allowed;
+  }
 }

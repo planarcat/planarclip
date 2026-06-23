@@ -7,9 +7,25 @@ import {
 } from "../constants/theme";
 import type { ColorScheme, ThemeColor, UiSettingsPayload } from "../types";
 
+function previewDefaultDeviceName() {
+  if (typeof window === "undefined") {
+    return DEFAULT_DEVICE_NAME;
+  }
+
+  const hostName = window.location.hostname
+    .trim()
+    .replace(/\.local$/i, "")
+    .slice(0, 24);
+
+  return hostName || DEFAULT_DEVICE_NAME;
+}
+
 export function normalizeDeviceName(value?: string) {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : DEFAULT_DEVICE_NAME;
+  if (!trimmed || trimmed === DEFAULT_DEVICE_NAME || trimmed.toLowerCase() === "my device") {
+    return previewDefaultDeviceName();
+  }
+  return trimmed;
 }
 
 export function loadPreviewUiSettings(): UiSettingsPayload {
@@ -20,7 +36,10 @@ export function loadPreviewUiSettings(): UiSettingsPayload {
   try {
     const raw = window.localStorage.getItem(PREVIEW_UI_SETTINGS_KEY);
     if (!raw) {
-      return DEFAULT_UI_SETTINGS;
+      return {
+        ...DEFAULT_UI_SETTINGS,
+        device_name: previewDefaultDeviceName(),
+      };
     }
 
     const parsed = JSON.parse(raw) as Partial<UiSettingsPayload>;
@@ -30,7 +49,10 @@ export function loadPreviewUiSettings(): UiSettingsPayload {
       device_name: normalizeDeviceName(parsed.device_name),
     };
   } catch {
-    return DEFAULT_UI_SETTINGS;
+    return {
+      ...DEFAULT_UI_SETTINGS,
+      device_name: previewDefaultDeviceName(),
+    };
   }
 }
 
