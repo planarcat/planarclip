@@ -1,4 +1,4 @@
-import { Clipboard, LayoutGrid, LayoutList, Shield, Zap } from "lucide-react";
+import { Clipboard, LayoutGrid, LayoutList, Shield } from "lucide-react";
 import { useRelativeTicker } from "../../hooks/useRelativeTicker";
 import type { AppConnectionStatus, ClipEntry, Device, ViewMode } from "../../types";
 import { relativeTime } from "../../utils/time";
@@ -14,7 +14,7 @@ type ClipboardPageProps = {
   statusMessage: string;
 };
 
-export function ClipboardPage({ clips, devices, viewMode, setViewMode, status, statusMessage }: ClipboardPageProps) {
+export function ClipboardPage({ clips, devices, viewMode, setViewMode, status }: ClipboardPageProps) {
   useRelativeTicker();
   const connectedCount = devices.filter((device) => device.status === "connected").length;
 

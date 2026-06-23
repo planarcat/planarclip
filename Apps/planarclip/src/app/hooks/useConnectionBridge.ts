@@ -11,6 +11,7 @@ import type {
   ConnectionRequestPayload,
   LanDevicePayload,
   PairingStage,
+  TrustedPeerPayload,
   UiSettingsPayload,
 } from "../types";
 import { mapClipboardHistory } from "../utils/clipboard";
@@ -25,6 +26,7 @@ type UseConnectionBridgeOptions = {
   setLastMessage: (message: string) => void;
   setPairingCode: (pairingCode: string) => void;
   setLanDevices: (devices: LanDevicePayload[]) => void;
+  setTrustedPeers: (peers: TrustedPeerPayload[]) => void;
   setClips: (clips: ReturnType<typeof mapClipboardHistory>) => void;
   setConnectedPeer: (peer: ConnectedPeer | null) => void;
   applyDesktopUiSettings: (settings: UiSettingsPayload) => void;
@@ -51,6 +53,7 @@ export function useConnectionBridge({
   setLastMessage,
   setPairingCode,
   setLanDevices,
+  setTrustedPeers,
   setClips,
   setConnectedPeer,
   applyDesktopUiSettings,
@@ -111,10 +114,18 @@ export function useConnectionBridge({
 
     const setup = async () => {
       try {
-        const [initialStatus, initialPairingCode, initialLanDevices, initialUiSettings, initialClipboardHistory] = await Promise.all([
+        const [
+          initialStatus,
+          initialPairingCode,
+          initialLanDevices,
+          initialTrustedPeers,
+          initialUiSettings,
+          initialClipboardHistory,
+        ] = await Promise.all([
           callCommand<string>("get_status"),
           callCommand<string>("get_pairing_code"),
           callCommand<LanDevicePayload[]>("get_lan_devices"),
+          callCommand<TrustedPeerPayload[]>("get_trusted_peers"),
           callCommand<UiSettingsPayload>("get_ui_settings"),
           callCommand<ClipboardHistoryPayload[]>("get_clipboard_history"),
         ]);
@@ -125,6 +136,7 @@ export function useConnectionBridge({
 
         setPairingCode(initialPairingCode);
         setLanDevices(initialLanDevices);
+        setTrustedPeers(initialTrustedPeers);
         setClips(mapClipboardHistory(initialClipboardHistory));
         applyDesktopUiSettings(initialUiSettings);
         setStatus(initialStatus === "connected" ? "online" : "offline");
@@ -195,6 +207,7 @@ export function useConnectionBridge({
     setLastMessage,
     setPairingCode,
     setStatus,
+    setTrustedPeers,
     tauriAvailable,
     toUserMessage,
   ]);

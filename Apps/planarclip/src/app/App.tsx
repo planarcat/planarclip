@@ -16,11 +16,14 @@ import type {
   ColorScheme,
   CommandExecutor,
   ConnectedPeer,
+  ConnectionEstablishedPayload,
   ConnectionRequestPayload,
+  Device,
   LanDevicePayload,
   NavId,
   PairingStage,
   ThemeColor,
+  TrustedPeerPayload,
   ViewMode,
 } from "./types";
 import { buildDevices } from "./utils/device";
@@ -57,6 +60,7 @@ export default function App() {
   );
   const [pairingCode, setPairingCode] = useState("------");
   const [lanDevices, setLanDevices] = useState<LanDevicePayload[]>([]);
+  const [trustedPeers, setTrustedPeers] = useState<TrustedPeerPayload[]>([]);
   const [connectedPeer, setConnectedPeer] = useState<ConnectedPeer | null>(null);
   const [showPairing, setShowPairing] = useState(false);
   const [pairingInput, setPairingInput] = useState("");
@@ -67,7 +71,7 @@ export default function App() {
   const [incomingRequest, setIncomingRequest] = useState<ConnectionRequestPayload | null>(null);
   const [isRefreshingDevices, setIsRefreshingDevices] = useState(false);
 
-  const devices = useMemo(() => buildDevices(lanDevices, connectedPeer), [lanDevices, connectedPeer]);
+  const devices = useMemo(() => buildDevices(lanDevices, connectedPeer, trustedPeers), [lanDevices, connectedPeer, trustedPeers]);
   const discoveredDevices = useMemo(() => devices.filter((device) => device.source === "discovery"), [devices]);
   const identityLabel = deviceName;
 
@@ -147,6 +151,45 @@ export default function App() {
     }
   }, [setLanDevices, setLastMessage]);
 
+  const refreshTrustedPeers = useCallback(async () => {
+    if (!TAURI_AVAILABLE) {
+      return;
+    }
+
+    try {
+      const peers = await callCommand<TrustedPeerPayload[]>("get_trusted_peers");
+      setTrustedPeers(peers);
+    } catch (error) {
+      setLastMessage(normalizeUserMessage(error, "读取已配对设备失败，请稍后重试。"));
+    }
+  }, [setLastMessage]);
+
+  const handleRemoveTrustedPeer = useCallback(
+    async (device: Device) => {
+      if (!device.peerId) {
+        setLastMessage("这个设备缺少信任标识，暂时无法解除信任。");
+        return;
+      }
+
+      try {
+        const removed = await callCommand<boolean>("remove_trusted_peer", { peerId: device.peerId });
+        await refreshTrustedPeers();
+        setLastMessage(removed ? `已解除对 ${device.name} 的信任。` : `没有找到 ${device.name} 的信任记录。`);
+      } catch (error) {
+        setLastMessage(normalizeUserMessage(error, `解除 ${device.name} 的信任失败，请稍后重试。`, device.name));
+      }
+    },
+    [refreshTrustedPeers, setLastMessage],
+  );
+
+  const handleTrustedConnectionEstablished = useCallback(
+    (payload: ConnectionEstablishedPayload) => {
+      handleConnectionEstablished(payload);
+      void refreshTrustedPeers();
+    },
+    [handleConnectionEstablished, refreshTrustedPeers],
+  );
+
   useConnectionBridge({
     tauriAvailable: TAURI_AVAILABLE,
     callCommand,
@@ -157,13 +200,14 @@ export default function App() {
     setLastMessage,
     setPairingCode,
     setLanDevices,
+    setTrustedPeers,
     setClips,
     setConnectedPeer,
     applyDesktopUiSettings,
     applyUiSettingsFallback,
     toUserMessage: normalizeUserMessage,
     onConnectionRequest: handleConnectionRequest,
-    onConnectionEstablished: handleConnectionEstablished,
+    onConnectionEstablished: handleTrustedConnectionEstablished,
     onConnectionFailed: handleConnectionFailed,
     onConnectionEnded: handleConnectionEnded,
   });
@@ -224,6 +268,9 @@ export default function App() {
             }}
             onDisconnect={() => {
               void handleDisconnect();
+            }}
+            onRemoveTrustedPeer={(device) => {
+              void handleRemoveTrustedPeer(device);
             }}
             isRefreshingDevices={isRefreshingDevices}
           />
