@@ -122,7 +122,7 @@ export function SettingsPage({
                   onClick={() => onSchemeChange(item.id)}
                   className={`flex flex-1 flex-col items-center gap-1.5 rounded-lg border py-3 transition-colors ${
                     colorScheme === item.id
-                      ? "border-primary bg-primary/10 text-primary"
+                      ? "border-primary bg-primary text-white"
                       : "border-border text-secondary-foreground hover:border-primary/40 hover:text-foreground"
                   }`}
                   type="button"
