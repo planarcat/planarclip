@@ -17,7 +17,7 @@ use clipboard::monitor::ClipboardMonitor;
 use clipboard::types::{debug_report, ClipboardEvent, ClipboardHistoryEntry, ClipboardOrigin};
 use crypto::keys::KeyPair;
 use network::direct::{self, InitiatorResult, ListenerEvent};
-use network::discovery::{self, debug_report_lan, DiscoveryEvent, LanDevice};
+use network::discovery::{self, DiscoveryEvent, LanDevice};
 use network::webrtc::{ConnectionHandle, ConnectionManager};
 use storage::json::{self as storage_json, AppConfig, KeyPairData, PeerData, TrustedPeerData};
 
@@ -737,57 +737,18 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     while let Some(event) = discovery_rx.recv().await {
                         let mut devices = lan_devices.lock().await;
-                        let before_count = devices.len();
                         match event {
                             DiscoveryEvent::Added(dev) => {
-                                let duplicate = devices.iter().any(|d| d.peer_id == dev.peer_id);
-                                // #region debug-point D:app-received-added-device
-                                debug_report_lan(
-                                    "D",
-                                    "lib.rs:discovery-rx-added",
-                                    "[DEBUG] app received discovery add event",
-                                    serde_json::json!({
-                                        "device_name": &dev.name,
-                                        "peer_id": &dev.peer_id,
-                                        "ip": &dev.ip,
-                                        "before_count": before_count,
-                                        "duplicate": duplicate,
-                                    }),
-                                );
-                                // #endregion
-                                if !duplicate {
+                                if !devices.iter().any(|d| d.peer_id == dev.peer_id) {
                                     tracing::info!("LAN device added: {} ({})", dev.name, dev.ip);
                                     devices.push(dev);
                                 }
                             }
                             DiscoveryEvent::Removed(dev) => {
-                                // #region debug-point D:app-received-removed-device
-                                debug_report_lan(
-                                    "D",
-                                    "lib.rs:discovery-rx-removed",
-                                    "[DEBUG] app received discovery remove event",
-                                    serde_json::json!({
-                                        "device_name": &dev.name,
-                                        "before_count": before_count,
-                                    }),
-                                );
-                                // #endregion
                                 devices.retain(|d| d.name != dev.name);
                                 tracing::info!("LAN device removed: {}", dev.name);
                             }
                         }
-                        let peer_ids = devices.iter().map(|device| device.peer_id.clone()).collect::<Vec<_>>();
-                        // #region debug-point E:emit-lan-devices-changed
-                        debug_report_lan(
-                            "E",
-                            "lib.rs:emit-lan-devices-changed",
-                            "[DEBUG] app emitted lan-devices-changed",
-                            serde_json::json!({
-                                "after_count": devices.len(),
-                                "peer_ids": peer_ids,
-                            }),
-                        );
-                        // #endregion
                         let _ = app_handle.emit("lan-devices-changed", &*devices);
                     }
                 });
