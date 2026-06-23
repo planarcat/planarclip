@@ -205,7 +205,7 @@ export function PairingModal({
                     ))
                   ) : (
                     <div className="rounded-xl border border-dashed border-border px-3 py-5 text-center text-[13px] font-medium text-muted-foreground">
-                      暂时还没有发现附近设备
+                      暂无发现更多设备
                     </div>
                   )}
                 </div>

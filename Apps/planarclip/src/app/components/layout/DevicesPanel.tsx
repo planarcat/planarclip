@@ -16,7 +16,7 @@ export function DevicesPanel({ devices, pairingCode, status }: DevicesPanelProps
   return (
     <aside className="h-full w-60 shrink-0 overflow-y-auto border-l border-border bg-card xl:w-64">
       <div className="border-b border-border px-4 pb-3 pt-5">
-        <p className="text-sm font-semibold text-foreground">连接概览</p>
+        <p className="text-sm font-semibold text-primary">连接概览</p>
         <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">局域网发现与直连状态</p>
       </div>
       <div className="space-y-2 p-3">
@@ -29,7 +29,7 @@ export function DevicesPanel({ devices, pairingCode, status }: DevicesPanelProps
                     <OsIcon os={device.os} size={14} />
                   </div>
                   <div>
-                    <p className="text-[13px] font-medium leading-none text-foreground">{device.name}</p>
+                    <p className="text-[13px] font-medium leading-none text-primary">{device.name}</p>
                     <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">
                       {device.hostName ? `主机名 ${device.hostName}` : device.os === "macos" ? "macOS 系统" : "Windows 系统"}
                     </p>
@@ -62,7 +62,7 @@ export function DevicesPanel({ devices, pairingCode, status }: DevicesPanelProps
         )}
       </div>
       <div className="mx-3 mb-3 rounded-lg border border-border bg-primary/5 p-3">
-        <p className="mb-2 text-[13px] font-medium text-muted-foreground">网络信息</p>
+        <p className="mb-2 text-[13px] font-medium text-primary">网络信息</p>
         <div className="space-y-1.5">
           {[
             { label: "配对码", value: pairingCode, className: "text-primary", mono: true },

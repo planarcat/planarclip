@@ -29,7 +29,7 @@ export function DevicesPage({
     <div className="flex-1 overflow-y-auto px-4 pt-6 md:px-6 md:pt-8 xl:px-8">
       <div className="mb-6 flex max-w-3xl items-start justify-between gap-4">
         <div>
-          <h2 className="mb-1 text-base font-semibold text-foreground">设备管理</h2>
+          <h2 className="mb-1 text-base font-semibold text-primary">设备管理</h2>
           <p className="text-sm text-secondary-foreground">查看设备列表，并直接发起连接或断开当前会话。</p>
         </div>
         <button
@@ -46,7 +46,7 @@ export function DevicesPage({
 
       <div className="max-w-3xl space-y-2">
         <div className="mb-3 flex items-center justify-between gap-2">
-          <p className="text-[13px] font-medium text-muted-foreground">设备列表</p>
+          <p className="text-[13px] font-medium text-primary">设备列表</p>
           <button
             onClick={onRefreshDevices}
             disabled={isRefreshingDevices}
@@ -78,7 +78,7 @@ export function DevicesPage({
                 <OsIcon os={device.os} size={18} />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-foreground">{device.name}</p>
+                <p className="text-sm font-medium text-primary">{device.name}</p>
                 <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">
                   {device.hostName ? `主机名 ${device.hostName}` : device.os === "macos" ? "macOS 系统" : "Windows 系统"}
                 </p>
@@ -115,7 +115,7 @@ export function DevicesPage({
         {devices.length === 0 && (
           <div className="py-12 text-center text-muted-foreground">
             <Smartphone size={32} className="mx-auto mb-3 opacity-30" />
-            <p className="text-sm font-medium text-foreground">暂无可连接设备</p>
+            <p className="text-sm font-medium text-primary">暂无可连接设备</p>
             <p className="mt-1 text-[13px] font-medium text-muted-foreground">保持双方在同一局域网，并确认对方应用已打开</p>
           </div>
         )}

@@ -123,14 +123,17 @@ export function useUiTheme({
     [setDeviceName],
   );
 
-  const handleDeviceNameSave = useCallback(() => {
-    const nextDeviceName = normalizeDeviceName(deviceName);
-    setDeviceName(nextDeviceName);
-    void persistUiSettings(colorScheme, theme, nextDeviceName, {
-      desktop: "设备名称已保存，新的名称会用于后续连接。",
-      preview: "当前是浏览器预览模式，设备名称已暂存到浏览器本地。",
-    });
-  }, [colorScheme, deviceName, persistUiSettings, setDeviceName, theme]);
+  const handleDeviceNameSave = useCallback(
+    (nextDeviceName?: string) => {
+      const normalizedDeviceName = normalizeDeviceName(nextDeviceName ?? deviceName);
+      setDeviceName(normalizedDeviceName);
+      void persistUiSettings(colorScheme, theme, normalizedDeviceName, {
+        desktop: "设备名称已保存，新的名称会用于后续连接。",
+        preview: "当前是浏览器预览模式，设备名称已暂存到浏览器本地。",
+      });
+    },
+    [colorScheme, deviceName, persistUiSettings, setDeviceName, theme],
+  );
 
   const applyDesktopUiSettings = useCallback(
     (uiSettings: UiSettingsPayload) => {

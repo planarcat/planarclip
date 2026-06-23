@@ -22,7 +22,7 @@ export function ClipboardPage({ clips, devices, viewMode, setViewMode, status, s
     <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
       <div className="flex shrink-0 items-center justify-between border-b border-border px-4 pb-3 pt-5 md:px-6">
         <div>
-          <h1 className="text-base font-semibold text-foreground">剪贴板历史</h1>
+          <h1 className="text-base font-semibold text-primary">剪贴板历史</h1>
           <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">最近 {clips.length} 条文本同步摘要</p>
         </div>
         <div className="flex items-center gap-2">
@@ -57,7 +57,7 @@ export function ClipboardPage({ clips, devices, viewMode, setViewMode, status, s
             <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
               <Clipboard size={24} />
             </div>
-            <p className="text-sm font-medium text-foreground">
+            <p className="text-sm font-medium text-primary">
               {status === "online" ? "等待新的文本同步" : "连接建立后，这里会显示最近的文本同步摘要"}
             </p>
             <p className="mt-2 text-[13px] font-medium leading-6 text-muted-foreground">{statusMessage}</p>

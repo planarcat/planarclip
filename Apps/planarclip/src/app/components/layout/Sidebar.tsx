@@ -1,4 +1,5 @@
 import { Clipboard, Moon, Palette, PlugZap, Radio, RefreshCw, Settings, Sun, SunMoon, Unplug } from "lucide-react";
+import { useEffect, useState } from "react";
 import { THEME_COLORS } from "../../constants/theme";
 import type { AppConnectionStatus, ColorScheme, Device, NavId, ThemeColor } from "../../types";
 import { StatusDot } from "../common/StatusDot";
@@ -13,10 +14,13 @@ type SidebarProps = {
   setColorScheme: (scheme: ColorScheme) => void;
   theme: ThemeColor;
   isDark: boolean;
+  isSavingDeviceName: boolean;
   onThemeChange: (theme: ThemeColor) => void;
   onNavigate: (nav: NavId) => void;
   onRefreshDevices: () => void;
   onConnectDevice: (device: Device) => void;
+  onDeviceNameChange: (deviceName: string) => void;
+  onDeviceNameSave: (deviceName?: string) => void;
   onDisconnect: () => void;
   isRefreshingDevices: boolean;
   tauriAvailable: boolean;
@@ -31,14 +35,26 @@ export function Sidebar({
   setColorScheme,
   theme,
   isDark,
+  isSavingDeviceName,
   onThemeChange,
   onNavigate,
   onRefreshDevices,
   onConnectDevice,
+  onDeviceNameChange,
+  onDeviceNameSave,
   onDisconnect,
   isRefreshingDevices,
   tauriAvailable,
 }: SidebarProps) {
+  const [isEditingDeviceName, setIsEditingDeviceName] = useState(false);
+  const [draftDeviceName, setDraftDeviceName] = useState(identityLabel);
+
+  useEffect(() => {
+    if (!isEditingDeviceName) {
+      setDraftDeviceName(identityLabel);
+    }
+  }, [identityLabel, isEditingDeviceName]);
+
   const navItems = [
     { id: "clipboard" as const, label: "剪贴板", icon: <Clipboard size={15} /> },
     { id: "devices" as const, label: "设备", icon: <Radio size={15} /> },
@@ -57,16 +73,63 @@ export function Sidebar({
           ? "bg-amber-400"
           : "bg-zinc-500";
 
+  const commitDeviceName = () => {
+    setIsEditingDeviceName(false);
+    onDeviceNameSave(draftDeviceName);
+  };
+
   return (
     <aside className="flex h-full w-52 shrink-0 flex-col border-r border-border bg-card xl:w-56">
       <div className="border-b border-border px-4 pb-4 pt-5">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/15">
+        <div className="flex items-start gap-2.5">
+          <div className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-md bg-primary/15">
             <Clipboard size={14} className="text-primary" />
           </div>
-          <div>
-            <p className="text-sm font-semibold leading-none tracking-tight text-foreground">PlanarClip</p>
-            <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">{identityLabel}</p>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold leading-none tracking-tight text-primary">本机名</p>
+            <div className="mt-2">
+              {isEditingDeviceName ? (
+                <input
+                  type="text"
+                  value={draftDeviceName}
+                  maxLength={24}
+                  autoComplete="off"
+                  autoFocus
+                  disabled={isSavingDeviceName}
+                  onChange={(event) => {
+                    const nextDeviceName = event.target.value.slice(0, 24);
+                    setDraftDeviceName(nextDeviceName);
+                    onDeviceNameChange(nextDeviceName);
+                  }}
+                  onBlur={commitDeviceName}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      commitDeviceName();
+                    }
+
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setDraftDeviceName(identityLabel);
+                      onDeviceNameChange(identityLabel);
+                      setIsEditingDeviceName(false);
+                    }
+                  }}
+                  className="w-full rounded-md border border-border bg-secondary px-2.5 py-1.5 text-[13px] font-medium text-primary transition-colors placeholder:text-primary/45 focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                  placeholder="我的设备"
+                />
+              ) : (
+                <button
+                  onClick={() => setIsEditingDeviceName(true)}
+                  aria-label="修改设备名称"
+                  className="block w-full bg-transparent p-0 text-left text-[13px] font-medium text-primary transition-opacity hover:opacity-80"
+                  title="点击修改设备名称"
+                  type="button"
+                >
+                  {identityLabel}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -78,8 +141,8 @@ export function Sidebar({
             onClick={() => onNavigate(item.id)}
             className={`flex w-full items-center gap-2.5 rounded px-2.5 py-2 text-sm font-medium transition-colors ${
               activeNav === item.id
-                ? "bg-primary/10 text-primary"
-                : "text-secondary-foreground hover:bg-secondary hover:text-foreground"
+                ? "bg-primary text-white"
+                : "text-primary/85 hover:bg-secondary hover:text-primary"
             }`}
             type="button"
           >
@@ -91,12 +154,12 @@ export function Sidebar({
 
       <div className="px-4 pb-2 pt-4">
         <div className="mb-2 flex items-center justify-between gap-2">
-          <p className="text-[13px] font-medium text-muted-foreground">设备列表</p>
+          <p className="text-[13px] font-medium text-primary">设备列表</p>
           <button
             onClick={onRefreshDevices}
             disabled={isRefreshingDevices}
             aria-label="刷新设备列表"
-            className="rounded-md p-1.5 text-secondary-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40"
+            className="rounded-md p-1.5 text-secondary-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40 cursor-pointer"
             title="刷新设备列表"
             type="button"
           >
@@ -119,8 +182,8 @@ export function Sidebar({
               return (
                 <div key={device.id} className="flex items-center justify-between gap-2 rounded-lg px-1 py-1 hover:bg-secondary/40">
                   <div className="min-w-0 flex-1" title={device.hostName ? `${device.name} · ${device.hostName}` : device.name}>
-                    <p className="truncate text-[13px] font-medium text-foreground">{device.name}</p>
-                    {device.hostName && <p className="truncate text-[11px] font-medium text-muted-foreground">{device.hostName}</p>}
+                    <p className="truncate text-[13px] font-medium text-primary">{device.name}</p>
+                    {device.hostName && <p className="truncate text-[11px] font-medium text-primary/65">{device.hostName}</p>}
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
                     <StatusDot status={device.status} size="md" />
@@ -152,15 +215,15 @@ export function Sidebar({
             })}
           </div>
         ) : (
-          <div className="rounded-lg border border-dashed border-border px-3 py-3 text-[13px] font-medium text-muted-foreground">
-            暂时还没有发现附近设备
+          <div className="rounded-lg border border-dashed border-border px-3 py-3 text-center text-[13px] font-medium text-primary/75">
+            暂无发现更多设备
           </div>
         )}
       </div>
 
       <div className="mt-auto space-y-3 border-t border-border px-3 pb-3 pt-3">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[13px] font-medium text-muted-foreground">背景</span>
+          <span className="text-[13px] font-medium text-primary">背景</span>
           <div className="flex items-center rounded-md bg-secondary p-0.5">
             {[
               { id: "light" as const, label: "浅色", icon: <Sun size={13} /> },
@@ -181,7 +244,7 @@ export function Sidebar({
         </div>
         <div className="flex items-center gap-2">
           <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusClassName}`} />
-          <span className="text-[13px] font-medium text-secondary-foreground">{statusLabel}</span>
+          <span className="text-[13px] font-medium text-primary/80">{statusLabel}</span>
           <div className="ml-auto flex items-center gap-2">
             <Palette size={12} className="text-secondary-foreground" />
             <div className="flex items-center gap-2">

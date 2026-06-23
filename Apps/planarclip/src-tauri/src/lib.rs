@@ -28,6 +28,24 @@ const DEFAULT_UI_COLOR_SCHEME: &str = "dark";
 const DEFAULT_UI_THEME_COLOR: &str = "cyan";
 const MAX_CLIPBOARD_HISTORY: usize = 12;
 
+fn default_device_name() -> String {
+    let host_name = hostname::get()
+        .ok()
+        .and_then(|value| value.into_string().ok())
+        .map(|value| {
+            value
+                .trim()
+                .trim_end_matches('.')
+                .trim_end_matches(".local")
+                .chars()
+                .take(24)
+                .collect::<String>()
+        })
+        .filter(|value| !value.is_empty());
+
+    host_name.unwrap_or_else(|| DEFAULT_DEVICE_NAME.to_string())
+}
+
 pub struct AppState {
     pub config: Arc<Mutex<AppConfig>>,
     pub key_pair: Arc<Mutex<Option<KeyPair>>>,
@@ -68,8 +86,8 @@ fn normalized_theme_color(value: &str) -> Option<&'static str> {
 
 fn normalize_stored_device_name(value: &str) -> String {
     let trimmed = value.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("My Device") {
-        DEFAULT_DEVICE_NAME.to_string()
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("My Device") || trimmed == DEFAULT_DEVICE_NAME {
+        default_device_name()
     } else {
         trimmed.to_string()
     }
@@ -78,7 +96,7 @@ fn normalize_stored_device_name(value: &str) -> String {
 fn validate_device_name(value: &str) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Ok(DEFAULT_DEVICE_NAME.to_string());
+        return Ok(default_device_name());
     }
 
     if trimmed.chars().count() > 24 {
