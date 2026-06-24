@@ -182,13 +182,10 @@ export function usePairingFlow({
       const isFamiliar = Boolean(device.isTrusted);
       const helperMessage = isFamiliar
         ? `正在重新连接 ${device.name}…`
-        : `正在与 ${device.name} 配对，请在本机输入对方显示的 6 位配对码。`;
+        : `正在向 ${device.name} 请求连接，请稍候…`;
       setPairingHelperText(helperMessage);
       setStatus("connecting");
       setLastMessage(helperMessage);
-      if (!isFamiliar) {
-        setShowPairing(true);
-      }
 
       try {
         const result = await callCommand<string>("connect_lan", {

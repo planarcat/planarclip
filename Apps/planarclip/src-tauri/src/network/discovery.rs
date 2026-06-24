@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::net::IpAddr;
 use tokio::sync::mpsc;
 
@@ -68,12 +69,7 @@ pub fn start_discovery(
                         .unwrap_or("")
                         .to_string();
                     let host_name = normalize_host_name(info.get_hostname());
-                    let addresses = info
-                        .get_addresses()
-                        .iter()
-                        .map(|address| address.to_string())
-                        .collect::<Vec<_>>();
-                    let ip = addresses.first().cloned();
+                    let ip = pick_best_discovered_ip(info.get_addresses());
                     let missing_peer_id = peer_id.is_empty();
                     let is_self = peer_id == local_peer_id;
 
@@ -198,6 +194,43 @@ fn is_routable_ipv6(ip: &IpAddr) -> bool {
     matches!(ip, IpAddr::V6(v6) if !v6.is_loopback() && !v6.is_unspecified() && !v6.is_unicast_link_local())
 }
 
+/// Prefer LAN-friendly addresses so direct TCP connects stay on the same subnet.
+fn pick_best_discovered_ip(addresses: &HashSet<IpAddr>) -> Option<String> {
+    if addresses.is_empty() {
+        return None;
+    }
+
+    let parsed: Vec<IpAddr> = addresses.iter().copied().collect();
+
+    if let Some(ip) = parsed.iter().find(|ip| is_private_ipv4(ip)) {
+        return Some(ip.to_string());
+    }
+
+    if let Some(ip) = parsed.iter().find(|ip| is_routable_ipv4(ip)) {
+        return Some(ip.to_string());
+    }
+
+    if let Some(ip) = parsed
+        .iter()
+        .find(|ip| matches!(ip, IpAddr::V6(v6) if v6.is_unique_local()))
+    {
+        return Some(ip.to_string());
+    }
+
+    if let Some(ip) = parsed
+        .iter()
+        .find(|ip| matches!(ip, IpAddr::V6(v6) if v6.is_unicast_link_local()))
+    {
+        return Some(ip.to_string());
+    }
+
+    if let Some(ip) = parsed.iter().find(|ip| is_routable_ipv6(ip)) {
+        return Some(ip.to_string());
+    }
+
+    addresses.iter().next().map(|ip| ip.to_string())
+}
+
 fn is_virtual_interface(interface_name: &str) -> bool {
     let name = interface_name.to_ascii_lowercase();
     [
@@ -222,5 +255,51 @@ fn is_virtual_interface(interface_name: &str) -> bool {
     ]
     .iter()
     .any(|keyword| name.contains(keyword))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    fn ip(value: &str) -> IpAddr {
+        IpAddr::from_str(value).expect("valid test ip")
+    }
+
+    #[test]
+    fn pick_best_discovered_ip_prefers_private_ipv4_over_global_ipv6() {
+        let addresses = HashSet::from([
+            ip("240e:391:cde:70c0:a97d:23a6:89ca:7202"),
+            ip("192.168.1.42"),
+        ]);
+
+        assert_eq!(
+            pick_best_discovered_ip(&addresses).as_deref(),
+            Some("192.168.1.42")
+        );
+    }
+
+    #[test]
+    fn pick_best_discovered_ip_formats_global_ipv6_when_no_ipv4() {
+        let addresses = HashSet::from([ip("240e:391:cde:70c0:a97d:23a6:89ca:7202")]);
+
+        assert_eq!(
+            pick_best_discovered_ip(&addresses).as_deref(),
+            Some("240e:391:cde:70c0:a97d:23a6:89ca:7202")
+        );
+    }
+
+    #[test]
+    fn pick_best_discovered_ip_prefers_unique_local_ipv6_over_global_ipv6() {
+        let addresses = HashSet::from([
+            ip("240e:391:cde:70c0:a97d:23a6:89ca:7202"),
+            ip("fd12:3456:789a:1::1"),
+        ]);
+
+        assert_eq!(
+            pick_best_discovered_ip(&addresses).as_deref(),
+            Some("fd12:3456:789a:1::1")
+        );
+    }
 }
 

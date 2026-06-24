@@ -333,7 +333,7 @@ function NearbyStrangerCard({ device, connectDisabled, connectTitle, onConnectDe
 }
 
 function OfflineDeviceCard({ device, onRemoveTrustedPeer, onSetPeerAutoAccept }: OfflineDeviceCardProps) {
-  const lastOnlineLabel = device.lastSeen ? `最近在线 ${relativeTime(device.lastSeen)}` : "最近在线 暂无记录";
+  const lastOnlineLabel = device.lastSeen ? `最近在线 ${relativeTime(device.lastSeen)}` : "";
 
   return (
     <article className="overflow-hidden rounded-xl border border-border bg-card opacity-70 transition-colors hover:border-primary/30">

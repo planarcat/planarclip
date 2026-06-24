@@ -3,6 +3,20 @@ import type { ConnectedPeer, Device, DeviceBuckets, LanDevicePayload, OS, Truste
 
 const TRUSTED_PEER_FALLBACK_PORT = 19876;
 
+/** IPv6 hosts need brackets when shown with a port, e.g. `[::1]:19876`. */
+export function formatDeviceAddress(host: string, port?: number) {
+  const trimmed = host.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (port == null) {
+    return trimmed;
+  }
+
+  const formattedHost = trimmed.includes(":") ? `[${trimmed}]` : trimmed;
+  return `${formattedHost}:${port}`;
+}
+
 export function inferOs(name: string): OS {
   return /mac|iphone|ipad|ios/i.test(name) ? "macos" : "windows";
 }
@@ -41,7 +55,7 @@ export function buildDevices(
       hostName: device.host_name || undefined,
       port: device.port,
       peerId: device.peer_id,
-      address: `${device.ip}:${device.port}`,
+      address: formatDeviceAddress(device.ip, device.port),
       status: isConnected ? "connected" : "idle",
       lastSeen: new Date(),
       source: trustedPeer ? "trusted" : "discovery",
@@ -65,7 +79,7 @@ export function buildDevices(
       host: lastIp ?? undefined,
       port: lastIp ? TRUSTED_PEER_FALLBACK_PORT : undefined,
       peerId: peer.peer_id,
-      address: lastIp ? `${lastIp}:${TRUSTED_PEER_FALLBACK_PORT}` : "等待对方上线",
+      address: lastIp ? formatDeviceAddress(lastIp, TRUSTED_PEER_FALLBACK_PORT) : "等待对方上线",
       status: "offline",
       source: "trusted",
       isTrusted: true,
