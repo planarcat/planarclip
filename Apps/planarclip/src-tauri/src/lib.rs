@@ -55,6 +55,7 @@ pub struct AppState {
     pub clipboard_history: Arc<Mutex<Vec<ClipboardHistoryEntry>>>,
     pub lan_devices: Arc<Mutex<Vec<LanDevice>>>,
     pub pending_initiator: Arc<Mutex<Option<TcpStream>>>,
+    pub pending_accept_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     pub pending_reject_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 }
 
@@ -70,6 +71,7 @@ struct TrustedPeerPayload {
     name: String,
     peer_id: String,
     last_ip: Option<String>,
+    auto_accept: bool,
 }
 
 fn normalized_color_scheme(value: &str) -> Option<&'static str> {
@@ -98,6 +100,15 @@ fn normalize_stored_device_name(value: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+fn lan_device_matches_removal(device: &LanDevice, service_fullname: &str) -> bool {
+    if !device.service_fullname.is_empty() {
+        return device.service_fullname == service_fullname;
+    }
+
+    // Entries discovered before service_fullname was tracked still use display name.
+    service_fullname.starts_with(&format!("{}._planarclip._tcp.local.", device.name))
 }
 
 fn is_default_device_name(value: &str) -> bool {
@@ -141,7 +152,25 @@ fn trusted_peer_payload(peer: &TrustedPeerData) -> TrustedPeerPayload {
         name: peer.name.clone(),
         peer_id: peer.peer_id.clone(),
         last_ip: peer.last_ip.clone(),
+        auto_accept: peer.auto_accept.unwrap_or(true),
     }
+}
+
+fn pairing_code_from_key_pair(kp: &KeyPair) -> String {
+    let fp = kp.fingerprint();
+    let numeric: String = fp.chars().filter(|c| c.is_ascii_digit()).collect();
+    if numeric.len() >= 6 {
+        numeric[numeric.len() - 6..].to_string()
+    } else {
+        format!(
+            "{:06}",
+            u32::from_str_radix(&fp[..6.min(fp.len())], 16).unwrap_or(0) % 1_000_000
+        )
+    }
+}
+
+fn peer_auto_accepts(peer: &TrustedPeerData) -> bool {
+    peer.auto_accept.unwrap_or(true)
 }
 
 fn upsert_trusted_peer(config: &mut AppConfig, incoming: TrustedPeerData) -> bool {
@@ -303,14 +332,7 @@ async fn get_status(state: tauri::State<'_, AppState>) -> Result<String, String>
 async fn get_pairing_code(state: tauri::State<'_, AppState>) -> Result<String, String> {
     let kp_guard = state.key_pair.lock().await;
     if let Some(ref kp) = *kp_guard {
-        let fp = kp.fingerprint();
-        let numeric: String = fp.chars().filter(|c| c.is_ascii_digit()).collect();
-        let pairing = if numeric.len() >= 6 {
-            numeric[numeric.len() - 6..].to_string()
-        } else {
-            format!("{:06}", u32::from_str_radix(&fp[..6], 16).unwrap_or(0) % 1_000_000)
-        };
-        Ok(pairing)
+        Ok(pairing_code_from_key_pair(kp))
     } else {
         Err("密钥对尚未初始化".into())
     }
@@ -435,20 +457,68 @@ async fn remove_trusted_peer(state: tauri::State<'_, AppState>, peer_id: String)
 }
 
 #[tauri::command]
+async fn set_peer_auto_accept(
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+    auto_accept: bool,
+) -> Result<bool, String> {
+    let peer_id = peer_id.trim();
+    if peer_id.is_empty() {
+        return Err("缺少设备标识。".to_string());
+    }
+
+    let mut config = state.config.lock().await;
+    let Some(peers) = config.trusted_peers.as_mut() else {
+        return Ok(false);
+    };
+
+    let Some(peer) = peers.iter_mut().find(|peer| peer.peer_id == peer_id) else {
+        return Ok(false);
+    };
+
+    let next = Some(auto_accept);
+    if peer.auto_accept == next {
+        return Ok(true);
+    }
+
+    peer.auto_accept = next;
+    storage_json::save_config(&config);
+    Ok(true)
+}
+
+#[tauri::command]
 async fn connect_lan(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
     ip: String,
     port: u16,
+    peer_id: Option<String>,
 ) -> Result<String, String> {
-    let (device_name, key_pair) = {
+    let (device_name, key_pair, requires_confirmation) = {
         let config = state.config.lock().await;
         let kp = state.key_pair.lock().await;
         let kp = kp.clone().ok_or("密钥对尚未初始化")?;
-        (config.device_name.clone(), kp)
+        let target_peer_id = peer_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let initiator_knows_peer = target_peer_id.as_deref().is_some_and(|target| {
+            config
+                .trusted_peers
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .any(|peer| peer.peer_id == target)
+        });
+        (
+            config.device_name.clone(),
+            kp,
+            !initiator_knows_peer,
+        )
     };
 
-    match direct::initiator_connect(&ip, port, &device_name, &key_pair).await {
+    match direct::initiator_connect(&ip, port, &device_name, &key_pair, requires_confirmation).await {
         Ok(InitiatorResult::Connected(conn)) => {
             let peer_name = conn.peer_name.clone();
             let peer_id = conn.peer_id.clone();
@@ -456,17 +526,17 @@ async fn connect_lan(
 
             {
                 let mut config = state.config.lock().await;
-                if upsert_trusted_peer(
+                upsert_trusted_peer(
                     &mut config,
                     TrustedPeerData {
                         name: peer_name.clone(),
                         public_key: peer_pk,
                         peer_id: peer_id.clone(),
                         last_ip: Some(ip),
+                        auto_accept: None,
                     },
-                ) {
-                    storage_json::save_config(&config);
-                }
+                );
+                storage_json::save_config(&config);
             }
 
             let handle = ConnectionManager::connect_direct(
@@ -531,17 +601,17 @@ async fn submit_pairing_code(
 
             {
                 let mut config = state.config.lock().await;
-                if upsert_trusted_peer(
+                upsert_trusted_peer(
                     &mut config,
                     TrustedPeerData {
                         name: peer_name.clone(),
                         public_key: peer_pk,
                         peer_id: peer_id.clone(),
                         last_ip: None,
+                        auto_accept: None,
                     },
-                ) {
-                    storage_json::save_config(&config);
-                }
+                );
+                storage_json::save_config(&config);
             }
 
             let handle = ConnectionManager::connect_direct(
@@ -572,7 +642,20 @@ async fn submit_pairing_code(
 }
 
 #[tauri::command]
+async fn accept_connection(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _ = state.pending_reject_tx.lock().await.take();
+    let tx = state.pending_accept_tx.lock().await.take();
+    if let Some(tx) = tx {
+        let _ = tx.send(());
+        Ok(())
+    } else {
+        Err("当前没有待确认的连接请求".into())
+    }
+}
+
+#[tauri::command]
 async fn reject_connection(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _ = state.pending_accept_tx.lock().await.take();
     let tx = state.pending_reject_tx.lock().await.take();
     if let Some(tx) = tx {
         let _ = tx.send(());
@@ -589,6 +672,7 @@ async fn disconnect(state: tauri::State<'_, AppState>) -> Result<(), String> {
         let _ = stream.shutdown().await;
     }
 
+    let _ = state.pending_accept_tx.lock().await.take();
     let tx = state.pending_reject_tx.lock().await.take();
     if let Some(tx) = tx {
         let _ = tx.send(());
@@ -618,6 +702,53 @@ fn load_or_create_key_pair(config: &mut AppConfig) -> KeyPair {
     kp
 }
 
+async fn finalize_incoming_connection(
+    conn: network::direct::DirectConnection,
+    initiator_name: String,
+    initiator_peer_id: String,
+    initiator_pk: Vec<u8>,
+    initiator_ip: Option<String>,
+    is_reconnect: bool,
+    config: Arc<Mutex<AppConfig>>,
+    connected: Arc<Mutex<bool>>,
+    connection: Arc<Mutex<Option<ConnectionHandle>>>,
+    clip_tx: broadcast::Sender<ClipboardEvent>,
+    app_handle: tauri::AppHandle,
+) {
+    {
+        let mut cfg = config.lock().await;
+        upsert_trusted_peer(
+            &mut cfg,
+            TrustedPeerData {
+                name: initiator_name.clone(),
+                public_key: initiator_pk.clone(),
+                peer_id: initiator_peer_id.clone(),
+                last_ip: initiator_ip.clone(),
+                auto_accept: None,
+            },
+        );
+        storage_json::save_config(&cfg);
+    }
+
+    let handle = ConnectionManager::connect_direct(
+        conn,
+        connected.clone(),
+        clip_tx.clone(),
+        app_handle.clone(),
+    )
+    .await;
+    *connection.lock().await = Some(handle);
+
+    let _ = app_handle.emit(
+        "connection-established",
+        serde_json::json!({
+            "peer_name": initiator_name,
+            "peer_id": direct::short_fingerprint(&initiator_pk),
+            "is_reconnect": is_reconnect,
+        }),
+    );
+}
+
 async fn handle_incoming_connection(
     req: direct::IncomingRequest,
     key_pair: KeyPair,
@@ -626,6 +757,7 @@ async fn handle_incoming_connection(
     connected: Arc<Mutex<bool>>,
     connection: Arc<Mutex<Option<ConnectionHandle>>>,
     clip_tx: broadcast::Sender<ClipboardEvent>,
+    pending_accept_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     pending_reject_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 ) {
     let initiator_name = req.initiator_name.clone();
@@ -633,19 +765,31 @@ async fn handle_incoming_connection(
     let initiator_pk = req.initiator_public_key.clone();
     let initiator_ip = req.stream.peer_addr().ok().map(|addr| addr.ip().to_string());
 
-    // 这里每次都从配置里读取设备名称与可信设备，避免改名或首轮配对后必须重启才能生效。
-    let (device_name, is_trusted) = {
+    // 每次从配置读取设备名称、熟悉关系与自动接受策略，避免移除或改名后必须重启。
+    let (device_name, initiator_is_familiar, should_auto_accept) = {
         let cfg = config.lock().await;
-        let is_trusted = cfg
+        let trusted_peer = cfg
             .trusted_peers
             .clone()
             .unwrap_or_default()
-            .iter()
-            .any(|tp| tp.public_key == initiator_pk);
-        (normalize_stored_device_name(&cfg.device_name), is_trusted)
+            .into_iter()
+            .find(|tp| tp.public_key == initiator_pk);
+        let initiator_is_familiar = trusted_peer.is_some();
+        let should_auto_accept = trusted_peer
+            .as_ref()
+            .map(|peer| peer_auto_accepts(peer))
+            .unwrap_or(false);
+        (normalize_stored_device_name(&cfg.device_name), initiator_is_familiar, should_auto_accept)
     };
 
-    if is_trusted {
+    tracing::debug!(
+        "Incoming connection from {} (familiar={}, initiator_requires_confirmation={})",
+        initiator_name,
+        initiator_is_familiar,
+        req.requires_confirmation,
+    );
+
+    if should_auto_accept {
         tracing::info!("Auto-accepting trusted peer: {}", initiator_name);
         match direct::responder_accept_trusted(
             req.stream,
@@ -657,23 +801,20 @@ async fn handle_incoming_connection(
         .await
         {
             Ok(conn) => {
-                let handle = ConnectionManager::connect_direct(
+                finalize_incoming_connection(
                     conn,
-                    connected.clone(),
-                    clip_tx.clone(),
-                    app_handle.clone(),
+                    initiator_name,
+                    initiator_peer_id,
+                    initiator_pk,
+                    initiator_ip,
+                    true,
+                    config,
+                    connected,
+                    connection,
+                    clip_tx,
+                    app_handle,
                 )
                 .await;
-                *connection.lock().await = Some(handle);
-
-                let _ = app_handle.emit(
-                    "connection-established",
-                    serde_json::json!({
-                        "peer_name": initiator_name,
-                        "peer_id": direct::short_fingerprint(&initiator_pk),
-                        "is_reconnect": true,
-                    }),
-                );
             }
             Err(e) => {
                 tracing::warn!("Auto-accept handshake failed: {}", e);
@@ -682,79 +823,119 @@ async fn handle_incoming_connection(
         return;
     }
 
-    let pairing_code = direct::generate_pairing_code();
-    tracing::info!(
-        "Unknown peer {} — pairing code: {}",
-        initiator_name,
-        pairing_code
-    );
+    show_main_window(&app_handle);
 
-    let _ = app_handle.emit(
-        "connection-request",
-        serde_json::json!({
-            "device_name": initiator_name,
-            "peer_id": initiator_peer_id,
-            "pairing_code": pairing_code,
-        }),
-    );
+    if initiator_is_familiar {
+        tracing::info!(
+            "Familiar peer {} — waiting for user confirmation",
+            initiator_name,
+        );
 
-    let (reject_tx, reject_rx) = oneshot::channel();
-    *pending_reject_tx.lock().await = Some(reject_tx);
+        let _ = app_handle.emit(
+            "connection-request",
+            serde_json::json!({
+                "device_name": initiator_name,
+                "peer_id": initiator_peer_id,
+                "requires_pairing": false,
+            }),
+        );
 
-    match direct::responder_verify_code(
-        req.stream,
-        &device_name,
-        &key_pair,
-        initiator_name.clone(),
-        initiator_pk.clone(),
-        &pairing_code,
-        reject_rx,
-    )
-    .await
-    {
-        Ok(conn) => {
-            {
-                let mut cfg = config.lock().await;
-                if upsert_trusted_peer(
-                    &mut cfg,
-                    TrustedPeerData {
-                        name: initiator_name.clone(),
-                        public_key: initiator_pk.clone(),
-                        peer_id: initiator_peer_id.clone(),
-                        last_ip: initiator_ip.clone(),
-                    },
-                ) {
-                    storage_json::save_config(&cfg);
+        let (accept_tx, accept_rx) = oneshot::channel();
+        let (reject_tx, reject_rx) = oneshot::channel();
+        *pending_accept_tx.lock().await = Some(accept_tx);
+        *pending_reject_tx.lock().await = Some(reject_tx);
+
+        match direct::responder_wait_for_decision(
+            req.stream,
+            &device_name,
+            &key_pair,
+            initiator_name.clone(),
+            initiator_pk.clone(),
+            accept_rx,
+            reject_rx,
+        )
+        .await
+        {
+            Ok(conn) => {
+                finalize_incoming_connection(
+                    conn,
+                    initiator_name,
+                    initiator_peer_id,
+                    initiator_pk,
+                    initiator_ip,
+                    true,
+                    config,
+                    connected,
+                    connection,
+                    clip_tx,
+                    app_handle,
+                )
+                .await;
+            }
+            Err(e) => {
+                tracing::info!("Incoming confirmation failed: {}", e);
+                if !matches!(e, direct::HandshakeError::Cancelled) {
+                    emit_connection_failed(&app_handle, &e);
                 }
             }
-
-            let handle = ConnectionManager::connect_direct(
-                conn,
-                connected.clone(),
-                clip_tx.clone(),
-                app_handle.clone(),
-            )
-            .await;
-            *connection.lock().await = Some(handle);
-
-            let _ = app_handle.emit(
-                "connection-established",
-                serde_json::json!({
-                    "peer_name": initiator_name,
-                    "peer_id": direct::short_fingerprint(&initiator_pk),
-                    "is_reconnect": false,
-                }),
-            );
         }
-        Err(e) => {
-            tracing::info!("Pairing failed: {}", e);
-            if !matches!(e, direct::HandshakeError::Cancelled) {
-                emit_connection_failed(&app_handle, &e);
+    } else {
+        let pairing_code = pairing_code_from_key_pair(&key_pair);
+        tracing::info!(
+            "Unfamiliar peer {} — waiting for pairing code",
+            initiator_name,
+        );
+
+        let _ = app_handle.emit(
+            "connection-request",
+            serde_json::json!({
+                "device_name": initiator_name,
+                "peer_id": initiator_peer_id,
+                "requires_pairing": true,
+            }),
+        );
+
+        let (reject_tx, reject_rx) = oneshot::channel();
+        *pending_reject_tx.lock().await = Some(reject_tx);
+
+        match direct::responder_verify_code(
+            req.stream,
+            &device_name,
+            &key_pair,
+            initiator_name.clone(),
+            initiator_pk.clone(),
+            &pairing_code,
+            reject_rx,
+        )
+        .await
+        {
+            Ok(conn) => {
+                finalize_incoming_connection(
+                    conn,
+                    initiator_name,
+                    initiator_peer_id,
+                    initiator_pk,
+                    initiator_ip,
+                    false,
+                    config,
+                    connected,
+                    connection,
+                    clip_tx,
+                    app_handle,
+                )
+                .await;
+            }
+            Err(e) => {
+                tracing::info!("Incoming pairing failed: {}", e);
+                if !matches!(e, direct::HandshakeError::Cancelled | direct::HandshakeError::InvalidCode) {
+                    emit_connection_failed(&app_handle, &e);
+                }
             }
         }
     }
 
     *pending_reject_tx.lock().await = None;
+    *pending_accept_tx.lock().await = None;
 }
 
 pub fn run() {
@@ -780,6 +961,7 @@ pub fn run() {
         clipboard_history: Arc::new(Mutex::new(Vec::new())),
         lan_devices: Arc::new(Mutex::new(Vec::new())),
         pending_initiator: Arc::new(Mutex::new(None)),
+        pending_accept_tx: Arc::new(Mutex::new(None)),
         pending_reject_tx: Arc::new(Mutex::new(None)),
     };
 
@@ -837,6 +1019,7 @@ pub fn run() {
             let peer_id = key_pair.fingerprint();
             let lan_devices = app.state::<AppState>().lan_devices.clone();
             let clipboard_history = app.state::<AppState>().clipboard_history.clone();
+            let pending_accept_tx = app.state::<AppState>().pending_accept_tx.clone();
             let pending_reject_tx = app.state::<AppState>().pending_reject_tx.clone();
             let connected = app.state::<AppState>().connected.clone();
             let connection = app.state::<AppState>().connection.clone();
@@ -866,14 +1049,26 @@ pub fn run() {
                         let mut devices = lan_devices.lock().await;
                         match event {
                             DiscoveryEvent::Added(dev) => {
-                                if !devices.iter().any(|d| d.peer_id == dev.peer_id) {
+                                if let Some(existing) =
+                                    devices.iter_mut().find(|d| d.peer_id == dev.peer_id)
+                                {
+                                    tracing::info!(
+                                        "LAN device refreshed: {} ({})",
+                                        dev.name,
+                                        dev.ip
+                                    );
+                                    *existing = dev;
+                                } else {
                                     tracing::info!("LAN device added: {} ({})", dev.name, dev.ip);
                                     devices.push(dev);
                                 }
                             }
-                            DiscoveryEvent::Removed(dev) => {
-                                devices.retain(|d| d.name != dev.name);
-                                tracing::info!("LAN device removed: {}", dev.name);
+                            DiscoveryEvent::Removed { service_fullname } => {
+                                let before = devices.len();
+                                devices.retain(|d| !lan_device_matches_removal(d, &service_fullname));
+                                if devices.len() != before {
+                                    tracing::info!("LAN device removed: {}", service_fullname);
+                                }
                             }
                         }
                         let _ = app_handle.emit("lan-devices-changed", &*devices);
@@ -894,6 +1089,7 @@ pub fn run() {
                 let connected = connected.clone();
                 let connection = connection.clone();
                 let clip_tx = clip_tx.clone();
+                let pending_accept_tx = pending_accept_tx.clone();
                 let pending_reject_tx = pending_reject_tx.clone();
                 let key_pair = key_pair.clone();
                 let config = config.clone();
@@ -910,6 +1106,7 @@ pub fn run() {
                                     connected.clone(),
                                     connection.clone(),
                                     clip_tx.clone(),
+                                    pending_accept_tx.clone(),
                                     pending_reject_tx.clone(),
                                 )
                                 .await;
@@ -973,8 +1170,10 @@ pub fn run() {
             get_lan_devices,
             get_trusted_peers,
             remove_trusted_peer,
+            set_peer_auto_accept,
             connect_lan,
             submit_pairing_code,
+            accept_connection,
             reject_connection,
             disconnect,
         ])

@@ -12,12 +12,15 @@ pub struct LanDevice {
     pub ip: String,
     pub host_name: String,
     pub port: u16,
+    /// mDNS instance full name, used to match ServiceRemoved events.
+    #[serde(default)]
+    pub service_fullname: String,
 }
 
 #[derive(Debug, Clone)]
 pub enum DiscoveryEvent {
     Added(LanDevice),
-    Removed(LanDevice),
+    Removed { service_fullname: String },
 }
 
 pub fn start_discovery(
@@ -77,10 +80,11 @@ pub fn start_discovery(
                     if let (Some(ip), true) = (ip.clone(), !missing_peer_id && !is_self) {
                         let device = LanDevice {
                             name,
-                            peer_id,
+                            peer_id: peer_id.clone(),
                             ip: ip.clone(),
                             host_name,
                             port: info.get_port(),
+                            service_fullname: info.get_fullname().to_string(),
                         };
                         tracing::info!(
                             "mDNS discovered: {} at {}:{} ({})",
@@ -92,15 +96,12 @@ pub fn start_discovery(
                         let _ = tx.send(DiscoveryEvent::Added(device));
                     }
                 }
-                ServiceEvent::ServiceRemoved(instance_name, _service_type) => {
-                    let device = LanDevice {
-                        name: instance_name,
-                        peer_id: String::new(),
-                        ip: String::new(),
-                        host_name: String::new(),
-                        port: 0,
-                    };
-                    let _ = tx.send(DiscoveryEvent::Removed(device));
+                // mdns_sd emits (service_type, instance_fullname); do not swap these fields.
+                ServiceEvent::ServiceRemoved(_service_type, service_fullname) => {
+                    tracing::info!("mDNS service removed: {}", service_fullname);
+                    let _ = tx.send(DiscoveryEvent::Removed {
+                        service_fullname,
+                    });
                 }
                 _ => {}
             }

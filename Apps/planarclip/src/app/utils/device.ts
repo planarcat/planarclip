@@ -1,5 +1,5 @@
 import { DEFAULT_DEVICE_NAME } from "../constants/theme";
-import type { ConnectedPeer, Device, LanDevicePayload, OS, TrustedPeerPayload } from "../types";
+import type { ConnectedPeer, Device, DeviceBuckets, LanDevicePayload, OS, TrustedPeerPayload } from "../types";
 
 const TRUSTED_PEER_FALLBACK_PORT = 19876;
 
@@ -46,6 +46,8 @@ export function buildDevices(
       lastSeen: new Date(),
       source: trustedPeer ? "trusted" : "discovery",
       isTrusted: Boolean(trustedPeer),
+      autoAccept: trustedPeer ? trustedPeer.auto_accept : false,
+      discoveredOnLan: true,
       lastIp: trustedPeer?.last_ip ?? null,
     });
   });
@@ -67,6 +69,8 @@ export function buildDevices(
       status: "offline",
       source: "trusted",
       isTrusted: true,
+      autoAccept: peer.auto_accept,
+      discoveredOnLan: false,
       lastIp,
     });
   });
@@ -88,6 +92,8 @@ export function buildDevices(
         lastSeen: new Date(),
         source: "connected",
         isTrusted: connectedPeer.peerId ? trustedPeerMap.has(connectedPeer.peerId) : false,
+        autoAccept: connectedPeer.peerId ? (trustedPeerMap.get(connectedPeer.peerId)?.auto_accept ?? false) : false,
+        discoveredOnLan: false,
       });
     }
   }
@@ -101,4 +107,47 @@ export function buildDevices(
     }
     return left.name.localeCompare(right.name, "zh-CN");
   });
+}
+
+export function isDeviceReachableOnLan(device: Device) {
+  return Boolean(device.discoveredOnLan && device.host?.trim() && device.port);
+}
+
+/** Groups merged device records into the three device-management sections from design.
+ *
+ * Relationship rules:
+ * - Familiar + offline → offline
+ * - Familiar + online (not connected) → nearby (familiar)
+ * - Familiar + connected → paired
+ * - Stranger + offline → hidden
+ * - Stranger + online (not connected) → nearby (stranger)
+ * - Stranger + connected → paired (and persisted as familiar after session)
+ */
+export function categorizeDevices(devices: Device[]): DeviceBuckets {
+  const paired: Device[] = [];
+  const nearbyFamiliar: Device[] = [];
+  const nearbyStranger: Device[] = [];
+  const offline: Device[] = [];
+
+  for (const device of devices) {
+    if (device.status === "connected") {
+      paired.push(device);
+      continue;
+    }
+
+    if (isDeviceReachableOnLan(device)) {
+      if (device.isTrusted) {
+        nearbyFamiliar.push(device);
+      } else {
+        nearbyStranger.push(device);
+      }
+      continue;
+    }
+
+    if (device.isTrusted) {
+      offline.push(device);
+    }
+  }
+
+  return { paired, nearbyFamiliar, nearbyStranger, offline };
 }

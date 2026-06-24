@@ -31,6 +31,8 @@ pub struct TrustedPeerData {
     pub public_key: Vec<u8>,
     pub peer_id: String,
     pub last_ip: Option<String>,
+    #[serde(default)]
+    pub auto_accept: Option<bool>,
 }
 
 pub fn config_path() -> PathBuf {

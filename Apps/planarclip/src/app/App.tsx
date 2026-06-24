@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useMemo, useState } from "react";
 import { DevicesPanel } from "./components/layout/DevicesPanel";
 import { Sidebar } from "./components/layout/Sidebar";
+import { IncomingConnectionPrompt } from "./components/overlays/IncomingConnectionPrompt";
 import { PairingModal } from "./components/overlays/PairingModal";
 import { ClipboardPage } from "./components/pages/ClipboardPage";
 import { DevicesPage } from "./components/pages/DevicesPage";
@@ -105,6 +106,7 @@ export default function App() {
     handleManualPair,
     handleConnectLan,
     handleSubmitPairingCode,
+    handleAcceptIncoming,
     handleRejectIncoming,
     handleDisconnect,
     handleConnectionRequest,
@@ -170,16 +172,43 @@ export default function App() {
   const handleRemoveTrustedPeer = useCallback(
     async (device: Device) => {
       if (!device.peerId) {
-        setLastMessage("这个设备缺少信任标识，暂时无法解除信任。");
+        setLastMessage("这个设备缺少标识，暂时无法移除。");
         return;
       }
 
       try {
         const removed = await callCommand<boolean>("remove_trusted_peer", { peerId: device.peerId });
         await refreshTrustedPeers();
-        setLastMessage(removed ? `已解除对 ${device.name} 的信任。` : `没有找到 ${device.name} 的信任记录。`);
+        setLastMessage(removed ? `已移除 ${device.name}，它将显示为陌生设备。` : `没有找到 ${device.name} 的记录。`);
       } catch (error) {
-        setLastMessage(normalizeUserMessage(error, `解除 ${device.name} 的信任失败，请稍后重试。`, device.name));
+        setLastMessage(normalizeUserMessage(error, `移除 ${device.name} 失败，请稍后重试。`, device.name));
+      }
+    },
+    [refreshTrustedPeers, setLastMessage],
+  );
+
+  const handleSetPeerAutoAccept = useCallback(
+    async (device: Device, autoAccept: boolean) => {
+      if (!device.peerId) {
+        setLastMessage("这个设备缺少标识，暂时无法更新自动接受设置。");
+        return;
+      }
+
+      try {
+        const updated = await callCommand<boolean>("set_peer_auto_accept", {
+          peerId: device.peerId,
+          autoAccept,
+        });
+        await refreshTrustedPeers();
+        if (updated) {
+          setLastMessage(
+            autoAccept
+              ? `已开启 ${device.name} 的自动接受连接。`
+              : `已关闭 ${device.name} 的自动接受连接，下次连接需要你确认。`,
+          );
+        }
+      } catch (error) {
+        setLastMessage(normalizeUserMessage(error, `更新 ${device.name} 的自动接受设置失败，请稍后重试。`, device.name));
       }
     },
     [refreshTrustedPeers, setLastMessage],
@@ -275,6 +304,9 @@ export default function App() {
             onRemoveTrustedPeer={(device) => {
               void handleRemoveTrustedPeer(device);
             }}
+            onSetPeerAutoAccept={(device, autoAccept) => {
+              void handleSetPeerAutoAccept(device, autoAccept);
+            }}
             isRefreshingDevices={isRefreshingDevices}
           />
         )}
@@ -293,6 +325,19 @@ export default function App() {
         )}
       </main>
 
+      {incomingRequest && !incomingRequest.requires_pairing && (
+        <IncomingConnectionPrompt
+          request={incomingRequest}
+          accepting={pairingStage === "incoming_accepting"}
+          onAccept={() => {
+            void handleAcceptIncoming();
+          }}
+          onReject={() => {
+            void handleRejectIncoming();
+          }}
+        />
+      )}
+
       {showPairing && (
         <PairingModal
           pairingCode={pairingCode.padEnd(6, "•").slice(0, 6)}
@@ -301,7 +346,6 @@ export default function App() {
           discoveredDevices={discoveredDevices}
           helperText={pairingHelperText}
           errorMessage={pairingError}
-          incomingRequest={incomingRequest}
           onClose={() => {
             void closePairingModal();
           }}
@@ -314,9 +358,6 @@ export default function App() {
           }}
           onSubmitPairingCode={() => {
             void handleSubmitPairingCode();
-          }}
-          onRejectIncoming={() => {
-            void handleRejectIncoming();
           }}
         />
       )}

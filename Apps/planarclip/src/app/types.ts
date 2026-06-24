@@ -12,6 +12,8 @@ export type PairingStage =
   | "awaiting_code"
   | "submitting_code"
   | "incoming_request"
+  | "incoming_pairing"
+  | "incoming_accepting"
   | "error";
 
 export type Device = {
@@ -25,9 +27,20 @@ export type Device = {
   address: string;
   status: DeviceStatus;
   lastSeen?: Date;
+  pairedAt?: Date;
+  latencyMs?: number;
   source: "discovery" | "connected" | "trusted";
   isTrusted?: boolean;
+  autoAccept?: boolean;
+  discoveredOnLan?: boolean;
   lastIp?: string | null;
+};
+
+export type DeviceBuckets = {
+  paired: Device[];
+  nearbyFamiliar: Device[];
+  nearbyStranger: Device[];
+  offline: Device[];
 };
 
 export type ClipEntry = {
@@ -75,12 +88,13 @@ export type TrustedPeerPayload = {
   name: string;
   peer_id: string;
   last_ip?: string | null;
+  auto_accept: boolean;
 };
 
 export type ConnectionRequestPayload = {
   device_name: string;
   peer_id: string;
-  pairing_code: string;
+  requires_pairing?: boolean;
 };
 
 export type ConnectionEstablishedPayload = {

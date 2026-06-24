@@ -203,6 +203,7 @@ pub async fn initiator_connect(
     port: u16,
     device_name: &str,
     key_pair: &KeyPair,
+    requires_confirmation: bool,
 ) -> Result<InitiatorResult, HandshakeError> {
     let mut stream = tcp_connect(ip, port).await?;
 
@@ -210,6 +211,7 @@ pub async fn initiator_connect(
         device_name: device_name.to_string(),
         peer_id: key_pair.fingerprint(),
         public_key: hex::encode(key_pair.public_bytes()),
+        requires_confirmation,
     };
     write_frame(&mut stream, &Frame::Handshake(req)).await?;
 
@@ -275,6 +277,7 @@ pub struct IncomingRequest {
     pub initiator_name: String,
     pub initiator_peer_id: String,
     pub initiator_public_key: Vec<u8>,
+    pub requires_confirmation: bool,
 }
 
 pub async fn read_connect_request(mut stream: TcpStream) -> Result<IncomingRequest, HandshakeError> {
@@ -284,6 +287,7 @@ pub async fn read_connect_request(mut stream: TcpStream) -> Result<IncomingReque
             device_name,
             peer_id,
             public_key,
+            requires_confirmation,
         }) => {
             let pk_bytes = hex::decode(&public_key)
                 .map_err(|_| HandshakeError::Protocol("公钥十六进制格式无效"))?;
@@ -292,6 +296,7 @@ pub async fn read_connect_request(mut stream: TcpStream) -> Result<IncomingReque
                 initiator_name: device_name,
                 initiator_peer_id: peer_id,
                 initiator_public_key: pk_bytes,
+                requires_confirmation,
             })
         }
         _ => Err(HandshakeError::Protocol("应收到连接请求消息")),
@@ -321,6 +326,7 @@ pub async fn responder_accept_trusted(
     Ok(spawn_data_bridge(stream, initiator_name, pid, initiator_public_key))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn responder_verify_code(
     mut stream: TcpStream,
     device_name: &str,
@@ -388,6 +394,49 @@ pub async fn responder_verify_code(
     Ok(spawn_data_bridge(stream, initiator_name, pid, initiator_public_key))
 }
 
+pub async fn responder_wait_for_decision(
+    stream: TcpStream,
+    device_name: &str,
+    key_pair: &KeyPair,
+    initiator_name: String,
+    initiator_public_key: Vec<u8>,
+    accept_rx: oneshot::Receiver<()>,
+    reject_rx: oneshot::Receiver<()>,
+) -> Result<DirectConnection, HandshakeError> {
+    tokio::select! {
+        _ = accept_rx => {
+            responder_accept_trusted(
+                stream,
+                device_name,
+                key_pair,
+                initiator_name,
+                initiator_public_key,
+            )
+            .await
+        }
+        _ = reject_rx => {
+            let mut stream = stream;
+            let _ = write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AuthResult {
+                success: false,
+                peer_name: None,
+                public_key: None,
+                reason: Some("rejected".into()),
+            })).await;
+            Err(HandshakeError::Cancelled)
+        }
+        _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
+            let mut stream = stream;
+            let _ = write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AuthResult {
+                success: false,
+                peer_name: None,
+                public_key: None,
+                reason: Some("timeout".into()),
+            })).await;
+            Err(HandshakeError::Timeout)
+        }
+    }
+}
+
 pub enum ListenerEvent {
     Incoming(IncomingRequest),
 }
@@ -421,6 +470,7 @@ pub(crate) fn short_fingerprint(pk_bytes: &[u8]) -> String {
     peer_id_from_public_key(pk_bytes)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn generate_pairing_code() -> String {
     use rand::Rng;
     format!("{:06}", rand::thread_rng().gen_range(0..1_000_000))
@@ -458,7 +508,7 @@ mod tests {
             .unwrap()
         });
 
-        let result = initiator_connect("127.0.0.1", port, "Initiator", &initiator_key)
+        let result = initiator_connect("127.0.0.1", port, "Initiator", &initiator_key, false)
             .await
             .unwrap();
         let connection = match result {
@@ -498,7 +548,7 @@ mod tests {
             .unwrap()
         });
 
-        let result = initiator_connect("127.0.0.1", port, "Initiator", &initiator_key)
+        let result = initiator_connect("127.0.0.1", port, "Initiator", &initiator_key, false)
             .await
             .unwrap();
         let stream = match result {
@@ -513,6 +563,88 @@ mod tests {
         let server_connection = server.await.unwrap();
         assert_eq!(server_connection.peer_name, "Initiator");
         assert_eq!(server_connection.peer_id, short_fingerprint(&initiator_key.public_bytes()));
+    }
+
+    #[tokio::test]
+    async fn confirmed_unknown_peer_connects_without_code() {
+        let (listener, port) = bind_test_listener().await;
+        let initiator_key = KeyPair::generate();
+        let responder_key = KeyPair::generate();
+        let responder_key_for_server = responder_key.clone();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let request = read_connect_request(stream).await.unwrap();
+            let (accept_tx, accept_rx) = oneshot::channel();
+            let (_reject_tx, reject_rx) = oneshot::channel();
+            let decision = tokio::spawn(async move {
+                responder_wait_for_decision(
+                    request.stream,
+                    "Responder",
+                    &responder_key_for_server,
+                    request.initiator_name,
+                    request.initiator_public_key,
+                    accept_rx,
+                    reject_rx,
+                )
+                .await
+            });
+            accept_tx.send(()).unwrap();
+            decision.await.unwrap().unwrap()
+        });
+
+        let result = initiator_connect("127.0.0.1", port, "Initiator", &initiator_key, false)
+            .await
+            .unwrap();
+        let connection = match result {
+            InitiatorResult::Connected(connection) => connection,
+            InitiatorResult::AwaitingCode { .. } => panic!("confirmed peer should connect directly"),
+        };
+
+        assert_eq!(connection.peer_name, "Responder");
+        let server_connection = server.await.unwrap();
+        assert_eq!(server_connection.peer_name, "Initiator");
+    }
+
+    #[tokio::test]
+    async fn initiator_confirmation_flag_blocks_responder_auto_accept() {
+        let (listener, port) = bind_test_listener().await;
+        let initiator_key = KeyPair::generate();
+        let responder_key = KeyPair::generate();
+        let initiator_key_for_server = initiator_key.clone();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let request = read_connect_request(stream).await.unwrap();
+            assert!(request.requires_confirmation);
+            let (accept_tx, accept_rx) = oneshot::channel();
+            let (_reject_tx, reject_rx) = oneshot::channel();
+            let decision = tokio::spawn(async move {
+                responder_wait_for_decision(
+                    request.stream,
+                    "Responder",
+                    &responder_key,
+                    request.initiator_name,
+                    request.initiator_public_key,
+                    accept_rx,
+                    reject_rx,
+                )
+                .await
+            });
+            accept_tx.send(()).unwrap();
+            decision.await.unwrap().unwrap()
+        });
+
+        let result = initiator_connect("127.0.0.1", port, "Initiator", &initiator_key_for_server, true)
+            .await
+            .unwrap();
+        let connection = match result {
+            InitiatorResult::Connected(connection) => connection,
+            InitiatorResult::AwaitingCode { .. } => panic!("confirmation path should connect after accept"),
+        };
+
+        assert_eq!(connection.peer_name, "Responder");
+        let _ = server.await.unwrap();
     }
 
     #[tokio::test]
@@ -538,7 +670,7 @@ mod tests {
             .await
         });
 
-        let result = initiator_connect("127.0.0.1", port, "Initiator", &initiator_key)
+        let result = initiator_connect("127.0.0.1", port, "Initiator", &initiator_key, false)
             .await
             .unwrap();
         let stream = match result {

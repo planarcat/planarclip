@@ -28,6 +28,10 @@ pub enum HandshakeMessage {
         device_name: String,
         peer_id: String,
         public_key: String,
+        /// When true, the initiator does not yet treat the target as a familiar device and
+        /// the responder must not auto-accept even if the initiator is locally trusted.
+        #[serde(default)]
+        requires_confirmation: bool,
     },
 
     #[serde(rename = "await_code")]

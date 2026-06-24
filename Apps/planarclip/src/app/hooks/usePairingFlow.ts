@@ -176,18 +176,31 @@ export function usePairingFlow({
         return;
       }
 
-      setShowPairing(true);
       setPairingTargetName(device.name);
       setPairingStage("requesting_device");
       setPairingError(null);
-      setPairingHelperText(`正在请求连接 ${device.name}，请稍候…`);
+      const isFamiliar = Boolean(device.isTrusted);
+      const helperMessage = isFamiliar
+        ? `正在重新连接 ${device.name}…`
+        : `正在与 ${device.name} 配对，请在本机输入对方显示的 6 位配对码。`;
+      setPairingHelperText(helperMessage);
       setStatus("connecting");
-      setLastMessage(`正在请求连接 ${device.name}，请稍候…`);
+      setLastMessage(helperMessage);
+      if (!isFamiliar) {
+        setShowPairing(true);
+      }
 
       try {
-        const result = await callCommand<string>("connect_lan", { ip: device.host, port: device.port });
+        const result = await callCommand<string>("connect_lan", {
+          ip: device.host,
+          port: device.port,
+          peerId: device.peerId,
+        });
         if (result === "awaiting_code") {
-          const message = `请查看 ${device.name} 屏幕上的 6 位配对码，并在这里输入。`;
+          const message = isFamiliar
+            ? `${device.name} 需要你重新配对，请输入对方屏幕上的 6 位配对码。`
+            : `请查看 ${device.name} 屏幕上的 6 位配对码，并在这里输入。`;
+          setShowPairing(true);
           setPairingStage("awaiting_code");
           setPairingHelperText(message);
           setLastMessage(message);
@@ -206,6 +219,7 @@ export function usePairingFlow({
         resetPairingFlow(true);
       } catch (error) {
         const message = normalizeUserMessage(error, `暂时无法连接 ${device.name}，请稍后重试。`, device.name);
+        setShowPairing(true);
         setPairingStage("error");
         setPairingError(message);
         setPairingHelperText(message);
@@ -265,6 +279,28 @@ export function usePairingFlow({
     setStatus("offline");
   }, [callCommand, resetPairingFlow, setLastMessage, setStatus]);
 
+  const handleAcceptIncoming = useCallback(async () => {
+    if (!incomingRequest) {
+      return;
+    }
+
+    setPairingStage("incoming_accepting");
+    setPairingError(null);
+    setStatus("connecting");
+    setLastMessage(`正在允许 ${incomingRequest.device_name} 连接…`);
+
+    try {
+      await callCommand("accept_connection");
+    } catch (error) {
+      const message = normalizeUserMessage(error, "允许连接时出了点问题，请稍后再试。", incomingRequest.device_name);
+      setPairingStage("error");
+      setPairingError(message);
+      setPairingHelperText(message);
+      setStatus("offline");
+      setLastMessage(message);
+    }
+  }, [callCommand, incomingRequest, setLastMessage, setPairingError, setPairingHelperText, setPairingStage, setStatus]);
+
   const handleDisconnect = useCallback(async () => {
     try {
       await callCommand("disconnect");
@@ -281,12 +317,20 @@ export function usePairingFlow({
     (payload: ConnectionRequestPayload) => {
       setIncomingRequest(payload);
       setPairingTargetName(payload.device_name);
-      setPairingStage("incoming_request");
       setPairingError(null);
-      setPairingHelperText(`请在 ${payload.device_name} 上输入下方配对码，或直接拒绝这次连接。`);
-      setShowPairing(true);
       setStatus("connecting");
-      setLastMessage(`${payload.device_name} 正在请求连接，请核对配对码后决定是否继续。`);
+
+      if (payload.requires_pairing) {
+        setPairingStage("incoming_pairing");
+        setPairingHelperText(`${payload.device_name} 想要连接，请在对方设备输入本机配对码。`);
+        setShowPairing(true);
+        setLastMessage(`${payload.device_name} 正在请求连接，请让对方输入本机配对码。`);
+        return;
+      }
+
+      setPairingStage("incoming_request");
+      setPairingHelperText(`${payload.device_name} 正在请求连接，请确认是否允许。`);
+      setLastMessage(`${payload.device_name} 正在请求连接，请在确认窗口中选择是否允许。`);
     },
     [
       setIncomingRequest,
@@ -327,13 +371,20 @@ export function usePairingFlow({
         "这次连接没有成功，请重新发起连接。",
         pairingTargetRef.current ?? undefined,
       );
+      if (
+        pairingStageRef.current === "incoming_request" ||
+        pairingStageRef.current === "incoming_pairing" ||
+        pairingStageRef.current === "incoming_accepting"
+      ) {
+        resetPairingFlow(false);
+      }
       setPairingStage("error");
       setPairingError(message);
       setPairingHelperText(message);
       setStatus("offline");
       setLastMessage(message);
     },
-    [setLastMessage, setPairingError, setPairingHelperText, setPairingStage, setStatus],
+    [resetPairingFlow, setLastMessage, setPairingError, setPairingHelperText, setPairingStage, setStatus],
   );
 
   const handleConnectionEnded = useCallback(
@@ -353,6 +404,7 @@ export function usePairingFlow({
     handleManualPair,
     handleConnectLan,
     handleSubmitPairingCode,
+    handleAcceptIncoming,
     handleRejectIncoming,
     handleDisconnect,
     handleConnectionRequest,
