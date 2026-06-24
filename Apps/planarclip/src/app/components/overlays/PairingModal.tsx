@@ -73,7 +73,7 @@ export function PairingModal({
     stage === "submitting_code"
       ? "正在提交…"
       : stage === "awaiting_code"
-        ? "提交配对码"
+        ? "开始配对"
         : stage === "manual_pairing"
           ? "正在校验…"
           : "发起配对";

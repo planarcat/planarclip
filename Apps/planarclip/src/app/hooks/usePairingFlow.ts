@@ -281,10 +281,18 @@ export function usePairingFlow({
       return;
     }
 
-    setPairingStage("incoming_accepting");
     setPairingError(null);
     setStatus("connecting");
-    setLastMessage(`正在允许 ${incomingRequest.device_name} 连接…`);
+
+    if (incomingRequest.requires_pairing) {
+      setPairingStage("incoming_pairing");
+      setShowPairing(true);
+      setPairingHelperText(`${incomingRequest.device_name} 想要连接，请让对方输入本机配对码。`);
+      setLastMessage(`${incomingRequest.device_name} 正在请求连接，请让对方输入本机配对码。`);
+    } else {
+      setPairingStage("incoming_accepting");
+      setLastMessage(`正在允许 ${incomingRequest.device_name} 连接…`);
+    }
 
     try {
       await callCommand("accept_connection");
@@ -296,7 +304,7 @@ export function usePairingFlow({
       setStatus("offline");
       setLastMessage(message);
     }
-  }, [callCommand, incomingRequest, setLastMessage, setPairingError, setPairingHelperText, setPairingStage, setStatus]);
+  }, [callCommand, incomingRequest, setLastMessage, setPairingError, setPairingHelperText, setPairingStage, setShowPairing, setStatus]);
 
   const handleDisconnect = useCallback(async () => {
     try {
@@ -318,10 +326,9 @@ export function usePairingFlow({
       setStatus("connecting");
 
       if (payload.requires_pairing) {
-        setPairingStage("incoming_pairing");
-        setPairingHelperText(`${payload.device_name} 想要连接，请在对方设备输入本机配对码。`);
-        setShowPairing(true);
-        setLastMessage(`${payload.device_name} 正在请求连接，请让对方输入本机配对码。`);
+        setPairingStage("incoming_request");
+        setPairingHelperText(`${payload.device_name} 是陌生设备，请先确认是否允许配对。`);
+        setLastMessage(`${payload.device_name} 正在请求连接，请在确认窗口中选择是否允许。`);
         return;
       }
 

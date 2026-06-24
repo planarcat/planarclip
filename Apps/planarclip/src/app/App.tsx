@@ -325,7 +325,8 @@ export default function App() {
         )}
       </main>
 
-      {incomingRequest && !incomingRequest.requires_pairing && (
+      {incomingRequest &&
+        (pairingStage === "incoming_request" || pairingStage === "incoming_accepting") && (
         <IncomingConnectionPrompt
           request={incomingRequest}
           accepting={pairingStage === "incoming_accepting"}

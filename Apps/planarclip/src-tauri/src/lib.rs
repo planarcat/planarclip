@@ -56,7 +56,7 @@ pub struct AppState {
     pub lan_devices: Arc<Mutex<Vec<LanDevice>>>,
     pub pending_initiator: Arc<Mutex<Option<TcpStream>>>,
     pub pending_accept_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
-    pub pending_reject_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    pub pending_reject_tx: Arc<Mutex<Option<mpsc::Sender<()>>>>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -643,7 +643,6 @@ async fn submit_pairing_code(
 
 #[tauri::command]
 async fn accept_connection(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let _ = state.pending_reject_tx.lock().await.take();
     let tx = state.pending_accept_tx.lock().await.take();
     if let Some(tx) = tx {
         let _ = tx.send(());
@@ -656,9 +655,8 @@ async fn accept_connection(state: tauri::State<'_, AppState>) -> Result<(), Stri
 #[tauri::command]
 async fn reject_connection(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let _ = state.pending_accept_tx.lock().await.take();
-    let tx = state.pending_reject_tx.lock().await.take();
-    if let Some(tx) = tx {
-        let _ = tx.send(());
+    if let Some(tx) = state.pending_reject_tx.lock().await.take() {
+        let _ = tx.send(()).await;
     }
     Ok(())
 }
@@ -673,9 +671,8 @@ async fn disconnect(state: tauri::State<'_, AppState>) -> Result<(), String> {
     }
 
     let _ = state.pending_accept_tx.lock().await.take();
-    let tx = state.pending_reject_tx.lock().await.take();
-    if let Some(tx) = tx {
-        let _ = tx.send(());
+    if let Some(tx) = state.pending_reject_tx.lock().await.take() {
+        let _ = tx.send(()).await;
     }
 
     Ok(())
@@ -758,7 +755,7 @@ async fn handle_incoming_connection(
     connection: Arc<Mutex<Option<ConnectionHandle>>>,
     clip_tx: broadcast::Sender<ClipboardEvent>,
     pending_accept_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
-    pending_reject_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    pending_reject_tx: Arc<Mutex<Option<mpsc::Sender<()>>>>,
 ) {
     let initiator_name = req.initiator_name.clone();
     let initiator_peer_id = req.initiator_peer_id.clone();
@@ -841,7 +838,7 @@ async fn handle_incoming_connection(
         );
 
         let (accept_tx, accept_rx) = oneshot::channel();
-        let (reject_tx, reject_rx) = oneshot::channel();
+        let (reject_tx, reject_rx) = mpsc::channel(1);
         *pending_accept_tx.lock().await = Some(accept_tx);
         *pending_reject_tx.lock().await = Some(reject_tx);
 
@@ -895,7 +892,9 @@ async fn handle_incoming_connection(
             }),
         );
 
-        let (reject_tx, reject_rx) = oneshot::channel();
+        let (accept_tx, accept_rx) = oneshot::channel();
+        let (reject_tx, reject_rx) = mpsc::channel(2);
+        *pending_accept_tx.lock().await = Some(accept_tx);
         *pending_reject_tx.lock().await = Some(reject_tx);
 
         match direct::responder_verify_code(
@@ -905,6 +904,7 @@ async fn handle_incoming_connection(
             initiator_name.clone(),
             initiator_pk.clone(),
             &pairing_code,
+            accept_rx,
             reject_rx,
         )
         .await

@@ -9,6 +9,8 @@ type IncomingConnectionPromptProps = {
 };
 
 export function IncomingConnectionPrompt({ request, accepting, onAccept, onReject }: IncomingConnectionPromptProps) {
+  const isPairing = request.requires_pairing;
+
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
@@ -25,10 +27,13 @@ export function IncomingConnectionPrompt({ request, accepting, onAccept, onRejec
             </div>
             <div className="min-w-0 flex-1">
               <p id="incoming-connection-title" className="text-sm font-semibold text-foreground">
-                收到新的连接请求
+                {isPairing ? "陌生设备请求配对" : "收到新的连接请求"}
               </p>
               <p id="incoming-connection-description" className="mt-1 text-[13px] font-medium leading-6 text-muted-foreground">
-                <span className="text-foreground">{request.device_name}</span> 想要连接这台设备。请确认是否允许这次连接。
+                <span className="text-foreground">{request.device_name}</span>{" "}
+                {isPairing
+                  ? "想要与这台设备配对。确认后请让对方输入本机配对码。"
+                  : "想要连接这台设备。请确认是否允许这次连接。"}
               </p>
             </div>
             <button
@@ -47,7 +52,9 @@ export function IncomingConnectionPrompt({ request, accepting, onAccept, onRejec
           <div className="flex items-center gap-3 rounded-xl border border-border bg-secondary/30 p-3">
             <ShieldCheck size={14} className="shrink-0 text-primary" />
             <p className="text-[13px] font-medium text-muted-foreground">
-              允许后，这台设备会被加入已配对列表，下次在同一局域网内可直接连接。
+              {isPairing
+                ? "允许后，对方会收到配对提示，需要输入你屏幕上的 6 位配对码才能完成连接。"
+                : "允许后，这台设备会被加入已配对列表，下次在同一局域网内可直接连接。"}
             </p>
           </div>
 
@@ -71,6 +78,8 @@ export function IncomingConnectionPrompt({ request, accepting, onAccept, onRejec
                   <Loader2 size={15} className="animate-spin" />
                   正在连接…
                 </>
+              ) : isPairing ? (
+                "允许配对"
               ) : (
                 "允许连接"
               )}

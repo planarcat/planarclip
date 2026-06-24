@@ -334,8 +334,35 @@ pub async fn responder_verify_code(
     initiator_name: String,
     initiator_public_key: Vec<u8>,
     pairing_code: &str,
-    reject_rx: oneshot::Receiver<()>,
+    accept_rx: oneshot::Receiver<()>,
+    mut reject_rx: mpsc::Receiver<()>,
 ) -> Result<DirectConnection, HandshakeError> {
+    // 陌生设备需先在本机确认，再通知对方进入配对码输入流程。
+    tokio::select! {
+        _ = accept_rx => {}
+        reject = reject_rx.recv() => {
+            if reject.is_none() {
+                return Err(HandshakeError::Cancelled);
+            }
+            let _ = write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AuthResult {
+                success: false,
+                peer_name: None,
+                public_key: None,
+                reason: Some("rejected".into()),
+            })).await;
+            return Err(HandshakeError::Cancelled);
+        }
+        _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
+            let _ = write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AuthResult {
+                success: false,
+                peer_name: None,
+                public_key: None,
+                reason: Some("timeout".into()),
+            })).await;
+            return Err(HandshakeError::Timeout);
+        }
+    };
+
     write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AwaitCode)).await?;
     let received_code = tokio::select! {
         frame = read_frame(&mut stream) => {
@@ -344,7 +371,10 @@ pub async fn responder_verify_code(
                 _ => return Err(HandshakeError::Protocol("应收到配对码消息")),
             }
         }
-        _ = reject_rx => {
+        reject = reject_rx.recv() => {
+            if reject.is_none() {
+                return Err(HandshakeError::Cancelled);
+            }
             let _ = write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AuthResult {
                 success: false,
                 peer_name: None,
@@ -401,7 +431,7 @@ pub async fn responder_wait_for_decision(
     initiator_name: String,
     initiator_public_key: Vec<u8>,
     accept_rx: oneshot::Receiver<()>,
-    reject_rx: oneshot::Receiver<()>,
+    mut reject_rx: mpsc::Receiver<()>,
 ) -> Result<DirectConnection, HandshakeError> {
     tokio::select! {
         _ = accept_rx => {
@@ -414,7 +444,10 @@ pub async fn responder_wait_for_decision(
             )
             .await
         }
-        _ = reject_rx => {
+        reject = reject_rx.recv() => {
+            if reject.is_none() {
+                return Err(HandshakeError::Cancelled);
+            }
             let mut stream = stream;
             let _ = write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AuthResult {
                 success: false,
@@ -534,18 +567,23 @@ mod tests {
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let request = read_connect_request(stream).await.unwrap();
-            let (_reject_tx, reject_rx) = oneshot::channel();
-            responder_verify_code(
-                request.stream,
-                "Responder",
-                &responder_key_for_server,
-                request.initiator_name,
-                request.initiator_public_key,
-                "123456",
-                reject_rx,
-            )
-            .await
-            .unwrap()
+            let (accept_tx, accept_rx) = oneshot::channel();
+            let (_reject_tx, reject_rx) = mpsc::channel(2);
+            let verify = tokio::spawn(async move {
+                responder_verify_code(
+                    request.stream,
+                    "Responder",
+                    &responder_key_for_server,
+                    request.initiator_name,
+                    request.initiator_public_key,
+                    "123456",
+                    accept_rx,
+                    reject_rx,
+                )
+                .await
+            });
+            accept_tx.send(()).unwrap();
+            verify.await.unwrap().unwrap()
         });
 
         let result = initiator_connect("127.0.0.1", port, "Initiator", &initiator_key, false)
@@ -576,7 +614,7 @@ mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             let request = read_connect_request(stream).await.unwrap();
             let (accept_tx, accept_rx) = oneshot::channel();
-            let (_reject_tx, reject_rx) = oneshot::channel();
+            let (_reject_tx, reject_rx) = mpsc::channel(2);
             let decision = tokio::spawn(async move {
                 responder_wait_for_decision(
                     request.stream,
@@ -618,7 +656,7 @@ mod tests {
             let request = read_connect_request(stream).await.unwrap();
             assert!(request.requires_confirmation);
             let (accept_tx, accept_rx) = oneshot::channel();
-            let (_reject_tx, reject_rx) = oneshot::channel();
+            let (_reject_tx, reject_rx) = mpsc::channel(2);
             let decision = tokio::spawn(async move {
                 responder_wait_for_decision(
                     request.stream,
@@ -648,6 +686,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pairing_requires_confirmation_before_await_code() {
+        let (listener, port) = bind_test_listener().await;
+        let initiator_key = KeyPair::generate();
+        let responder_key = KeyPair::generate();
+        let responder_key_for_server = responder_key.clone();
+
+        let (accept_tx, accept_rx) = oneshot::channel();
+        let (_reject_tx, reject_rx) = mpsc::channel(2);
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let request = read_connect_request(stream).await.unwrap();
+            responder_verify_code(
+                request.stream,
+                "Responder",
+                &responder_key_for_server,
+                request.initiator_name,
+                request.initiator_public_key,
+                "123456",
+                accept_rx,
+                reject_rx,
+            )
+            .await
+            .unwrap()
+        });
+
+        let initiator = tokio::spawn(async move {
+            initiator_connect("127.0.0.1", port, "Initiator", &initiator_key, false).await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(!initiator.is_finished(), "initiator should wait for confirmation");
+
+        accept_tx.send(()).unwrap();
+
+        let result = initiator.await.unwrap().unwrap();
+        let stream = match result {
+            InitiatorResult::AwaitingCode { stream } => stream,
+            InitiatorResult::Connected(_) => panic!("unknown peer should require pairing code after confirmation"),
+        };
+
+        let connection = initiator_send_code(stream, "123456".into()).await.unwrap();
+        assert_eq!(connection.peer_name, "Responder");
+        let _ = server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn invalid_pairing_code_is_reported_to_both_sides() {
         let (listener, port) = bind_test_listener().await;
         let initiator_key = KeyPair::generate();
@@ -657,17 +742,23 @@ mod tests {
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let request = read_connect_request(stream).await.unwrap();
-            let (_reject_tx, reject_rx) = oneshot::channel();
-            responder_verify_code(
-                request.stream,
-                "Responder",
-                &responder_key_for_server,
-                request.initiator_name,
-                request.initiator_public_key,
-                "123456",
-                reject_rx,
-            )
-            .await
+            let (accept_tx, accept_rx) = oneshot::channel();
+            let (_reject_tx, reject_rx) = mpsc::channel(2);
+            let verify = tokio::spawn(async move {
+                responder_verify_code(
+                    request.stream,
+                    "Responder",
+                    &responder_key_for_server,
+                    request.initiator_name,
+                    request.initiator_public_key,
+                    "123456",
+                    accept_rx,
+                    reject_rx,
+                )
+                .await
+            });
+            accept_tx.send(()).unwrap();
+            verify.await.unwrap()
         });
 
         let result = initiator_connect("127.0.0.1", port, "Initiator", &initiator_key, false)
