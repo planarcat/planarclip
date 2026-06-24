@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件用于兼容支持 `AGENTS.md` 的编码代理。核心约定与 `CLAUDE.md` 保持同步；如两者内容不一致，以 `CLAUDE.md` 为当前 Claude Code 会话的主要项目说明。
+本文件是 PlanarClip 项目的编码代理说明，供 Cursor、Claude Code 等支持 `AGENTS.md` 的工具自动加载。更完整的产品与开发说明见仓库根目录 `README.md`。
 
 ## 基本协作约定
 
@@ -8,7 +8,10 @@
 - 先确认用户意图：用户只问原因、方案、怎么改时，只分析不直接改；用户明确说“直接改”“开始做”“按方案执行”时再落地修改。
 - 修改代码前先阅读相关文件，避免基于猜测改动；写代码时保持与周围代码一致的命名、注释密度和风格。
 - 删除、覆盖、重置、推送、发布、外部调用等难以回退或对外可见的操作，必须先确认。
-- 如果本文件与 `CLAUDE.md` 同时存在，应保持核心项目约定同步；`CLAUDE.md` 是 Claude Code 当前主要自动加载的项目说明，`AGENTS.md` 用于兼容其他 Agent 工具。
+
+## 命令执行
+
+- 禁止在同一次 shell 调用里编写多条命令；必须一条一条执行。
 
 ## 构建与运行
 
@@ -17,24 +20,25 @@
 ```bash
 pnpm install         # 安装依赖
 pnpm dev             # 启动完整应用（Tauri + Rust 后端 + 前端）
-pnpm dev-web         # 仅启动前端开发服务器 (localhost:1420)
-pnpm check           # 前端检查 + Rust cargo check
-pnpm check-web       # 仅运行前端格式、lint、类型检查
+pnpm dev:web         # 仅启动前端开发服务器 (localhost:1420)
+pnpm check           # 前端类型检查 + Rust cargo check
+pnpm check:web       # 仅运行前端 TypeScript 类型检查
 pnpm build           # 生成完整桌面应用安装包
-pnpm build-web       # 仅构建前端产物
-pnpm preview-web     # 预览前端构建结果
+pnpm build:web       # 仅构建前端产物
+pnpm preview:web     # 预览前端构建结果
 ```
 
-命名约定：`pnpm <动作>` 表示完整应用流程，`pnpm <动作>-web` 表示仅执行前端 Web 流程。前端开发服务器端口为 1420，HMR 端口为 1421。`tauri.conf.json` 仍通过 `beforeDevCommand` / `beforeBuildCommand` 调用 `pnpm exec vp dev` 与 `pnpm exec vp build`，避免 Tauri 子进程无法解析本地 Vite+ CLI。
+命名约定：`pnpm <动作>` 表示完整应用流程，`pnpm <动作>:web` 表示仅执行前端 Web 流程。前端开发服务器端口为 1420，HMR 端口为 1421。`tauri.conf.json` 通过 `beforeDevCommand` / `beforeBuildCommand` 调用 `pnpm dev:web` 与 `pnpm build:web`。
 
 ## 技术栈
 
-- **桌面框架**: Tauri v2（Rust 后端 + WebView 前端）
-- **前端**: Vite+ + TypeScript，单页面应用，内联 CSS
-- **剪贴板访问**: `arboard`
-- **异步运行时**: `tokio`
-- **发现与连接**: WebSocket 信令、mDNS、局域网 TCP 直连
-- **加密基础**: `x25519-dalek` + `blake3`
+- **桌面框架**: Tauri 2（Rust 后端 + WebView 前端）
+- **前端**: React 18 + TypeScript + Vite 8 + Tailwind CSS 4
+- **UI 图标**: lucide-react
+- **剪贴板访问**: arboard
+- **异步运行时**: tokio
+- **发现与连接**: mDNS、局域网 TCP 直连
+- **加密基础**: x25519-dalek + blake3
 - **持久化**: 本地 JSON 配置文件（Windows 上存于 `%APPDATA%/planarclip_config.json`）
 
 ## 项目结构
@@ -42,27 +46,40 @@ pnpm preview-web     # 预览前端构建结果
 ```text
 Apps/planarclip/
 ├── src/
-│   └── main.ts              # 前端入口，UI 逻辑（连接状态、配对输入、局域网设备列表）
+│   ├── app/
+│   │   ├── components/
+│   │   │   ├── common/      # 通用小组件
+│   │   │   ├── layout/      # 侧栏与右侧概览面板
+│   │   │   ├── overlays/    # 配对弹层、入站连接确认
+│   │   │   └── pages/       # 剪贴板 / 设备 / 设置页面
+│   │   ├── constants/       # 主题常量
+│   │   ├── hooks/           # 桌面桥接、配对流程、主题状态
+│   │   ├── utils/           # 消息、设备、时间、设置等工具
+│   │   ├── App.tsx          # 前端主装配
+│   │   └── types.ts         # 前端类型定义
+│   ├── styles/              # 全局样式、主题样式
+│   └── main.tsx             # React 入口
 ├── src-tauri/
 │   ├── src/
 │   │   ├── main.rs          # Rust 入口，windows_subsystem = "windows"
 │   │   ├── lib.rs           # Tauri 应用组装：状态管理、Tauri 命令、系统托盘
-│   │   ├── clipboard/       # 剪贴板监听与快照类型
+│   │   ├── clipboard/       # 剪贴板监听与历史摘要
 │   │   ├── crypto/          # 密钥生成与设备指纹
-│   │   ├── network/         # 信令、mDNS 发现、局域网直连、连接管理
+│   │   ├── network/         # 局域网发现、连接与传输
 │   │   ├── sync/            # 剪贴板同步引擎与去重逻辑
 │   │   ├── storage/         # 本地 JSON 配置加载/保存
 │   │   └── tray/            # 系统托盘相关实现
-│   ├── tauri.conf.json       # Tauri 配置：窗口 380x520、默认隐藏、托盘图标
+│   ├── tauri.conf.json      # Tauri 配置：窗口 1280×820、默认隐藏、托盘图标
 │   └── capabilities/
-└── index.html                # 前端入口 HTML，内联深色主题 CSS
+└── index.html               # 前端入口 HTML
 ```
 
 ## 当前状态
 
-- 前端命令已统一切换到 Vite+ (`vp`)，并通过 `pnpm <动作>` / `pnpm <动作>-web` 做了统一封装。
-- Tauri 的 `beforeDevCommand` / `beforeBuildCommand` 仍使用 `pnpm exec vp dev` / `pnpm exec vp build`，确保子进程能解析本地 Vite+ CLI。
-- `cargo build`、`pnpm dev`、`pnpm build` 在用户本机均已验证通过。
+- 桌面端主流程已可用：文本剪贴板同步、局域网设备发现、6 位配对码确认、可信设备持久化、托盘驻留、三栏 UI（剪贴板 / 设备 / 设置）。
+- 浏览器预览模式（`pnpm dev:web`）只能查看 UI；连接与配对能力需在 Tauri 桌面应用中体验。
+- 当前仅支持文本同步；图片与文件同步尚未接入。
+- 默认局域网直连端口为 `19876`。
 
 ## UI 文案与交互约定
 
@@ -88,12 +105,12 @@ Apps/planarclip/
 - 当前会话可使用 `figma-mcp-go` MCP 读取和操作 Figma 文件；使用前优先通过 `get_metadata` / `get_selection` / `get_design_context` 确认当前文件、页面与选区。
 - 读取设计时优先使用 `get_design_context`，避免直接读取过大的完整文档树；需要精确节点信息时再用 `get_node` 或 `get_nodes_info`。
 - 修改 Figma 前应确认目标节点、页面和操作意图；删除节点、删除页面、覆盖样式、批量重命名、导出文件等操作属于有副作用操作，需谨慎执行。
-- Figma MCP 工具权限白名单应配置在 Claude Code 的 `settings.json` / `settings.local.json`，不要只写在本文档中；本文档只记录项目协作约定。
+- Figma MCP 工具权限白名单应配置在 IDE 的 MCP 设置中（如 `.cursor/mcp.json`、Claude Code 的 `settings.json` / `settings.local.json`），不要只写在本文档中；本文档只记录项目协作约定。
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **planarclip** (1250 symbols, 1955 relationships, 83 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **planarclip** (1293 symbols, 2072 relationships, 95 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
