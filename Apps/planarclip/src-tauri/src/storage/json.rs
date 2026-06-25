@@ -1,3 +1,4 @@
+use crate::app_profile::CONFIG_FILE_NAME;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -37,7 +38,7 @@ pub struct TrustedPeerData {
 
 pub fn config_path() -> PathBuf {
     let mut path = dirs_next().unwrap_or_else(|| PathBuf::from("."));
-    path.push("planarclip_config.json");
+    path.push(CONFIG_FILE_NAME);
     path
 }
 

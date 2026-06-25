@@ -1,0 +1,12 @@
+{
+  "productName": "PlanarClip Dev",
+  "identifier": "com.planarclip.desktop.dev",
+  "mainBinaryName": "planarclip-dev",
+  "app": {
+    "windows": [
+      {
+        "title": "PlanarClip (Dev)"
+      }
+    ]
+  }
+}

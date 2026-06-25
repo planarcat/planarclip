@@ -6,6 +6,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 
+mod app_profile;
 mod clipboard;
 mod crypto;
 mod network;
@@ -22,7 +23,6 @@ use network::webrtc::{ConnectionHandle, ConnectionManager};
 use storage::json::{self as storage_json, AppConfig, KeyPairData, PeerData, TrustedPeerData};
 
 const SIGNALLING_SERVER: &str = "ws://localhost:8765";
-const DEFAULT_TCP_PORT: u16 = 19876;
 const DEFAULT_DEVICE_NAME: &str = "我的设备";
 const DEFAULT_UI_COLOR_SCHEME: &str = "dark";
 const DEFAULT_UI_THEME_COLOR: &str = "cyan";
@@ -110,7 +110,7 @@ fn lan_device_matches_removal(device: &LanDevice, service_fullname: &str) -> boo
     }
 
     // Entries discovered before service_fullname was tracked still use display name.
-    service_fullname.starts_with(&format!("{}._planarclip._tcp.local.", device.name))
+    service_fullname.starts_with(&app_profile::mdns_service_fullname_prefix(&device.name))
 }
 
 fn is_default_device_name(value: &str) -> bool {
@@ -1031,7 +1031,7 @@ pub fn run() {
     let key_pair = load_or_create_key_pair(&mut config);
     storage_json::save_config(&config);
 
-    let tcp_port = config.tcp_port.unwrap_or(DEFAULT_TCP_PORT);
+    let tcp_port = config.tcp_port.unwrap_or(app_profile::DEFAULT_TCP_PORT);
 
     let (clip_tx, _) = broadcast::channel::<ClipboardEvent>(16);
 
