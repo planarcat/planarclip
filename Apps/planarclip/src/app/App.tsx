@@ -66,9 +66,10 @@ export default function App() {
   const [showPairing, setShowPairing] = useState(false);
   const [pairingInput, setPairingInput] = useState("");
   const [pairingStage, setPairingStage] = useState<PairingStage>("idle");
-  const [pairingTargetName, setPairingTargetName] = useState<string | null>(null);
+  const [pairingTarget, setPairingTarget] = useState<Device | null>(null);
   const [pairingHelperText, setPairingHelperText] = useState("通过配对码或设备列表建立连接。");
   const [pairingError, setPairingError] = useState<string | null>(null);
+  const [pairingRotationHint, setPairingRotationHint] = useState<string | null>(null);
   const [incomingRequest, setIncomingRequest] = useState<ConnectionRequestPayload | null>(null);
   const [isRefreshingDevices, setIsRefreshingDevices] = useState(false);
 
@@ -105,7 +106,9 @@ export default function App() {
     closePairingModal,
     handleManualPair,
     handleConnectLan,
+    switchPairingTarget,
     handleSubmitPairingCode,
+    handleRotatePairingCode,
     handleAcceptIncoming,
     handleRejectIncoming,
     handleDisconnect,
@@ -119,7 +122,7 @@ export default function App() {
     status,
     pairingInput,
     pairingStage,
-    pairingTargetName,
+    pairingTarget,
     incomingRequest,
     setStatus,
     setLastMessage,
@@ -127,9 +130,11 @@ export default function App() {
     setShowPairing,
     setPairingInput,
     setPairingStage,
-    setPairingTargetName,
+    setPairingTarget,
     setPairingHelperText,
     setPairingError,
+    setPairingRotationHint,
+    setPairingCode,
     setIncomingRequest,
   });
 
@@ -242,6 +247,10 @@ export default function App() {
     onConnectionEstablished: handleTrustedConnectionEstablished,
     onConnectionFailed: handleConnectionFailed,
     onConnectionEnded: handleConnectionEnded,
+    onPairingCodeRotated: (payload) => {
+      setPairingRotationHint("验证码已更新，请让对方输入新的 6 位数字。");
+      setPairingCode(payload.code);
+    },
   });
 
   return (
@@ -341,12 +350,14 @@ export default function App() {
 
       {showPairing && (
         <PairingModal
+          initialTarget={pairingTarget}
+          allDiscoverable={discoveredDevices}
           pairingCode={pairingCode.padEnd(6, "•").slice(0, 6)}
           input={pairingInput}
           stage={pairingStage}
-          discoveredDevices={discoveredDevices}
           helperText={pairingHelperText}
           errorMessage={pairingError}
+          rotationHint={pairingRotationHint}
           onClose={() => {
             void closePairingModal();
           }}
@@ -354,11 +365,14 @@ export default function App() {
           onManualPair={() => {
             void handleManualPair();
           }}
-          onConnectLan={(device) => {
-            void handleConnectLan(device);
+          onSelectDevice={(device) => {
+            void switchPairingTarget(device);
           }}
           onSubmitPairingCode={() => {
             void handleSubmitPairingCode();
+          }}
+          onRotatePairingCode={() => {
+            void handleRotatePairingCode();
           }}
         />
       )}

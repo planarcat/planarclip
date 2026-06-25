@@ -114,6 +114,11 @@ export type ConnectionEndedPayload = {
   peer_name?: string;
 };
 
+export type PairingCodeRotatedPayload = {
+  code: string;
+  expires_at_ms: number;
+};
+
 export type ConnectedPeer = {
   name: string;
   peerId?: string;

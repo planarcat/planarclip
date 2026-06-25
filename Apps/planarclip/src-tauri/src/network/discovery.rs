@@ -1,10 +1,9 @@
+use crate::app_profile::MDNS_SERVICE_TYPE;
 use std::collections::HashSet;
 use std::net::IpAddr;
 use tokio::sync::mpsc;
 
 pub use mdns_sd::{ServiceDaemon, ServiceEvent};
-
-const SERVICE_TYPE: &str = "_planarclip._tcp.local.";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LanDevice {
@@ -36,7 +35,7 @@ pub fn start_discovery(
     let host_name = hostname();
 
     let service_info = mdns_sd::ServiceInfo::new(
-        SERVICE_TYPE,
+        MDNS_SERVICE_TYPE,
         device_name,
         &host_name,
         &local_ip,
@@ -46,13 +45,14 @@ pub fn start_discovery(
 
     daemon.register(service_info)?;
     tracing::info!(
-        "mDNS registered: {} (_planarclip._tcp) on {}:{}",
+        "mDNS registered: {} ({}) on {}:{}",
         device_name,
+        MDNS_SERVICE_TYPE,
         local_ip,
         port
     );
 
-    let browse_rx = daemon.browse(SERVICE_TYPE)?;
+    let browse_rx = daemon.browse(MDNS_SERVICE_TYPE)?;
     let tx = event_tx;
     let local_peer_id = local_peer_id.to_string();
 

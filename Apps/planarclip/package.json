@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tauri dev",
+    "dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "dev:web": "vite",
     "build": "tauri build",
     "build:web": "vite build",
@@ -30,6 +30,5 @@
     "tw-animate-css": "^1.3.7",
     "typescript": "^5.7",
     "vite": "^8.0.16"
-  },
-  "packageManager": "pnpm@11.4.0"
+  }
 }

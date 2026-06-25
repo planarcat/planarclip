@@ -37,7 +37,7 @@ export function normalizeUserMessage(error: unknown, fallback: string, targetNam
   }
 
   if (raw.includes("配对码无效") || raw.includes("配对码不正确")) {
-    return "配对码不正确，或这次连接已经失效，请重新核对后再试。";
+    return "配对码不正确，请查看对方屏幕上最新的验证码后再试。";
   }
 
   if (raw.includes("已取消") || raw.includes("用户已取消")) {

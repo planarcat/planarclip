@@ -1,7 +1,7 @@
 import { DEFAULT_DEVICE_NAME } from "../constants/theme";
 import type { ConnectedPeer, Device, DeviceBuckets, LanDevicePayload, OS, TrustedPeerPayload } from "../types";
 
-const TRUSTED_PEER_FALLBACK_PORT = 19876;
+const TRUSTED_PEER_FALLBACK_PORT = import.meta.env.DEV ? 19877 : 19876;
 
 /** IPv6 hosts need brackets when shown with a port, e.g. `[::1]:19876`. */
 export function formatDeviceAddress(host: string, port?: number) {
