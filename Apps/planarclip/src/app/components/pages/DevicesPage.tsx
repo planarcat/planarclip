@@ -403,7 +403,7 @@ export function DevicesPage({
           <p className="text-sm text-secondary-foreground">查看设备列表，并直接发起连接或断开当前会话。</p>
         </div>
         <button
-          onClick={onShowPairing}
+          onClick={() => onShowPairing()}
           disabled={busyConnecting}
           aria-label={busyConnecting ? "正在连接新设备" : "连接新设备"}
           className="ml-4 shrink-0 rounded-lg bg-primary p-2 text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
@@ -419,7 +419,6 @@ export function DevicesPage({
           <DeviceSectionHeader
             accent="emerald"
             count={paired.length}
-            description={paired.length > 0 ? "在线且已建立连接" : undefined}
             icon={<ShieldCheck size={14} />}
             title="已配对"
           />

@@ -19,7 +19,7 @@ type UsePairingFlowOptions = {
   status: AppConnectionStatus;
   pairingInput: string;
   pairingStage: PairingStage;
-  pairingTargetName: string | null;
+  pairingTarget: Device | null;
   incomingRequest: ConnectionRequestPayload | null;
   setStatus: (status: AppConnectionStatus) => void;
   setLastMessage: (message: string) => void;
@@ -27,23 +27,23 @@ type UsePairingFlowOptions = {
   setShowPairing: (show: boolean) => void;
   setPairingInput: (value: string) => void;
   setPairingStage: (stage: PairingStage) => void;
-  setPairingTargetName: (targetName: string | null) => void;
+  setPairingTarget: (target: Device | null) => void;
   setPairingHelperText: (message: string) => void;
   setPairingError: (message: string | null) => void;
+  setPairingRotationHint: (message: string | null) => void;
+  setPairingCode: (code: string) => void;
   setIncomingRequest: (payload: ConnectionRequestPayload | null) => void;
 };
 
 /**
  * 管理配对弹层状态、手动配对、局域网连接与事件驱动的连接结果回写。
- * 输入：配对相关状态、连接状态 setter 与桌面命令执行器。
- * 输出：配对交互 handler，以及供连接桥接层调用的事件处理函数。
  */
 export function usePairingFlow({
   callCommand,
   status,
   pairingInput,
   pairingStage,
-  pairingTargetName,
+  pairingTarget,
   incomingRequest,
   setStatus,
   setLastMessage,
@@ -51,29 +51,32 @@ export function usePairingFlow({
   setShowPairing,
   setPairingInput,
   setPairingStage,
-  setPairingTargetName,
+  setPairingTarget,
   setPairingHelperText,
   setPairingError,
+  setPairingRotationHint,
+  setPairingCode,
   setIncomingRequest,
 }: UsePairingFlowOptions) {
   const pairingStageRef = useRef(pairingStage);
-  const pairingTargetRef = useRef<string | null>(pairingTargetName);
+  const pairingTargetRef = useRef<Device | null>(pairingTarget);
 
   useEffect(() => {
     pairingStageRef.current = pairingStage;
   }, [pairingStage]);
 
   useEffect(() => {
-    pairingTargetRef.current = pairingTargetName;
-  }, [pairingTargetName]);
+    pairingTargetRef.current = pairingTarget;
+  }, [pairingTarget]);
 
   const resetPairingFlow = useCallback(
     (closeModal = false) => {
       setPairingInput("");
       setPairingStage("idle");
-      setPairingTargetName(null);
+      setPairingTarget(null);
       setPairingHelperText("通过配对码或设备列表建立连接。");
       setPairingError(null);
+      setPairingRotationHint(null);
       setIncomingRequest(null);
       if (closeModal) {
         setShowPairing(false);
@@ -84,15 +87,17 @@ export function usePairingFlow({
       setPairingError,
       setPairingHelperText,
       setPairingInput,
+      setPairingRotationHint,
       setPairingStage,
-      setPairingTargetName,
+      setPairingTarget,
       setShowPairing,
     ],
   );
 
   const openPairingModal = useCallback(() => {
+    setPairingTarget(null);
     setShowPairing(true);
-  }, [setShowPairing]);
+  }, [setPairingTarget, setShowPairing]);
 
   const closePairingModal = useCallback(async () => {
     if (incomingRequest) {
@@ -121,6 +126,21 @@ export function usePairingFlow({
     resetPairingFlow(true);
   }, [callCommand, incomingRequest, pairingStage, resetPairingFlow, setLastMessage, setStatus]);
 
+  const handleRotatePairingCode = useCallback(async () => {
+    try {
+      const code = await callCommand<string>("rotate_pairing_code");
+      setPairingCode(code);
+      setPairingRotationHint("验证码已更新，请让对方输入新的 6 位数字。");
+      setPairingError(null);
+    } catch {
+      try {
+        const code = await callCommand<string>("get_pairing_code");
+        setPairingCode(code);
+      } catch {
+      }
+    }
+  }, [callCommand, setPairingCode, setPairingError, setPairingRotationHint]);
+
   const handleManualPair = useCallback(async () => {
     if (pairingInput.length !== 6) {
       setPairingError("请输入 6 位数字配对码。");
@@ -129,6 +149,7 @@ export function usePairingFlow({
 
     setPairingStage("manual_pairing");
     setPairingError(null);
+    setPairingRotationHint(null);
     setPairingHelperText(`正在根据配对码 ${pairingInput} 建立连接…`);
     setStatus("connecting");
     setLastMessage(`正在根据配对码 ${pairingInput} 建立连接…`);
@@ -160,6 +181,7 @@ export function usePairingFlow({
     setLastMessage,
     setPairingError,
     setPairingHelperText,
+    setPairingRotationHint,
     setPairingStage,
     setStatus,
   ]);
@@ -176,9 +198,11 @@ export function usePairingFlow({
         return;
       }
 
-      setPairingTargetName(device.name);
+      setShowPairing(true);
+      setPairingTarget(device);
       setPairingStage("requesting_device");
       setPairingError(null);
+      setPairingRotationHint(null);
       const isFamiliar = Boolean(device.isTrusted);
       const helperMessage = isFamiliar
         ? `正在重新连接 ${device.name}…`
@@ -231,12 +255,37 @@ export function usePairingFlow({
       setLastMessage,
       setPairingError,
       setPairingHelperText,
+      setPairingRotationHint,
       setPairingStage,
-      setPairingTargetName,
+      setPairingTarget,
       setShowPairing,
       setStatus,
       status,
     ],
+  );
+
+  const switchPairingTarget = useCallback(
+    async (device: Device) => {
+      if (
+        pairingStageRef.current === "awaiting_code" ||
+        pairingStageRef.current === "requesting_device" ||
+        pairingStageRef.current === "submitting_code"
+      ) {
+        try {
+          await callCommand("disconnect");
+        } catch {
+        }
+      }
+
+      setPairingInput("");
+      setPairingStage("idle");
+      setPairingError(null);
+      setPairingRotationHint(null);
+      setPairingTarget(device);
+      setStatus("offline");
+      await handleConnectLan(device);
+    },
+    [callCommand, handleConnectLan, setPairingError, setPairingInput, setPairingRotationHint, setPairingStage, setPairingTarget, setStatus],
   );
 
   const handleSubmitPairingCode = useCallback(async () => {
@@ -247,6 +296,7 @@ export function usePairingFlow({
 
     setPairingStage("submitting_code");
     setPairingError(null);
+    setPairingRotationHint(null);
     setStatus("connecting");
 
     try {
@@ -255,7 +305,7 @@ export function usePairingFlow({
       const message = normalizeUserMessage(
         error,
         "这次连接没有成功，请重新发起连接。",
-        pairingTargetRef.current ?? undefined,
+        pairingTargetRef.current?.name,
       );
       setPairingStage("error");
       setPairingError(message);
@@ -263,7 +313,7 @@ export function usePairingFlow({
       setStatus("offline");
       setLastMessage(message);
     }
-  }, [callCommand, pairingInput, setLastMessage, setPairingError, setPairingHelperText, setPairingStage, setStatus]);
+  }, [callCommand, pairingInput, setLastMessage, setPairingError, setPairingHelperText, setPairingRotationHint, setPairingStage, setStatus]);
 
   const handleRejectIncoming = useCallback(async () => {
     try {
@@ -282,6 +332,7 @@ export function usePairingFlow({
     }
 
     setPairingError(null);
+    setPairingRotationHint(null);
     setStatus("connecting");
 
     if (incomingRequest.requires_pairing) {
@@ -289,6 +340,11 @@ export function usePairingFlow({
       setShowPairing(true);
       setPairingHelperText(`${incomingRequest.device_name} 想要连接，请让对方输入本机配对码。`);
       setLastMessage(`${incomingRequest.device_name} 正在请求连接，请让对方输入本机配对码。`);
+      try {
+        const code = await callCommand<string>("get_pairing_code");
+        setPairingCode(code);
+      } catch {
+      }
     } else {
       setPairingStage("incoming_accepting");
       setLastMessage(`正在允许 ${incomingRequest.device_name} 连接…`);
@@ -304,7 +360,18 @@ export function usePairingFlow({
       setStatus("offline");
       setLastMessage(message);
     }
-  }, [callCommand, incomingRequest, setLastMessage, setPairingError, setPairingHelperText, setPairingStage, setShowPairing, setStatus]);
+  }, [
+    callCommand,
+    incomingRequest,
+    setLastMessage,
+    setPairingCode,
+    setPairingError,
+    setPairingHelperText,
+    setPairingRotationHint,
+    setPairingStage,
+    setShowPairing,
+    setStatus,
+  ]);
 
   const handleDisconnect = useCallback(async () => {
     try {
@@ -321,8 +388,8 @@ export function usePairingFlow({
   const handleConnectionRequest = useCallback(
     (payload: ConnectionRequestPayload) => {
       setIncomingRequest(payload);
-      setPairingTargetName(payload.device_name);
       setPairingError(null);
+      setPairingRotationHint(null);
       setStatus("connecting");
 
       if (payload.requires_pairing) {
@@ -336,24 +403,16 @@ export function usePairingFlow({
       setPairingHelperText(`${payload.device_name} 正在请求连接，请确认是否允许。`);
       setLastMessage(`${payload.device_name} 正在请求连接，请在确认窗口中选择是否允许。`);
     },
-    [
-      setIncomingRequest,
-      setLastMessage,
-      setPairingError,
-      setPairingHelperText,
-      setPairingStage,
-      setPairingTargetName,
-      setShowPairing,
-      setStatus,
-    ],
+    [setIncomingRequest, setLastMessage, setPairingError, setPairingHelperText, setPairingRotationHint, setPairingStage, setStatus],
   );
 
   const handleConnectionEstablished = useCallback(
     (payload: ConnectionEstablishedPayload) => {
+      const targetName = pairingTargetRef.current?.name;
       setConnectedPeer({
         name: payload.peer_name || "已连接设备",
         peerId: payload.peer_id,
-        address: pairingTargetRef.current ? `${pairingTargetRef.current} · 局域网直连` : "局域网直连",
+        address: targetName ? `${targetName} · 局域网直连` : "局域网直连",
         os: inferOs(payload.peer_name || "已连接设备"),
         source: "lan",
       });
@@ -373,7 +432,7 @@ export function usePairingFlow({
       const message = normalizeUserMessage(
         payload,
         "这次连接没有成功，请重新发起连接。",
-        pairingTargetRef.current ?? undefined,
+        pairingTargetRef.current?.name,
       );
       if (
         pairingStageRef.current === "incoming_request" ||
@@ -407,7 +466,9 @@ export function usePairingFlow({
     closePairingModal,
     handleManualPair,
     handleConnectLan,
+    switchPairingTarget,
     handleSubmitPairingCode,
+    handleRotatePairingCode,
     handleAcceptIncoming,
     handleRejectIncoming,
     handleDisconnect,

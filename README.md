@@ -6,7 +6,8 @@ PlanarClip 是一个基于 **Tauri 2 + React 18 + TypeScript + Rust** 构建的�
 
 - 文本剪贴板监听与会话级历史摘要
 - 局域网设备自动发现与直连
-- 6 位配对码确认、可信设备持久化
+- 6 位配对码确认、会话级动态配对码与 60 秒倒计时轮换、可信设备持久化
+- 配对弹层支持按目标设备展示、可切换设备列表与入站连接确认
 - 托盘驻留、窗口显隐与基础桌面交互
 - 外观设置持久化（明暗模式 / 主题色）
 
@@ -16,7 +17,7 @@ PlanarClip 是一个基于 **Tauri 2 + React 18 + TypeScript + Rust** 构建的�
 
 - 剪贴板文本自动同步
 - 局域网设备发现与连接
-- 配对码验证与连接请求确认
+- 配对码验证、会话级动态码轮换与连接请求确认
 - 最近 12 条文本同步历史展示
 - 设备页、剪贴板页、设置页三栏桌面 UI
 - 系统托盘入口与关闭窗口后驻留后台
@@ -49,15 +50,17 @@ PlanarClip 是一个基于 **Tauri 2 + React 18 + TypeScript + Rust** 构建的�
 - Rust stable
 - Tauri 2 对应平台依赖
 
-项目默认使用 **pnpm** 作为包管理器，应用主体位于 `Apps/planarclip/`。
+项目默认使用 **pnpm** 作为包管理器。仓库根目录为 **pnpm workspace**，应用主体位于 `Apps/planarclip/`。推荐在根目录执行 `pnpm install` 与 `pnpm dev` 等命令。前端开发服务器默认端口为 `1420`，HMR 端口为 `1421`。
 
 ## 安装与运行
 
-在 `Apps/planarclip/` 目录下执行：
+在仓库**根目录**执行：
 
 ```bash
 pnpm install
 ```
+
+首次切换到 workspace 布局后，若根目录尚无 `pnpm-lock.yaml`，上述命令会生成根级锁文件。也可进入 `Apps/planarclip/` 执行同名脚本，但安装依赖仍建议在根目录完成。
 
 ### 开发模式
 
@@ -97,9 +100,9 @@ pnpm tauri build
 
 ## 使用方式
 
-1. 启动桌面应用后，首页会显示当前设备的 6 位配对码。
-2. 在“设备”页可查看已发现的局域网设备，并直接发起连接。
-3. 若对方主动请求连接，应用会弹出连接确认弹层。
+1. 启动桌面应用后，配对弹层或设备页会展示当前设备的 6 位配对码；入站配对时会话码约 60 秒后自动轮换。
+2. 在“设备”页可查看已发现的局域网设备，点击连接后打开配对弹层，并可在弹层内切换目标设备。
+3. 若对方主动请求连接，应用会弹出配对确认弹层，请让对方输入你设备上显示的配对码。
 4. 建立连接后，文本剪贴板变化会自动同步。
 5. 在“剪贴板”页可查看最近同步摘要，在“设置”页可调整主题外观。
 6. 关闭主窗口时应用默认收回托盘，不会直接退出进程。
@@ -116,6 +119,7 @@ pnpm tauri build
 
 - `get_status`
 - `get_pairing_code`
+- `rotate_pairing_code`
 - `get_ui_settings`
 - `save_ui_settings`
 - `get_clipboard_history`
@@ -129,13 +133,17 @@ pnpm tauri build
 ## 项目结构
 
 ```text
-Apps/planarclip/
-├── src/
+planarclip/
+├── package.json             # workspace 根：转发脚本
+├── pnpm-workspace.yaml
+├── pnpm-lock.yaml
+├── Apps/planarclip/
+│   ├── src/
 │   ├── app/
 │   │   ├── components/
 │   │   │   ├── common/      # 通用小组件
 │   │   │   ├── layout/      # 侧栏与右侧概览面板
-│   │   │   ├── overlays/    # 配对弹层
+│   │   │   ├── overlays/    # 配对弹层、入站连接确认
 │   │   │   └── pages/       # 剪贴板 / 设备 / 设置页面
 │   │   ├── constants/       # 主题常量
 │   │   ├── hooks/           # 桌面桥接、配对流程、主题状态
@@ -185,6 +193,7 @@ Apps/planarclip/
 | 文本剪贴板监听与同步 | ✅ 已实现 |
 | 局域网设备发现 | ✅ 已实现 |
 | 配对码连接确认 | ✅ 已实现 |
+| 会话级配对码倒计时与轮换 | ✅ 已实现 |
 | 托盘与窗口驻留 | ✅ 已实现 |
 | 外观设置持久化 | ✅ 已实现 |
 | 剪贴板历史摘要展示 | ✅ 已实现 |
@@ -192,7 +201,17 @@ Apps/planarclip/
 | 文件同步 | 🚧 未实现 |
 | 桌面通知提醒 | 🚧 未实现 |
 
+## 项目文档
+
+| 文件 | 用途 |
+|------|------|
+| [`README.md`](./README.md) | 产品介绍、安装运行、能力边界与配置文件说明（面向开发者与用户） |
+| [`AGENTS.md`](./AGENTS.md) | 统一编码代理说明：协作约定、构建命令、UI 规范、GitNexus 与 MCP 约定（面向 Cursor / Claude Code 等 AI 工具） |
+| [`CLAUDE.md`](./CLAUDE.md) | 指向 `AGENTS.md` 的 Claude Code 入口（内容已合并，不再单独维护） |
+| [`Plans/`](./Plans/) | 功能方案讨论与执行记录 |
+
 ## 说明
 
 - 项目当前以桌面端体验为主，若只运行 Web 预览，连接相关能力会显示为预览态提示。
 - 若需要体验完整链路，请使用 `pnpm dev` 启动 Tauri 桌面应用。
+- 使用 AI 编码工具协作时，请优先阅读 [`AGENTS.md`](./AGENTS.md)。

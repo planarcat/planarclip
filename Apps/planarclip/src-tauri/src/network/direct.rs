@@ -326,14 +326,14 @@ pub async fn responder_accept_trusted(
     Ok(spawn_data_bridge(stream, initiator_name, pid, initiator_public_key))
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub async fn responder_verify_code(
     mut stream: TcpStream,
     device_name: &str,
     key_pair: &KeyPair,
     initiator_name: String,
     initiator_public_key: Vec<u8>,
-    pairing_code: &str,
+    pairing_code: std::sync::Arc<tokio::sync::Mutex<String>>,
+    mut on_code_rotated: impl FnMut(String) + Send,
     accept_rx: oneshot::Receiver<()>,
     mut reject_rx: mpsc::Receiver<()>,
 ) -> Result<DirectConnection, HandshakeError> {
@@ -352,7 +352,7 @@ pub async fn responder_verify_code(
             })).await;
             return Err(HandshakeError::Cancelled);
         }
-        _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
+        _ = tokio::time::sleep(std::time::Duration::from_secs(PAIRING_CODE_WAIT_SECS)) => {
             let _ = write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AuthResult {
                 success: false,
                 peer_name: None,
@@ -364,37 +364,47 @@ pub async fn responder_verify_code(
     };
 
     write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AwaitCode)).await?;
-    let received_code = tokio::select! {
-        frame = read_frame(&mut stream) => {
-            match frame? {
-                Frame::Handshake(HandshakeMessage::AuthCode { code }) => code,
-                _ => return Err(HandshakeError::Protocol("应收到配对码消息")),
+
+    let received_code = loop {
+        let received_code = tokio::select! {
+            frame = read_frame(&mut stream) => {
+                match frame? {
+                    Frame::Handshake(HandshakeMessage::AuthCode { code }) => Some(code),
+                    _ => return Err(HandshakeError::Protocol("应收到配对码消息")),
+                }
             }
-        }
-        reject = reject_rx.recv() => {
-            if reject.is_none() {
+            reject = reject_rx.recv() => {
+                if reject.is_none() {
+                    return Err(HandshakeError::Cancelled);
+                }
+                let _ = write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AuthResult {
+                    success: false,
+                    peer_name: None,
+                    public_key: None,
+                    reason: Some("rejected".into()),
+                })).await;
                 return Err(HandshakeError::Cancelled);
             }
-            let _ = write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AuthResult {
-                success: false,
-                peer_name: None,
-                public_key: None,
-                reason: Some("rejected".into()),
-            })).await;
-            return Err(HandshakeError::Cancelled);
+            _ = tokio::time::sleep(std::time::Duration::from_secs(PAIRING_CODE_WAIT_SECS)) => {
+                let new_code = generate_pairing_code();
+                {
+                    let mut guard = pairing_code.lock().await;
+                    *guard = new_code.clone();
+                }
+                on_code_rotated(new_code);
+                None
+            }
+        };
+
+        if received_code.is_none() {
+            continue;
         }
-        _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
-            let _ = write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AuthResult {
-                success: false,
-                peer_name: None,
-                public_key: None,
-                reason: Some("timeout".into()),
-            })).await;
-            return Err(HandshakeError::Timeout);
-        }
+
+        break received_code.unwrap();
     };
 
-    if received_code != pairing_code {
+    let expected_code = pairing_code.lock().await.clone();
+    if received_code != expected_code {
         write_frame(
             &mut stream,
             &Frame::Handshake(HandshakeMessage::AuthResult {
@@ -503,7 +513,8 @@ pub(crate) fn short_fingerprint(pk_bytes: &[u8]) -> String {
     peer_id_from_public_key(pk_bytes)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+pub const PAIRING_CODE_WAIT_SECS: u64 = 60;
+
 pub(crate) fn generate_pairing_code() -> String {
     use rand::Rng;
     format!("{:06}", rand::thread_rng().gen_range(0..1_000_000))
@@ -569,6 +580,7 @@ mod tests {
             let request = read_connect_request(stream).await.unwrap();
             let (accept_tx, accept_rx) = oneshot::channel();
             let (_reject_tx, reject_rx) = mpsc::channel(2);
+            let pairing_code = std::sync::Arc::new(tokio::sync::Mutex::new("123456".to_string()));
             let verify = tokio::spawn(async move {
                 responder_verify_code(
                     request.stream,
@@ -576,7 +588,8 @@ mod tests {
                     &responder_key_for_server,
                     request.initiator_name,
                     request.initiator_public_key,
-                    "123456",
+                    pairing_code,
+                    |_| {},
                     accept_rx,
                     reject_rx,
                 )
@@ -695,6 +708,7 @@ mod tests {
         let (accept_tx, accept_rx) = oneshot::channel();
         let (_reject_tx, reject_rx) = mpsc::channel(2);
 
+        let pairing_code = std::sync::Arc::new(tokio::sync::Mutex::new("123456".to_string()));
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let request = read_connect_request(stream).await.unwrap();
@@ -704,7 +718,8 @@ mod tests {
                 &responder_key_for_server,
                 request.initiator_name,
                 request.initiator_public_key,
-                "123456",
+                pairing_code,
+                |_| {},
                 accept_rx,
                 reject_rx,
             )
@@ -744,6 +759,7 @@ mod tests {
             let request = read_connect_request(stream).await.unwrap();
             let (accept_tx, accept_rx) = oneshot::channel();
             let (_reject_tx, reject_rx) = mpsc::channel(2);
+            let pairing_code = std::sync::Arc::new(tokio::sync::Mutex::new("123456".to_string()));
             let verify = tokio::spawn(async move {
                 responder_verify_code(
                     request.stream,
@@ -751,7 +767,8 @@ mod tests {
                     &responder_key_for_server,
                     request.initiator_name,
                     request.initiator_public_key,
-                    "123456",
+                    pairing_code,
+                    |_| {},
                     accept_rx,
                     reject_rx,
                 )

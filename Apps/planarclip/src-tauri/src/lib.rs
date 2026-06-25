@@ -57,6 +57,8 @@ pub struct AppState {
     pub pending_initiator: Arc<Mutex<Option<TcpStream>>>,
     pub pending_accept_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     pub pending_reject_tx: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+    pub pairing_session_code: Arc<Mutex<Option<Arc<Mutex<String>>>>>,
+    pub pairing_code_expires_at: Arc<Mutex<Option<i64>>>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -154,6 +156,36 @@ fn trusted_peer_payload(peer: &TrustedPeerData) -> TrustedPeerPayload {
         last_ip: peer.last_ip.clone(),
         auto_accept: peer.auto_accept.unwrap_or(true),
     }
+}
+
+const PAIRING_CODE_TTL_MS: i64 = 60_000;
+
+fn pairing_code_expires_at_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+        + PAIRING_CODE_TTL_MS
+}
+
+async fn start_pairing_session(state: &AppState, code: Arc<Mutex<String>>) {
+    *state.pairing_session_code.lock().await = Some(code);
+    *state.pairing_code_expires_at.lock().await = Some(pairing_code_expires_at_ms());
+}
+
+async fn clear_pairing_session(state: &AppState) {
+    *state.pairing_session_code.lock().await = None;
+    *state.pairing_code_expires_at.lock().await = None;
+}
+
+fn emit_pairing_code_rotated(app: &tauri::AppHandle, code: &str, expires_at_ms: i64) {
+    let _ = app.emit(
+        "pairing-code-rotated",
+        serde_json::json!({
+            "code": code,
+            "expires_at_ms": expires_at_ms,
+        }),
+    );
 }
 
 fn pairing_code_from_key_pair(kp: &KeyPair) -> String {
@@ -330,12 +362,36 @@ async fn get_status(state: tauri::State<'_, AppState>) -> Result<String, String>
 
 #[tauri::command]
 async fn get_pairing_code(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    if let Some(code_arc) = state.pairing_session_code.lock().await.as_ref() {
+        return Ok(code_arc.lock().await.clone());
+    }
+
     let kp_guard = state.key_pair.lock().await;
     if let Some(ref kp) = *kp_guard {
         Ok(pairing_code_from_key_pair(kp))
     } else {
         Err("密钥对尚未初始化".into())
     }
+}
+
+#[tauri::command]
+async fn rotate_pairing_code(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let code_arc = state
+        .pairing_session_code
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "当前没有进行中的配对验证。".to_string())?;
+
+    let new_code = direct::generate_pairing_code();
+    *code_arc.lock().await = new_code.clone();
+    let expires_at_ms = pairing_code_expires_at_ms();
+    *state.pairing_code_expires_at.lock().await = Some(expires_at_ms);
+    emit_pairing_code_rotated(&app, &new_code, expires_at_ms);
+    Ok(new_code)
 }
 
 #[tauri::command]
@@ -675,6 +731,8 @@ async fn disconnect(state: tauri::State<'_, AppState>) -> Result<(), String> {
         let _ = tx.send(()).await;
     }
 
+    clear_pairing_session(&state).await;
+
     Ok(())
 }
 
@@ -710,7 +768,7 @@ async fn finalize_incoming_connection(
     connected: Arc<Mutex<bool>>,
     connection: Arc<Mutex<Option<ConnectionHandle>>>,
     clip_tx: broadcast::Sender<ClipboardEvent>,
-    app_handle: tauri::AppHandle,
+    app_handle: &tauri::AppHandle,
 ) {
     {
         let mut cfg = config.lock().await;
@@ -809,7 +867,7 @@ async fn handle_incoming_connection(
                     connected,
                     connection,
                     clip_tx,
-                    app_handle,
+                    &app_handle,
                 )
                 .await;
             }
@@ -865,7 +923,7 @@ async fn handle_incoming_connection(
                     connected,
                     connection,
                     clip_tx,
-                    app_handle,
+                    &app_handle,
                 )
                 .await;
             }
@@ -877,7 +935,16 @@ async fn handle_incoming_connection(
             }
         }
     } else {
-        let pairing_code = pairing_code_from_key_pair(&key_pair);
+        let session_code = direct::generate_pairing_code();
+        let pairing_code = Arc::new(Mutex::new(session_code));
+        {
+            let app_state = app_handle.state::<AppState>();
+            start_pairing_session(app_state.inner(), pairing_code.clone()).await;
+            let initial_code = pairing_code.lock().await.clone();
+            let expires_at_ms = pairing_code_expires_at_ms();
+            emit_pairing_code_rotated(&app_handle, &initial_code, expires_at_ms);
+        }
+
         tracing::info!(
             "Unfamiliar peer {} — waiting for pairing code",
             initiator_name,
@@ -897,13 +964,24 @@ async fn handle_incoming_connection(
         *pending_accept_tx.lock().await = Some(accept_tx);
         *pending_reject_tx.lock().await = Some(reject_tx);
 
+        let app_handle_rotate = app_handle.clone();
+
         match direct::responder_verify_code(
             req.stream,
             &device_name,
             &key_pair,
             initiator_name.clone(),
             initiator_pk.clone(),
-            &pairing_code,
+            pairing_code,
+            move |new_code| {
+                let app = app_handle_rotate.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app.state::<AppState>();
+                    let expires_at_ms = pairing_code_expires_at_ms();
+                    *state.pairing_code_expires_at.lock().await = Some(expires_at_ms);
+                    emit_pairing_code_rotated(&app, &new_code, expires_at_ms);
+                });
+            },
             accept_rx,
             reject_rx,
         )
@@ -921,7 +999,7 @@ async fn handle_incoming_connection(
                     connected,
                     connection,
                     clip_tx,
-                    app_handle,
+                    &app_handle,
                 )
                 .await;
             }
@@ -932,6 +1010,11 @@ async fn handle_incoming_connection(
                 }
             }
         }
+    }
+
+    {
+        let app_state = app_handle.state::<AppState>();
+        clear_pairing_session(app_state.inner()).await;
     }
 
     *pending_reject_tx.lock().await = None;
@@ -963,6 +1046,8 @@ pub fn run() {
         pending_initiator: Arc::new(Mutex::new(None)),
         pending_accept_tx: Arc::new(Mutex::new(None)),
         pending_reject_tx: Arc::new(Mutex::new(None)),
+        pairing_session_code: Arc::new(Mutex::new(None)),
+        pairing_code_expires_at: Arc::new(Mutex::new(None)),
     };
 
     tauri::Builder::default()
@@ -1163,6 +1248,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_status,
             get_pairing_code,
+            rotate_pairing_code,
             get_ui_settings,
             get_clipboard_history,
             save_ui_settings,

@@ -6,7 +6,9 @@ settings:
 
 importers:
 
-  .:
+  .: {}
+
+  Apps/planarclip:
     dependencies:
       '@tauri-apps/api':
         specifier: ^2

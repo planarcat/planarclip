@@ -10,6 +10,7 @@ import type {
   ConnectionFailedPayload,
   ConnectionRequestPayload,
   LanDevicePayload,
+  PairingCodeRotatedPayload,
   PairingStage,
   TrustedPeerPayload,
   UiSettingsPayload,
@@ -25,6 +26,7 @@ type UseConnectionBridgeOptions = {
   setStatus: (status: AppConnectionStatus) => void;
   setLastMessage: (message: string) => void;
   setPairingCode: (pairingCode: string) => void;
+  onPairingCodeRotated?: (payload: PairingCodeRotatedPayload) => void;
   setLanDevices: (devices: LanDevicePayload[]) => void;
   setTrustedPeers: (peers: TrustedPeerPayload[]) => void;
   setClips: (clips: ReturnType<typeof mapClipboardHistory>) => void;
@@ -52,6 +54,7 @@ export function useConnectionBridge({
   setStatus,
   setLastMessage,
   setPairingCode,
+  onPairingCodeRotated,
   setLanDevices,
   setTrustedPeers,
   setClips,
@@ -172,6 +175,10 @@ export function useConnectionBridge({
         listen<ConnectionEndedPayload>("connection-ended", (event) => {
           onConnectionEnded(event.payload);
         }),
+        listen<PairingCodeRotatedPayload>("pairing-code-rotated", (event) => {
+          setPairingCode(event.payload.code);
+          onPairingCodeRotated?.(event.payload);
+        }),
       ]);
 
       if (disposed) {
@@ -201,6 +208,7 @@ export function useConnectionBridge({
     onConnectionEstablished,
     onConnectionFailed,
     onConnectionRequest,
+    onPairingCodeRotated,
     refreshConnectionStatus,
     setClips,
     setLanDevices,

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件是 PlanarClip 项目的编码代理说明，供 Cursor、Claude Code 等支持 `AGENTS.md` 的工具自动加载。更完整的产品与开发说明见仓库根目录 `README.md`。
+本文件是 PlanarClip 项目的**统一编码代理说明**，供 Cursor、Claude Code 等 AI 编码工具自动加载。原先独立的 `CLAUDE.md` 已合并至本文档；`CLAUDE.md` 仅保留为指向本文件的入口。更完整的产品与开发说明见仓库根目录 [`README.md`](./README.md)。
 
 ## 基本协作约定
 
@@ -15,10 +15,10 @@
 
 ## 构建与运行
 
-所有命令在 `Apps/planarclip/` 目录下执行：
+仓库根目录已配置 **pnpm workspace**，推荐在根目录执行以下命令（会转发到 `Apps/planarclip`）：
 
 ```bash
-pnpm install         # 安装依赖
+pnpm install         # 在根目录安装 workspace 依赖（首次或锁文件变更后）
 pnpm dev             # 启动完整应用（Tauri + Rust 后端 + 前端）
 pnpm dev:web         # 仅启动前端开发服务器 (localhost:1420)
 pnpm check           # 前端类型检查 + Rust cargo check
@@ -28,7 +28,9 @@ pnpm build:web       # 仅构建前端产物
 pnpm preview:web     # 预览前端构建结果
 ```
 
-命名约定：`pnpm <动作>` 表示完整应用流程，`pnpm <动作>:web` 表示仅执行前端 Web 流程。前端开发服务器端口为 1420，HMR 端口为 1421。`tauri.conf.json` 通过 `beforeDevCommand` / `beforeBuildCommand` 调用 `pnpm dev:web` 与 `pnpm build:web`。
+也可进入 `Apps/planarclip/` 直接执行同名脚本（workspace 内仍可用）。
+
+命名约定：`pnpm <动作>` 表示完整应用流程，`pnpm <动作>:web` 表示仅执行前端 Web 流程。前端开发服务器端口为 1420，HMR 端口为 1421。`tauri.conf.json` 通过 `beforeDevCommand` / `beforeBuildCommand` 调用 `pnpm dev:web` 与 `pnpm build:web`（在 `Apps/planarclip` 目录上下文中执行）。
 
 ## 技术栈
 
@@ -44,8 +46,12 @@ pnpm preview:web     # 预览前端构建结果
 ## 项目结构
 
 ```text
-Apps/planarclip/
-├── src/
+planarclip/                  # 仓库根目录（pnpm workspace）
+├── package.json             # workspace 根：转发 dev/build/check 等脚本
+├── pnpm-workspace.yaml      # workspace 成员与 allowBuilds 配置
+├── pnpm-lock.yaml           # 锁文件（根目录统一维护）
+├── Apps/planarclip/         # 桌面应用主体
+│   ├── src/
 │   ├── app/
 │   │   ├── components/
 │   │   │   ├── common/      # 通用小组件
@@ -77,9 +83,10 @@ Apps/planarclip/
 ## 当前状态
 
 - 桌面端主流程已可用：文本剪贴板同步、局域网设备发现、6 位配对码确认、可信设备持久化、托盘驻留、三栏 UI（剪贴板 / 设备 / 设置）。
+- 配对弹层（`PairingModal`）支持按目标设备展示、可切换局域网设备列表、60 秒倒计时与配对码轮换（会话级动态码 + `rotate_pairing_code`）。
 - 浏览器预览模式（`pnpm dev:web`）只能查看 UI；连接与配对能力需在 Tauri 桌面应用中体验。
 - 当前仅支持文本同步；图片与文件同步尚未接入。
-- 默认局域网直连端口为 `19876`。
+- 默认局域网直连端口为 `19876`；前端开发服务器端口为 `1420`，HMR 端口为 `1421`。
 
 ## UI 文案与交互约定
 
@@ -107,10 +114,14 @@ Apps/planarclip/
 - 修改 Figma 前应确认目标节点、页面和操作意图；删除节点、删除页面、覆盖样式、批量重命名、导出文件等操作属于有副作用操作，需谨慎执行。
 - Figma MCP 工具权限白名单应配置在 IDE 的 MCP 设置中（如 `.cursor/mcp.json`、Claude Code 的 `settings.json` / `settings.local.json`），不要只写在本文档中；本文档只记录项目协作约定。
 
+## GitNexus — 代码智能
+
+以下区块由 GitNexus 维护（`<!-- gitnexus:start -->` … `<!-- gitnexus:end -->`）。运行 `npx gitnexus analyze` 后会自动更新；请勿手工改写区块内正文。若工具仍向 `CLAUDE.md` 写入同类内容，请合并进本节并保持 `CLAUDE.md` 仅为指向本文档的入口。
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **planarclip** (1333 symbols, 2217 relationships, 111 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **planarclip** (1462 symbols, 2425 relationships, 121 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

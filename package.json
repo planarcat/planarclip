@@ -1,0 +1,15 @@
+{
+  "name": "planarclip-workspace",
+  "private": true,
+  "packageManager": "pnpm@11.4.0",
+  "scripts": {
+    "dev": "pnpm --filter planarclip dev",
+    "dev:web": "pnpm --filter planarclip dev:web",
+    "build": "pnpm --filter planarclip build",
+    "build:web": "pnpm --filter planarclip build:web",
+    "check": "pnpm --filter planarclip check",
+    "check:web": "pnpm --filter planarclip check:web",
+    "preview:web": "pnpm --filter planarclip preview:web",
+    "tauri": "pnpm --filter planarclip tauri"
+  }
+}
