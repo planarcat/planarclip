@@ -16,6 +16,7 @@ pub struct AppConfig {
     pub clipboard_history: Option<Vec<ClipboardHistoryEntry>>,
     pub launch_at_startup: Option<bool>,
     pub silent_start: Option<bool>,
+    pub auto_connect_trusted: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

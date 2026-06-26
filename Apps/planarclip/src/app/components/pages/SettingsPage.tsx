@@ -15,12 +15,16 @@ type SettingsPageProps = {
   silentStart: boolean;
   isSavingStartupSettings: boolean;
   startupSettingsLoaded: boolean;
+  autoConnectTrusted: boolean;
+  isSavingConnectionSettings: boolean;
+  connectionSettingsLoaded: boolean;
   onSchemeChange: (scheme: ColorScheme) => void;
   onThemeChange: (theme: ThemeColor) => void;
   onDeviceNameChange: (deviceName: string) => void;
   onDeviceNameSave: () => void;
   onLaunchAtStartupChange: (enabled: boolean) => void;
   onSilentStartChange: (enabled: boolean) => void;
+  onAutoConnectTrustedChange: (enabled: boolean) => void;
 };
 
 export function SettingsPage({
@@ -33,12 +37,16 @@ export function SettingsPage({
   silentStart,
   isSavingStartupSettings,
   startupSettingsLoaded,
+  autoConnectTrusted,
+  isSavingConnectionSettings,
+  connectionSettingsLoaded,
   onSchemeChange,
   onThemeChange,
   onDeviceNameChange,
   onDeviceNameSave,
   onLaunchAtStartupChange,
   onSilentStartChange,
+  onAutoConnectTrustedChange,
 }: SettingsPageProps) {
   const settingRows: Array<{
     label: string;
@@ -198,6 +206,24 @@ export function SettingsPage({
             disabled={!startupSettingsLoaded || isSavingStartupSettings}
             label="静默启动"
             onChange={onSilentStartChange}
+          />
+        </div>
+      </div>
+
+      <p className="mb-3 text-[13px] font-medium text-primary">连接</p>
+      <div className="mb-6 rounded-xl border border-border bg-card px-4">
+        <div className="flex items-start justify-between gap-4 py-3.5">
+          <div>
+            <p className="text-sm font-medium text-primary">自动连接已信任设备</p>
+            <p className="mt-0.5 text-[13px] font-medium leading-6 text-muted-foreground">
+              开启后，应用启动时会尝试连接所有已信任设备；局域网中发现已信任设备上线时，也会自动发起连接。
+            </p>
+          </div>
+          <SettingToggle
+            checked={autoConnectTrusted}
+            disabled={!connectionSettingsLoaded || isSavingConnectionSettings}
+            label="自动连接已信任设备"
+            onChange={onAutoConnectTrustedChange}
           />
         </div>
       </div>

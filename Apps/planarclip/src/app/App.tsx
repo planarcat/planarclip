@@ -9,6 +9,7 @@ import { DevicesPage } from "./components/pages/DevicesPage";
 import { SettingsPage } from "./components/pages/SettingsPage";
 import { getThemeById, normalizeColorScheme } from "./constants/theme";
 import { useConnectionBridge } from "./hooks/useConnectionBridge";
+import { useConnectionSettings } from "./hooks/useConnectionSettings";
 import { usePairingFlow } from "./hooks/usePairingFlow";
 import { useStartupSettings } from "./hooks/useStartupSettings";
 import { useUiTheme } from "./hooks/useUiTheme";
@@ -111,6 +112,17 @@ export default function App() {
     handleLaunchAtStartupChange,
     handleSilentStartChange,
   } = useStartupSettings({
+    tauriAvailable: TAURI_AVAILABLE,
+    callCommand,
+    setLastMessage,
+  });
+
+  const {
+    autoConnectTrusted,
+    isSavingConnectionSettings,
+    connectionSettingsLoaded,
+    handleAutoConnectTrustedChange,
+  } = useConnectionSettings({
     tauriAvailable: TAURI_AVAILABLE,
     callCommand,
     setLastMessage,
@@ -356,6 +368,10 @@ export default function App() {
             onDeviceNameSave={handleDeviceNameSave}
             onLaunchAtStartupChange={handleLaunchAtStartupChange}
             onSilentStartChange={handleSilentStartChange}
+            autoConnectTrusted={autoConnectTrusted}
+            isSavingConnectionSettings={isSavingConnectionSettings}
+            connectionSettingsLoaded={connectionSettingsLoaded}
+            onAutoConnectTrustedChange={handleAutoConnectTrustedChange}
           />
         )}
       </main>

@@ -7,6 +7,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 
 mod app_profile;
+mod auto_connect;
 mod clipboard;
 mod crypto;
 mod network;
@@ -76,6 +77,11 @@ struct UiSettingsPayload {
 struct StartupSettingsPayload {
     launch_at_startup: bool,
     silent_start: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct ConnectionSettingsPayload {
+    auto_connect_trusted: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -172,6 +178,12 @@ fn startup_settings_from_config(config: &AppConfig) -> StartupSettingsPayload {
     }
 }
 
+fn connection_settings_from_config(config: &AppConfig) -> ConnectionSettingsPayload {
+    ConnectionSettingsPayload {
+        auto_connect_trusted: config.auto_connect_trusted.unwrap_or(false),
+    }
+}
+
 fn load_clipboard_history_from_config(config: &AppConfig) -> Vec<ClipboardHistoryEntry> {
     config
         .clipboard_history
@@ -182,7 +194,7 @@ fn load_clipboard_history_from_config(config: &AppConfig) -> Vec<ClipboardHistor
         .collect()
 }
 
-async fn store_connected_peer(
+pub(crate) async fn store_connected_peer(
     connected_peer: &Arc<Mutex<Option<ConnectedPeerPayload>>>,
     peer_name: String,
     peer_id: String,
@@ -281,7 +293,7 @@ fn peer_auto_accepts(peer: &TrustedPeerData) -> bool {
     peer.auto_accept.unwrap_or(true)
 }
 
-fn upsert_trusted_peer(config: &mut AppConfig, incoming: TrustedPeerData) -> bool {
+pub(crate) fn upsert_trusted_peer(config: &mut AppConfig, incoming: TrustedPeerData) -> bool {
     let incoming = TrustedPeerData {
         peer_id: peer_id_from_public_key(&incoming.public_key),
         ..incoming
@@ -393,7 +405,7 @@ async fn clear_pending_connection_request(state: &AppState) {
     *state.pending_connection_request.lock().await = None;
 }
 
-fn emit_connection_failed(app: &tauri::AppHandle, error: &direct::HandshakeError) {
+pub(crate) fn emit_connection_failed(app: &tauri::AppHandle, error: &direct::HandshakeError) {
     let _ = app.emit(
         "connection-failed",
         serde_json::json!({
@@ -449,6 +461,29 @@ async fn save_startup_settings(
 
     let config = state.config.lock().await;
     Ok(startup_settings_from_config(&config))
+}
+
+#[tauri::command]
+async fn get_connection_settings(
+    state: tauri::State<'_, AppState>,
+) -> Result<ConnectionSettingsPayload, String> {
+    let config = state.config.lock().await;
+    Ok(connection_settings_from_config(&config))
+}
+
+#[tauri::command]
+async fn save_connection_settings(
+    state: tauri::State<'_, AppState>,
+    auto_connect_trusted: bool,
+) -> Result<ConnectionSettingsPayload, String> {
+    {
+        let mut config = state.config.lock().await;
+        config.auto_connect_trusted = Some(auto_connect_trusted);
+        storage_json::save_config(&config);
+    }
+
+    let config = state.config.lock().await;
+    Ok(connection_settings_from_config(&config))
 }
 
 #[tauri::command]
@@ -1278,10 +1313,22 @@ pub fn run() {
             {
                 let lan_devices = lan_devices.clone();
                 let app_handle = app_handle.clone();
+                let auto_connect_deps = auto_connect::AutoConnectDeps {
+                    config: config.clone(),
+                    key_pair: app.state::<AppState>().key_pair.clone(),
+                    connected: connected.clone(),
+                    connected_peer: connected_peer.clone(),
+                    connection: connection.clone(),
+                    clip_tx: clip_tx.clone(),
+                    pending_initiator: app.state::<AppState>().pending_initiator.clone(),
+                    pending_connection_request: app.state::<AppState>().pending_connection_request.clone(),
+                    tcp_port,
+                };
                 tauri::async_runtime::spawn(async move {
                     while let Some(event) = discovery_rx.recv().await {
                         let mut devices = lan_devices.lock().await;
                         let mut changed = false;
+                        let mut added_or_refreshed: Option<LanDevice> = None;
                         match event {
                             DiscoveryEvent::Added(dev) => {
                                 if let Some(existing) =
@@ -1293,13 +1340,15 @@ pub fn run() {
                                             dev.name,
                                             dev.ip
                                         );
-                                        *existing = dev;
+                                        *existing = dev.clone();
                                         changed = true;
+                                        added_or_refreshed = Some(dev);
                                     }
                                 } else {
                                     tracing::info!("LAN device added: {} ({})", dev.name, dev.ip);
-                                    devices.push(dev);
+                                    devices.push(dev.clone());
                                     changed = true;
+                                    added_or_refreshed = Some(dev);
                                 }
                             }
                             DiscoveryEvent::Removed { service_fullname } => {
@@ -1314,7 +1363,52 @@ pub fn run() {
                         if changed {
                             let _ = app_handle.emit("lan-devices-changed", &*devices);
                         }
+                        if let Some(device) = added_or_refreshed {
+                            let deps = auto_connect::AutoConnectDeps {
+                                config: auto_connect_deps.config.clone(),
+                                key_pair: auto_connect_deps.key_pair.clone(),
+                                connected: auto_connect_deps.connected.clone(),
+                                connected_peer: auto_connect_deps.connected_peer.clone(),
+                                connection: auto_connect_deps.connection.clone(),
+                                clip_tx: auto_connect_deps.clip_tx.clone(),
+                                pending_initiator: auto_connect_deps.pending_initiator.clone(),
+                                pending_connection_request: auto_connect_deps
+                                    .pending_connection_request
+                                    .clone(),
+                                tcp_port: auto_connect_deps.tcp_port,
+                            };
+                            auto_connect::maybe_auto_connect_discovered_device(
+                                &deps,
+                                &app_handle,
+                                &device,
+                            )
+                            .await;
+                        }
                     }
+                });
+            }
+
+            {
+                let startup_app_handle = app_handle.clone();
+                let startup_deps = auto_connect::AutoConnectDeps {
+                    config: config.clone(),
+                    key_pair: app.state::<AppState>().key_pair.clone(),
+                    connected: connected.clone(),
+                    connected_peer: connected_peer.clone(),
+                    connection: connection.clone(),
+                    clip_tx: clip_tx.clone(),
+                    pending_initiator: app.state::<AppState>().pending_initiator.clone(),
+                    pending_connection_request: app.state::<AppState>().pending_connection_request.clone(),
+                    tcp_port,
+                };
+                let startup_lan_devices = lan_devices.clone();
+                tauri::async_runtime::spawn(async move {
+                    auto_connect::auto_connect_trusted_on_startup(
+                        startup_deps,
+                        startup_app_handle,
+                        startup_lan_devices,
+                    )
+                    .await;
                 });
             }
 
@@ -1413,6 +1507,8 @@ pub fn run() {
             get_ui_settings,
             get_startup_settings,
             save_startup_settings,
+            get_connection_settings,
+            save_connection_settings,
             get_clipboard_history,
             get_pending_connection_request,
             save_ui_settings,

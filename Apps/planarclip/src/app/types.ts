@@ -71,6 +71,10 @@ export type StartupSettingsPayload = {
   silent_start: boolean;
 };
 
+export type ConnectionSettingsPayload = {
+  auto_connect_trusted: boolean;
+};
+
 export type ConnectedPeerPayload = {
   peer_name: string;
   peer_id: string;
