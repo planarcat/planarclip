@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { MAX_CONNECTIONS } from "../constants/connection";
 import type {
   AppConnectionStatus,
@@ -9,6 +9,7 @@ import type {
   ConnectionFailedPayload,
   ConnectionRequestPayload,
   Device,
+  LanDevicePayload,
   OutboundConnectionPendingPayload,
   PairingCodeNeededPayload,
   PairingStage,
@@ -59,6 +60,7 @@ type UsePairingFlowOptions = {
   callCommand: CommandExecutor;
   status: AppConnectionStatus;
   connectedCount: number;
+  connectedPeer: ConnectedPeer | null;
   pairingInput: string;
   pairingStage: PairingStage;
   pairingTarget: Device | null;
@@ -75,6 +77,7 @@ type UsePairingFlowOptions = {
   setPairingRotationHint: (message: string | null) => void;
   setPairingCode: (code: string) => void;
   setIncomingRequest: (payload: ConnectionRequestPayload | null) => void;
+  setLanDevices: Dispatch<SetStateAction<LanDevicePayload[]>>;
   showNotice: (message: string) => void;
 };
 
@@ -103,6 +106,7 @@ function resolveAppStatus(connectedCount: number, connecting: boolean): AppConne
 export function usePairingFlow({
   callCommand,
   connectedCount,
+  connectedPeer,
   pairingInput,
   pairingStage,
   pairingTarget,
@@ -119,12 +123,14 @@ export function usePairingFlow({
   setPairingRotationHint,
   setPairingCode,
   setIncomingRequest,
+  setLanDevices,
   showNotice,
 }: UsePairingFlowOptions) {
   const pairingStageRef = useRef(pairingStage);
   const pairingTargetRef = useRef<Device | null>(pairingTarget);
   const lastTerminalNoticeAtRef = useRef(0);
   const outboundCancelledRef = useRef(false);
+  const [switchConnectionTarget, setSwitchConnectionTarget] = useState<Device | null>(null);
 
   useEffect(() => {
     pairingStageRef.current = pairingStage;
@@ -255,7 +261,7 @@ export function usePairingFlow({
     }
   }, [callCommand, setPairingCode, setPairingError, setPairingInput, setPairingRotationHint]);
 
-  const handleConnectLan = useCallback(
+  const executeConnectLan = useCallback(
     async (device: Device) => {
       if (!device.host || !device.port) {
         setPairingError("当前设备缺少连接地址，请等待下一轮发现结果。");
@@ -352,6 +358,45 @@ export function usePairingFlow({
       showTerminalNotice,
     ],
   );
+
+  const handleConnectLan = useCallback(
+    async (device: Device) => {
+      if (device.status === "connected") {
+        await executeConnectLan(device);
+        return;
+      }
+
+      if (connectedCount > 0) {
+        setSwitchConnectionTarget(device);
+        return;
+      }
+
+      await executeConnectLan(device);
+    },
+    [connectedCount, executeConnectLan],
+  );
+
+  const confirmSwitchConnection = useCallback(async () => {
+    const target = switchConnectionTarget;
+    if (!target) {
+      return;
+    }
+
+    setSwitchConnectionTarget(null);
+    try {
+      await callCommand("disconnect");
+      setConnectedPeer(null);
+    } catch {
+      setLastMessage("断开当前连接时出了点问题，请稍后再试。");
+      return;
+    }
+
+    await executeConnectLan(target);
+  }, [callCommand, executeConnectLan, setConnectedPeer, setLastMessage, switchConnectionTarget]);
+
+  const cancelSwitchConnection = useCallback(() => {
+    setSwitchConnectionTarget(null);
+  }, []);
 
   const switchPairingTarget = useCallback(
     async (device: Device) => {
@@ -603,6 +648,10 @@ export function usePairingFlow({
       const message = isPeerOffline(payload)
         ? peerOfflineMessage(payload.peer_name)
         : peerOfflineMessage(payload.peer_name);
+      const offlinePeerId = payload.peer_id?.trim() || connectedPeer?.peerId?.trim();
+      if (offlinePeerId) {
+        setLanDevices((previous) => previous.filter((device) => device.peer_id !== offlinePeerId));
+      }
       try {
         await callCommand("disconnect");
       } catch {
@@ -612,7 +661,7 @@ export function usePairingFlow({
       showTerminalNotice(message);
       resetPairingFlow(true);
     },
-    [callCommand, connectedCount, resetPairingFlow, setConnectedPeer, setStatus, showTerminalNotice],
+    [callCommand, connectedCount, connectedPeer, resetPairingFlow, setConnectedPeer, setLanDevices, setStatus, showTerminalNotice],
   );
 
   const beginOutboundWaitingUi = useCallback(
@@ -722,6 +771,9 @@ export function usePairingFlow({
     handleConnectionEnded,
     handleOutboundConnectionPending,
     handlePairingCodeNeeded,
+    switchConnectionTarget,
+    confirmSwitchConnection,
+    cancelSwitchConnection,
     pairingStageRef,
     connectionLocked,
   };

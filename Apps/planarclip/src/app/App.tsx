@@ -4,6 +4,7 @@ import { DevicesPanel } from "./components/layout/DevicesPanel";
 import { Sidebar } from "./components/layout/Sidebar";
 import { IncomingConnectionPrompt } from "./components/overlays/IncomingConnectionPrompt";
 import { PairingModal } from "./components/overlays/PairingModal";
+import { SwitchConnectionPrompt } from "./components/overlays/SwitchConnectionPrompt";
 import { StatusNotice } from "./components/overlays/StatusNotice";
 import { ClipboardPage } from "./components/pages/ClipboardPage";
 import { DevicesPage } from "./components/pages/DevicesPage";
@@ -148,12 +149,16 @@ export default function App() {
     handleConnectionEnded,
     handleOutboundConnectionPending,
     handlePairingCodeNeeded,
+    switchConnectionTarget,
+    confirmSwitchConnection,
+    cancelSwitchConnection,
     pairingStageRef,
     connectionLocked,
   } = usePairingFlow({
     callCommand,
     status,
     connectedCount,
+    connectedPeer,
     pairingInput,
     pairingStage,
     pairingTarget,
@@ -170,6 +175,7 @@ export default function App() {
     setPairingRotationHint,
     setPairingCode,
     setIncomingRequest,
+    setLanDevices,
     showNotice: setNoticeMessage,
   });
 
@@ -182,7 +188,7 @@ export default function App() {
     setIsRefreshingDevices(true);
 
     try {
-      const refreshedDevices = await callCommand<LanDevicePayload[]>("get_lan_devices");
+      const refreshedDevices = await callCommand<LanDevicePayload[]>("refresh_lan_devices");
       setLanDevices(refreshedDevices);
       setLastMessage(
         refreshedDevices.length > 0
@@ -427,6 +433,17 @@ export default function App() {
           onRotatePairingCode={() => {
             void handleRotatePairingCode();
           }}
+        />
+      )}
+
+      {switchConnectionTarget && connectedPeer && (
+        <SwitchConnectionPrompt
+          currentDeviceName={connectedPeer.name}
+          targetDevice={switchConnectionTarget}
+          onConfirm={() => {
+            void confirmSwitchConnection();
+          }}
+          onCancel={cancelSwitchConnection}
         />
       )}
 

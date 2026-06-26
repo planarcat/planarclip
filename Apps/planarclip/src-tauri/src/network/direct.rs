@@ -53,9 +53,29 @@ pub async fn write_frame(writer: &mut (impl AsyncWrite + Unpin), frame: &Frame) 
 }
 
 pub async fn tcp_connect(ip: &str, port: u16) -> Result<TcpStream, std::io::Error> {
-    let stream = TcpStream::connect(format!("{}:{}", ip, port)).await?;
+    let stream = TcpStream::connect(format_socket_addr(ip, port)).await?;
     stream.set_nodelay(true)?;
     Ok(stream)
+}
+
+fn format_socket_addr(host: &str, port: u16) -> String {
+    let trimmed = host.trim();
+    if trimmed.contains(':') && !trimmed.starts_with('[') {
+        format!("[{trimmed}]:{port}")
+    } else {
+        format!("{trimmed}:{port}")
+    }
+}
+
+/// Returns true when something is accepting TCP connections on the PlanarClip port.
+pub async fn probe_tcp_reachable(ip: &str, port: u16, timeout: std::time::Duration) -> bool {
+    match tokio::time::timeout(timeout, TcpStream::connect(format_socket_addr(ip, port))).await {
+        Ok(Ok(mut stream)) => {
+            let _ = stream.shutdown().await;
+            true
+        }
+        _ => false,
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

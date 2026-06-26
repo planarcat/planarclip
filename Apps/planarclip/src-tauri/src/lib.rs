@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -139,6 +140,67 @@ fn lan_device_matches_removal(device: &LanDevice, service_fullname: &str) -> boo
 
     // Entries discovered before service_fullname was tracked still use display name.
     service_fullname.starts_with(&app_profile::mdns_service_fullname_prefix(&device.name))
+}
+
+const LAN_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const LAN_PROBE_INTERVAL: Duration = Duration::from_secs(15);
+
+async fn reconcile_lan_devices(
+    lan_devices: &Arc<Mutex<Vec<LanDevice>>>,
+    connected_peer: &Arc<Mutex<Option<ConnectedPeerPayload>>>,
+    app: &tauri::AppHandle,
+) {
+    let snapshot = lan_devices.lock().await.clone();
+    if snapshot.is_empty() {
+        return;
+    }
+
+    let connected_peer_id = connected_peer
+        .lock()
+        .await
+        .as_ref()
+        .map(|peer| peer.peer_id.clone());
+
+    let probe_results = futures_util::future::join_all(snapshot.iter().map(|device| {
+        let peer_id = device.peer_id.clone();
+        let ip = device.ip.clone();
+        let port = device.port;
+        let skip_probe = connected_peer_id.as_deref() == Some(peer_id.as_str());
+        async move {
+            if skip_probe {
+                return (peer_id, true);
+            }
+            let reachable =
+                direct::probe_tcp_reachable(&ip, port, LAN_PROBE_TIMEOUT).await;
+            (peer_id, reachable)
+        }
+    }))
+    .await;
+
+    let unreachable: std::collections::HashSet<_> = probe_results
+        .into_iter()
+        .filter(|(_, reachable)| !reachable)
+        .map(|(peer_id, _)| peer_id)
+        .collect();
+
+    if unreachable.is_empty() {
+        return;
+    }
+
+    let mut devices = lan_devices.lock().await;
+    let before = devices.len();
+    devices.retain(|device| !unreachable.contains(&device.peer_id));
+    if devices.len() == before {
+        return;
+    }
+
+    tracing::info!(
+        "Pruned {} unreachable LAN device(s) after TCP probe",
+        before - devices.len()
+    );
+    let updated = devices.clone();
+    drop(devices);
+    let _ = app.emit("lan-devices-changed", &updated);
 }
 
 fn is_default_device_name(value: &str) -> bool {
@@ -635,6 +697,16 @@ async fn pair(state: tauri::State<'_, AppState>, code: String) -> Result<String,
 
 #[tauri::command]
 async fn get_lan_devices(state: tauri::State<'_, AppState>) -> Result<Vec<LanDevice>, String> {
+    let devices = state.lan_devices.lock().await.clone();
+    Ok(devices)
+}
+
+#[tauri::command]
+async fn refresh_lan_devices(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<Vec<LanDevice>, String> {
+    reconcile_lan_devices(&state.lan_devices, &state.connected_peer, &app).await;
     let devices = state.lan_devices.lock().await.clone();
     Ok(devices)
 }
@@ -1556,6 +1628,24 @@ pub fn run() {
             }
 
             {
+                let probe_lan_devices = lan_devices.clone();
+                let probe_connected_peer = connected_peer.clone();
+                let probe_app_handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    loop {
+                        reconcile_lan_devices(
+                            &probe_lan_devices,
+                            &probe_connected_peer,
+                            &probe_app_handle,
+                        )
+                        .await;
+                        tokio::time::sleep(LAN_PROBE_INTERVAL).await;
+                    }
+                });
+            }
+
+            {
                 let startup_app_handle = app_handle.clone();
                 let startup_deps = auto_connect::AutoConnectDeps {
                     config: config.clone(),
@@ -1688,6 +1778,7 @@ pub fn run() {
             save_ui_settings,
             pair,
             get_lan_devices,
+            refresh_lan_devices,
             get_trusted_peers,
             remove_trusted_peer,
             set_peer_auto_accept,

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::clipboard::monitor::ClipboardMonitor;
@@ -137,6 +137,7 @@ impl ConnectionManager {
         app_handle: AppHandle,
     ) -> ConnectionHandle {
         let peer_name = conn.peer_name.clone();
+        let peer_id = conn.peer_id.clone();
         let sig_tx = conn.tx;
         let mut sig_rx = conn.rx;
         let dedup = Arc::new(Mutex::new(DedupStore::new(128)));
@@ -201,6 +202,18 @@ impl ConnectionManager {
                 return;
             }
 
+            {
+                let state = app_handle.state::<crate::AppState>();
+                let mut devices = state.lan_devices.lock().await;
+                let before = devices.len();
+                devices.retain(|device| device.peer_id != peer_id);
+                if devices.len() != before {
+                    let snapshot = devices.clone();
+                    drop(devices);
+                    let _ = app_handle.emit("lan-devices-changed", &snapshot);
+                }
+            }
+
             let message = if peer_name.is_empty() {
                 "对方设备已下线。".to_string()
             } else {
@@ -213,6 +226,7 @@ impl ConnectionManager {
                     "kind": kind,
                     "message": message,
                     "peer_name": peer_name,
+                    "peer_id": peer_id,
                 }),
             );
         });

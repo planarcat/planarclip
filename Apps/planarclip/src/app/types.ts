@@ -142,6 +142,7 @@ export type ConnectionEndedPayload = {
   kind?: string;
   message?: string;
   peer_name?: string;
+  peer_id?: string;
 };
 
 export type PairingCodeRotatedPayload = {
