@@ -11,7 +11,7 @@ import type {
   PairingStage,
 } from "../types";
 import { inferOs } from "../utils/device";
-import { normalizeUserMessage } from "../utils/message";
+import { isConnectionRejected, normalizeUserMessage } from "../utils/message";
 import { formatTime } from "../utils/time";
 
 type UsePairingFlowOptions = {
@@ -33,6 +33,7 @@ type UsePairingFlowOptions = {
   setPairingRotationHint: (message: string | null) => void;
   setPairingCode: (code: string) => void;
   setIncomingRequest: (payload: ConnectionRequestPayload | null) => void;
+  showNotice: (message: string) => void;
 };
 
 /**
@@ -57,9 +58,11 @@ export function usePairingFlow({
   setPairingRotationHint,
   setPairingCode,
   setIncomingRequest,
+  showNotice,
 }: UsePairingFlowOptions) {
   const pairingStageRef = useRef(pairingStage);
   const pairingTargetRef = useRef<Device | null>(pairingTarget);
+  const lastRejectionNoticeAtRef = useRef(0);
 
   useEffect(() => {
     pairingStageRef.current = pairingStage;
@@ -92,6 +95,21 @@ export function usePairingFlow({
       setPairingTarget,
       setShowPairing,
     ],
+  );
+
+  const handleRejectedConnection = useCallback(
+    (message: string) => {
+      const now = Date.now();
+      if (now - lastRejectionNoticeAtRef.current < 500) {
+        return;
+      }
+      lastRejectionNoticeAtRef.current = now;
+      showNotice(message);
+      setLastMessage(message);
+      setStatus("offline");
+      resetPairingFlow(true);
+    },
+    [resetPairingFlow, setLastMessage, setStatus, showNotice],
   );
 
   const openPairingModal = useCallback(() => {
@@ -240,6 +258,10 @@ export function usePairingFlow({
         resetPairingFlow(true);
       } catch (error) {
         const message = normalizeUserMessage(error, `暂时无法连接 ${device.name}，请稍后重试。`, device.name);
+        if (isConnectionRejected(error)) {
+          handleRejectedConnection(message);
+          return;
+        }
         setShowPairing(true);
         setPairingStage("error");
         setPairingError(message);
@@ -250,6 +272,7 @@ export function usePairingFlow({
     },
     [
       callCommand,
+      handleRejectedConnection,
       resetPairingFlow,
       setConnectedPeer,
       setLastMessage,
@@ -307,13 +330,17 @@ export function usePairingFlow({
         "这次连接没有成功，请重新发起连接。",
         pairingTargetRef.current?.name,
       );
+      if (isConnectionRejected(error)) {
+        handleRejectedConnection(message);
+        return;
+      }
       setPairingStage("error");
       setPairingError(message);
       setPairingHelperText(message);
       setStatus("offline");
       setLastMessage(message);
     }
-  }, [callCommand, pairingInput, setLastMessage, setPairingError, setPairingHelperText, setPairingRotationHint, setPairingStage, setStatus]);
+  }, [callCommand, handleRejectedConnection, pairingInput, setLastMessage, setPairingError, setPairingHelperText, setPairingRotationHint, setPairingStage, setStatus]);
 
   const handleRejectIncoming = useCallback(async () => {
     try {
@@ -434,6 +461,12 @@ export function usePairingFlow({
         "这次连接没有成功，请重新发起连接。",
         pairingTargetRef.current?.name,
       );
+
+      if (isConnectionRejected(payload)) {
+        handleRejectedConnection(message);
+        return;
+      }
+
       if (
         pairingStageRef.current === "incoming_request" ||
         pairingStageRef.current === "incoming_pairing" ||
@@ -447,7 +480,7 @@ export function usePairingFlow({
       setStatus("offline");
       setLastMessage(message);
     },
-    [resetPairingFlow, setLastMessage, setPairingError, setPairingHelperText, setPairingStage, setStatus],
+    [handleRejectedConnection, resetPairingFlow, setLastMessage, setPairingError, setPairingHelperText, setPairingStage, setStatus],
   );
 
   const handleConnectionEnded = useCallback(

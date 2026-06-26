@@ -9,6 +9,18 @@ export function rawMessage(error: unknown) {
   return String(error ?? "").trim();
 }
 
+export function isConnectionRejected(error: unknown) {
+  if (error && typeof error === "object" && "kind" in error) {
+    const { kind } = error as { kind?: unknown };
+    if (kind === "rejected") {
+      return true;
+    }
+  }
+
+  const raw = rawMessage(error);
+  return raw.includes("对方已拒绝连接") || raw.includes("对方已拒绝这次连接");
+}
+
 export function normalizeUserMessage(error: unknown, fallback: string, targetName?: string) {
   const raw = rawMessage(error);
 

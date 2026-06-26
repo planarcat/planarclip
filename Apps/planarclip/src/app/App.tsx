@@ -4,6 +4,7 @@ import { DevicesPanel } from "./components/layout/DevicesPanel";
 import { Sidebar } from "./components/layout/Sidebar";
 import { IncomingConnectionPrompt } from "./components/overlays/IncomingConnectionPrompt";
 import { PairingModal } from "./components/overlays/PairingModal";
+import { StatusNotice } from "./components/overlays/StatusNotice";
 import { ClipboardPage } from "./components/pages/ClipboardPage";
 import { DevicesPage } from "./components/pages/DevicesPage";
 import { SettingsPage } from "./components/pages/SettingsPage";
@@ -74,6 +75,7 @@ export default function App() {
   const [pairingError, setPairingError] = useState<string | null>(null);
   const [pairingRotationHint, setPairingRotationHint] = useState<string | null>(null);
   const [incomingRequest, setIncomingRequest] = useState<ConnectionRequestPayload | null>(null);
+  const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
   const [isRefreshingDevices, setIsRefreshingDevices] = useState(false);
 
   const devices = useMemo(() => buildDevices(lanDevices, connectedPeer, trustedPeers), [lanDevices, connectedPeer, trustedPeers]);
@@ -163,6 +165,7 @@ export default function App() {
     setPairingRotationHint,
     setPairingCode,
     setIncomingRequest,
+    showNotice: setNoticeMessage,
   });
 
   const handleRefreshDevices = useCallback(async () => {
@@ -417,6 +420,10 @@ export default function App() {
             void handleRotatePairingCode();
           }}
         />
+      )}
+
+      {noticeMessage && (
+        <StatusNotice message={noticeMessage} onDismiss={() => setNoticeMessage(null)} />
       )}
     </div>
   );
