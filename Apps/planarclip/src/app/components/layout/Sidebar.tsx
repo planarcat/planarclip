@@ -2,6 +2,7 @@ import { Clipboard, Moon, Palette, PlugZap, Radio, RefreshCw, Settings, Sun, Sun
 import { useEffect, useState } from "react";
 import { THEME_COLORS } from "../../constants/theme";
 import type { AppConnectionStatus, ColorScheme, Device, NavId, ThemeColor } from "../../types";
+import { MAX_CONNECTIONS } from "../../constants/connection";
 import { StatusDot } from "../common/StatusDot";
 import { ThemeSwatch } from "../common/ThemeSwatch";
 
@@ -169,7 +170,10 @@ export function Sidebar({
         {devices.length > 0 ? (
           <div className="space-y-1.5">
             {devices.map((device) => {
-              const connectDisabled = status === "connecting" || (status === "online" && device.status !== "connected");
+              const connectedCount = devices.filter((entry) => entry.status === "connected").length;
+              const atConnectionLimit = connectedCount >= MAX_CONNECTIONS;
+              const connectDisabled =
+                status === "connecting" || (atConnectionLimit && device.status !== "connected");
               const hostNameLabel = device.hostName?.trim();
               const showHostName = Boolean(hostNameLabel && hostNameLabel.toLocaleLowerCase() !== device.name.trim().toLocaleLowerCase());
               const actionTitle =
@@ -177,8 +181,8 @@ export function Sidebar({
                   ? `断开与 ${device.name} 的连接`
                   : status === "connecting"
                     ? `正在处理 ${device.name} 的连接`
-                    : status === "online"
-                      ? "请先断开当前连接"
+                    : atConnectionLimit
+                      ? "已超出连接上限，请先断开其中一个设备"
                       : `连接到 ${device.name}`;
 
               return (

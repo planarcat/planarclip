@@ -179,9 +179,9 @@ impl ConnectionManager {
             *connected.lock().await = false;
 
             let message = if peer_name.is_empty() {
-                "对方设备已断开连接，请重新连接。".to_string()
+                "对方设备已下线。".to_string()
             } else {
-                format!("{} 已断开连接，请重新连接。", peer_name)
+                format!("{} 已下线。", peer_name)
             };
             let kind = if peer_left { "peer_disconnected" } else { "connection_lost" };
             let _ = app_handle.emit(

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { AppConnectionStatus, Device } from "../../types";
+import { MAX_CONNECTIONS } from "../../constants/connection";
 import { categorizeDevices } from "../../utils/device";
 import { relativeTime } from "../../utils/time";
 import { OsIcon } from "../common/OsIcon";
@@ -378,18 +379,19 @@ export function DevicesPage({
   isRefreshingDevices,
 }: DevicesPageProps) {
   const busyConnecting = connectionStatus === "connecting";
-  const hasActiveSession = connectionStatus === "online";
+  const connectedCount = devices.filter((device) => device.status === "connected").length;
+  const atConnectionLimit = connectedCount >= MAX_CONNECTIONS;
   const { paired, nearbyFamiliar, nearbyStranger, offline } = categorizeDevices(devices);
   const nearbyDevices = [...nearbyFamiliar, ...nearbyStranger];
 
   const buildConnectState = (device: Device) => {
-    const connectDisabled = busyConnecting || hasActiveSession || !device.host || !device.port;
+    const connectDisabled = busyConnecting || (atConnectionLimit && device.status !== "connected") || !device.host || !device.port;
     const connectTitle = !device.host || !device.port
       ? "等待对方上线或刷新附近设备后再连接"
       : busyConnecting
         ? `正在处理 ${device.name} 的连接`
-        : hasActiveSession
-          ? "请先断开当前连接"
+        : atConnectionLimit
+          ? "已超出连接上限，请先断开其中一个设备"
           : `连接到 ${device.name}`;
 
     return { connectDisabled, connectTitle };
@@ -404,10 +406,10 @@ export function DevicesPage({
         </div>
         <button
           onClick={() => onShowPairing()}
-          disabled={busyConnecting}
-          aria-label={busyConnecting ? "正在连接新设备" : "连接新设备"}
+          disabled={busyConnecting || atConnectionLimit}
+          aria-label={busyConnecting ? "正在连接新设备" : atConnectionLimit ? "已超出连接上限" : "连接新设备"}
           className="ml-4 shrink-0 rounded-lg bg-primary p-2 text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
-          title={busyConnecting ? "正在连接新设备" : "连接新设备"}
+          title={busyConnecting ? "正在连接新设备" : atConnectionLimit ? "已超出连接上限" : "连接新设备"}
           type="button"
         >
           <Plus size={16} />

@@ -108,11 +108,11 @@ impl HandshakeError {
 
     pub fn user_message(&self) -> String {
         match self.reason_code() {
-            "rejected" => "对方已拒绝这次连接。".into(),
-            "invalid_code" => "配对码不正确，请重新核对后再试。".into(),
-            "timeout" => "这次连接已超时，请重新发起连接。".into(),
-            "cancelled" => "这次连接已取消，请重新发起连接。".into(),
-            "connection_lost" => "对方设备已断开连接，请重新发起连接。".into(),
+            "rejected" => "对方拒绝了这次连接。".into(),
+            "invalid_code" => "配对码不正确。".into(),
+            "timeout" => "对方拒绝了这次连接。".into(),
+            "cancelled" => "你已取消这次连接。".into(),
+            "connection_lost" => "对方设备已下线。".into(),
             "protocol_error" => "连接过程中出了点问题，请重新发起连接。".into(),
             _ => "暂时无法连接对方设备，请确认对方应用已打开，而且你们在同一局域网内。".into(),
         }
@@ -198,13 +198,13 @@ pub enum InitiatorResult {
     AwaitingCode { stream: TcpStream },
 }
 
-pub async fn initiator_connect(
+pub async fn initiator_send_connect_request(
     ip: &str,
     port: u16,
     device_name: &str,
     key_pair: &KeyPair,
     requires_confirmation: bool,
-) -> Result<InitiatorResult, HandshakeError> {
+) -> Result<TcpStream, HandshakeError> {
     let mut stream = tcp_connect(ip, port).await?;
 
     let req = HandshakeMessage::ConnectRequest {
@@ -215,6 +215,12 @@ pub async fn initiator_connect(
     };
     write_frame(&mut stream, &Frame::Handshake(req)).await?;
 
+    Ok(stream)
+}
+
+pub async fn initiator_read_connect_response(
+    mut stream: TcpStream,
+) -> Result<InitiatorResult, HandshakeError> {
     match read_frame(&mut stream).await? {
         Frame::Handshake(HandshakeMessage::AuthResult {
             success: true,
@@ -240,6 +246,31 @@ pub async fn initiator_connect(
             "expected AuthResult or AwaitCode after ConnectRequest",
         )),
     }
+}
+
+pub async fn initiator_abort(mut stream: TcpStream) {
+    let _ = write_frame(
+        &mut stream,
+        &Frame::Handshake(HandshakeMessage::AuthResult {
+            success: false,
+            peer_name: None,
+            public_key: None,
+            reason: Some("rejected".into()),
+        }),
+    )
+    .await;
+    let _ = stream.shutdown().await;
+}
+
+pub async fn initiator_connect(
+    ip: &str,
+    port: u16,
+    device_name: &str,
+    key_pair: &KeyPair,
+    requires_confirmation: bool,
+) -> Result<InitiatorResult, HandshakeError> {
+    let stream = initiator_send_connect_request(ip, port, device_name, key_pair, requires_confirmation).await?;
+    initiator_read_connect_response(stream).await
 }
 
 pub async fn initiator_send_code(

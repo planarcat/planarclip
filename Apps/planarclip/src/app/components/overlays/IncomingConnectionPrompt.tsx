@@ -1,4 +1,6 @@
 import { Loader2, ShieldCheck, Smartphone, X } from "lucide-react";
+import { CONNECTION_RESPONSE_TIMEOUT_SECS } from "../../constants/connection";
+import { usePairingCountdown } from "../../hooks/usePairingCountdown";
 import type { ConnectionRequestPayload } from "../../types";
 
 type IncomingConnectionPromptProps = {
@@ -6,10 +8,23 @@ type IncomingConnectionPromptProps = {
   accepting: boolean;
   onAccept: () => void;
   onReject: () => void;
+  onTimeout: () => void;
 };
 
-export function IncomingConnectionPrompt({ request, accepting, onAccept, onReject }: IncomingConnectionPromptProps) {
+export function IncomingConnectionPrompt({
+  request,
+  accepting,
+  onAccept,
+  onReject,
+  onTimeout,
+}: IncomingConnectionPromptProps) {
   const isPairing = request.requires_pairing;
+
+  const { remainingSeconds, progress, isUrgent } = usePairingCountdown({
+    active: !accepting,
+    onExpire: onTimeout,
+    durationSecs: CONNECTION_RESPONSE_TIMEOUT_SECS,
+  });
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center">
@@ -31,9 +46,7 @@ export function IncomingConnectionPrompt({ request, accepting, onAccept, onRejec
               </p>
               <p id="incoming-connection-description" className="mt-1 text-[13px] font-medium leading-6 text-muted-foreground">
                 <span className="text-foreground">{request.device_name}</span>{" "}
-                {isPairing
-                  ? "想要与这台设备配对。确认后请让对方输入本机配对码。"
-                  : "想要连接这台设备。请确认是否允许这次连接。"}
+                {isPairing ? "想要与这台设备配对，请确认是否允许。" : "想要连接这台设备，请确认是否允许。"}
               </p>
             </div>
             <button
@@ -49,12 +62,31 @@ export function IncomingConnectionPrompt({ request, accepting, onAccept, onRejec
         </div>
 
         <div className="space-y-4 p-5">
+          {!accepting && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-[11px] font-medium text-muted-foreground">
+                <span className={isUrgent ? "text-destructive" : undefined}>
+                  {remainingSeconds} 秒内未回应将视为拒绝
+                </span>
+                <span>{remainingSeconds}s</span>
+              </div>
+              <div className="h-[3px] w-full overflow-hidden rounded-full bg-secondary">
+                <div
+                  className={`h-full rounded-full transition-all duration-1000 ease-linear ${
+                    isUrgent ? "bg-destructive animate-pulse" : "bg-primary"
+                  }`}
+                  style={{ width: `${Math.max(0, Math.min(100, progress * 100))}%` }}
+                />
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center gap-3 rounded-xl border border-border bg-secondary/30 p-3">
             <ShieldCheck size={14} className="shrink-0 text-primary" />
             <p className="text-[13px] font-medium text-muted-foreground">
               {isPairing
-                ? "允许后，对方会收到配对提示，需要输入你屏幕上的 6 位配对码才能完成连接。"
-                : "允许后，这台设备会被加入已配对列表，下次在同一局域网内可直接连接。"}
+                ? "允许后，将进入配对流程，对方需要输入你屏幕上的配对码。"
+                : "允许后，这台设备会被加入已配对列表。"}
             </p>
           </div>
 

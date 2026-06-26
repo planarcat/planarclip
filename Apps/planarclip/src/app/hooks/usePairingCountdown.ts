@@ -6,10 +6,11 @@ export const PAIRING_URGENT_THRESHOLD_SECS = 10;
 type UsePairingCountdownOptions = {
   active: boolean;
   onExpire: () => void;
+  durationSecs?: number;
 };
 
-export function usePairingCountdown({ active, onExpire }: UsePairingCountdownOptions) {
-  const [remainingSeconds, setRemainingSeconds] = useState(PAIRING_COUNTDOWN_SECS);
+export function usePairingCountdown({ active, onExpire, durationSecs = PAIRING_COUNTDOWN_SECS }: UsePairingCountdownOptions) {
+  const [remainingSeconds, setRemainingSeconds] = useState(durationSecs);
   const onExpireRef = useRef(onExpire);
 
   useEffect(() => {
@@ -18,27 +19,27 @@ export function usePairingCountdown({ active, onExpire }: UsePairingCountdownOpt
 
   useEffect(() => {
     if (!active) {
-      setRemainingSeconds(PAIRING_COUNTDOWN_SECS);
+      setRemainingSeconds(durationSecs);
       return;
     }
 
-    setRemainingSeconds(PAIRING_COUNTDOWN_SECS);
+    setRemainingSeconds(durationSecs);
     const timer = window.setInterval(() => {
       setRemainingSeconds((prev) => {
         if (prev <= 1) {
           onExpireRef.current();
-          return PAIRING_COUNTDOWN_SECS;
+          return durationSecs;
         }
         return prev - 1;
       });
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [active]);
+  }, [active, durationSecs]);
 
   return {
     remainingSeconds,
-    progress: remainingSeconds / PAIRING_COUNTDOWN_SECS,
+    progress: remainingSeconds / durationSecs,
     isUrgent: remainingSeconds <= PAIRING_URGENT_THRESHOLD_SECS,
   };
 }

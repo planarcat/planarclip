@@ -13,9 +13,9 @@ type PairingModalProps = {
   helperText: string;
   errorMessage: string | null;
   rotationHint: string | null;
+  connectionLocked: boolean;
   onClose: () => void;
   onInputChange: (value: string) => void;
-  onManualPair: () => void;
   onSelectDevice: (device: Device) => void;
   onSubmitPairingCode: () => void;
   onRotatePairingCode: () => void;
@@ -41,10 +41,10 @@ function PairingModalHeader({
 
   const subtitle =
     stage === "incoming_pairing"
-      ? "请让对方输入下方配对码以建立连接"
+      ? "请让对方输入下方配对码以完成连接"
       : selectedDevice
-        ? "完成验证码配对以建立信任连接"
-        : "通过配对码与设备列表建立连接";
+        ? "选择设备后发起连接，按提示完成配对"
+        : "请先从列表中选择要连接的设备";
 
   return (
     <div className="flex items-center justify-between border-b border-border px-5 pb-4 pt-5">
@@ -85,21 +85,21 @@ function PairingStatusBar({ stage }: { stage: PairingStage }) {
     stage === "awaiting_code" ||
     stage === "incoming_pairing" ||
     stage === "requesting_device" ||
-    stage === "submitting_code" ||
-    stage === "manual_pairing";
+    stage === "submitting_code";
 
   if (!showStatus) {
     return null;
   }
 
-  const isBusy =
-    stage === "requesting_device" || stage === "submitting_code" || stage === "manual_pairing";
+  const isBusy = stage === "requesting_device" || stage === "submitting_code";
   const text =
-    stage === "requesting_device" || stage === "submitting_code" || stage === "manual_pairing"
-      ? stage === "submitting_code"
+    stage === "requesting_device"
+      ? "等待对方回应…"
+      : stage === "submitting_code"
         ? "正在验证…"
-        : "正在建立连接…"
-      : "等待验证";
+        : stage === "awaiting_code"
+          ? "请输入配对码"
+          : "等待对方输入配对码";
 
   return (
     <div className="flex items-center gap-3 rounded-xl border border-border bg-secondary/30 p-3">
@@ -147,9 +147,16 @@ function LocalPairingCodeSection({
           style={{ width: `${Math.max(0, Math.min(100, progress * 100))}%` }}
         />
       </div>
-      <p className="text-[11px] font-medium text-muted-foreground">
-        请在对方设备的 PlanarClip 中输入此验证码
-      </p>
+      <p className="text-[11px] font-medium text-muted-foreground">请在对方设备上输入此配对码</p>
+    </div>
+  );
+}
+
+function SelectDeviceHint() {
+  return (
+    <div className="rounded-xl border border-dashed border-border bg-secondary/20 px-4 py-6 text-center">
+      <p className="text-[13px] font-medium text-foreground">请先从下方列表选择要连接的设备</p>
+      <p className="mt-1 text-[11px] font-medium text-muted-foreground">选中后将向该设备发起连接请求</p>
     </div>
   );
 }
@@ -180,7 +187,7 @@ function SwitchableDeviceList({
               type="button"
               disabled={disabled}
               onClick={() => onSelectDevice(device)}
-              className="flex w-full items-center gap-3 rounded-xl border border-border bg-secondary/30 p-3 text-left transition-colors hover:border-primary/30 disabled:opacity-40"
+              className="flex w-full items-center gap-3 rounded-xl border border-border bg-secondary/30 p-3 text-left transition-colors hover:border-primary/30 disabled:pointer-events-none disabled:opacity-40"
             >
               <div className="rounded-lg bg-secondary p-2 text-muted-foreground">
                 <OsIcon os={device.os} size={15} />
@@ -211,9 +218,9 @@ export function PairingModal({
   helperText,
   errorMessage,
   rotationHint,
+  connectionLocked,
   onClose,
   onInputChange,
-  onManualPair,
   onSelectDevice,
   onSubmitPairingCode,
   onRotatePairingCode,
@@ -227,25 +234,28 @@ export function PairingModal({
   const activeTarget = selectedDevice?.name ? selectedDevice : null;
   const listDevices = allDiscoverable.filter((device) => device.id !== activeTarget?.id);
 
-  const countdownActive = stage === "awaiting_code" || stage === "incoming_pairing";
+  const showLocalPairingCode = stage === "incoming_pairing";
+  const showPairingInput = stage === "awaiting_code" || stage === "submitting_code";
+  const inboundPairing = stage === "incoming_pairing";
+
+  const pairingCodeCountdownActive = stage === "awaiting_code" || stage === "incoming_pairing";
   const { progress, isUrgent } = usePairingCountdown({
-    active: countdownActive,
+    active: pairingCodeCountdownActive,
     onExpire: onRotatePairingCode,
   });
 
   const selectFromList = useCallback(
     (device: Device) => {
+      if (connectionLocked) {
+        return;
+      }
       setSelectedDevice(device);
       onSelectDevice(device);
     },
-    [onSelectDevice],
+    [connectionLocked, onSelectDevice],
   );
 
-  const submitting =
-    stage === "manual_pairing" || stage === "requesting_device" || stage === "submitting_code";
-  const inboundPairing = stage === "incoming_pairing" || stage === "incoming_accepting";
-  const submitLabel = stage === "submitting_code" ? "正在提交…" : "验证";
-  const closeLabel = submitting || inboundPairing ? "取消这次连接" : "关闭";
+  const closeLabel = connectionLocked || inboundPairing ? "取消这次连接" : "关闭";
   const helperLine = errorMessage ?? rotationHint ?? helperText;
 
   return (
@@ -259,53 +269,73 @@ export function PairingModal({
           closeLabel={closeLabel}
         />
 
-        {activeTarget && stage !== "incoming_pairing" && <SelectedDeviceCard device={activeTarget} />}
+        {activeTarget && !inboundPairing && <SelectedDeviceCard device={activeTarget} />}
 
         <div className="max-h-[80vh] space-y-5 overflow-y-auto p-5">
+          {!activeTarget && <SelectDeviceHint />}
+
           <PairingStatusBar stage={stage} />
 
-          <LocalPairingCodeSection pairingCode={pairingCode} isUrgent={isUrgent} progress={progress} />
+          {showLocalPairingCode && (
+            <LocalPairingCodeSection pairingCode={pairingCode} isUrgent={isUrgent} progress={progress} />
+          )}
 
-          <div className="flex items-center gap-3">
-            <div className="h-px flex-1 bg-border" />
-            <span className="text-[10px] font-medium text-muted-foreground">或输入对方的验证码</span>
-            <div className="h-px flex-1 bg-border" />
-          </div>
-
-          <div>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={6}
-                placeholder="000000"
-                value={input}
-                onChange={(event) => onInputChange(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                disabled={submitting || inboundPairing}
-                className="flex-1 rounded-lg border border-border bg-secondary px-3 py-2.5 text-center font-mono text-base tracking-[0.2em] text-foreground transition-colors placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none disabled:opacity-50"
-              />
-              <button
-                onClick={stage === "awaiting_code" ? onSubmitPairingCode : onManualPair}
-                disabled={input.length !== 6 || submitting || inboundPairing}
-                className="shrink-0 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
-                type="button"
+          {showPairingInput && (
+            <div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  placeholder="000000"
+                  value={input}
+                  onChange={(event) => onInputChange(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                  disabled={stage === "submitting_code"}
+                  className="flex-1 rounded-lg border border-border bg-secondary px-3 py-2.5 text-center font-mono text-base tracking-[0.2em] text-foreground transition-colors placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none disabled:opacity-50"
+                />
+                <button
+                  onClick={onSubmitPairingCode}
+                  disabled={input.length !== 6 || stage === "submitting_code"}
+                  className="shrink-0 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+                  type="button"
+                >
+                  {stage === "submitting_code" ? <Loader2 size={15} className="animate-spin" /> : "验证"}
+                </button>
+              </div>
+              <p
+                className={`mt-2 text-[11px] font-medium ${
+                  errorMessage ? "text-destructive" : rotationHint ? "text-primary" : "text-muted-foreground"
+                }`}
               >
-                {submitting ? <Loader2 size={15} className="animate-spin" /> : submitLabel}
-              </button>
+                {helperLine}
+              </p>
             </div>
+          )}
+
+          {!showPairingInput && !inboundPairing && (
             <p
-              className={`mt-2 text-[11px] font-medium ${
+              className={`text-[11px] font-medium ${
                 errorMessage ? "text-destructive" : rotationHint ? "text-primary" : "text-muted-foreground"
               }`}
             >
               {helperLine}
             </p>
-          </div>
+          )}
+
+          {inboundPairing && (
+            <p
+              className={`text-center text-[11px] font-medium ${
+                errorMessage ? "text-destructive" : rotationHint ? "text-primary" : "text-muted-foreground"
+              }`}
+            >
+              {helperLine}
+            </p>
+          )}
 
           {!inboundPairing && (
             <SwitchableDeviceList
               devices={listDevices}
-              disabled={submitting}
+              disabled={connectionLocked}
               onSelectDevice={selectFromList}
             />
           )}

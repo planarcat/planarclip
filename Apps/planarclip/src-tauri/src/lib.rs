@@ -2,7 +2,6 @@ use std::sync::Arc;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 
@@ -30,6 +29,7 @@ const DEFAULT_DEVICE_NAME: &str = "我的设备";
 const DEFAULT_UI_COLOR_SCHEME: &str = "dark";
 const DEFAULT_UI_THEME_COLOR: &str = "cyan";
 const MAX_CLIPBOARD_HISTORY: usize = 12;
+const MAX_CONNECTIONS: usize = 5;
 
 fn default_device_name() -> String {
     let host_name = hostname::get()
@@ -59,6 +59,8 @@ pub struct AppState {
     pub clipboard_history: Arc<Mutex<Vec<ClipboardHistoryEntry>>>,
     pub lan_devices: Arc<Mutex<Vec<LanDevice>>>,
     pub pending_initiator: Arc<Mutex<Option<TcpStream>>>,
+    pub pending_outbound: Arc<Mutex<Option<TcpStream>>>,
+    pub outbound_abort: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     pub pending_accept_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     pub pending_reject_tx: Arc<Mutex<Option<mpsc::Sender<()>>>>,
     pub pending_connection_request: Arc<Mutex<Option<window::ConnectionRequestPayload>>>,
@@ -401,6 +403,23 @@ fn merge_clipboard_history(history: &mut Vec<ClipboardHistoryEntry>, entry: Clip
     history.truncate(MAX_CLIPBOARD_HISTORY);
 }
 
+async fn active_connection_count(state: &AppState) -> usize {
+    if *state.connected.lock().await {
+        1
+    } else {
+        0
+    }
+}
+
+async fn abort_outbound_handshake(state: &AppState) {
+    if let Some(tx) = state.outbound_abort.lock().await.take() {
+        let _ = tx.send(());
+    }
+    if let Some(stream) = state.pending_outbound.lock().await.take() {
+        direct::initiator_abort(stream).await;
+    }
+}
+
 async fn clear_pending_connection_request(state: &AppState) {
     *state.pending_connection_request.lock().await = None;
 }
@@ -686,6 +705,10 @@ async fn connect_lan(
     port: u16,
     peer_id: Option<String>,
 ) -> Result<String, String> {
+    if active_connection_count(state.inner()).await >= MAX_CONNECTIONS {
+        return Err("已超出连接上限".into());
+    }
+
     let (device_name, key_pair, requires_confirmation) = {
         let config = state.config.lock().await;
         let kp = state.key_pair.lock().await;
@@ -710,7 +733,45 @@ async fn connect_lan(
         )
     };
 
-    match direct::initiator_connect(&ip, port, &device_name, &key_pair, requires_confirmation).await {
+    let handshake = match direct::initiator_send_connect_request(
+        &ip,
+        port,
+        &device_name,
+        &key_pair,
+        requires_confirmation,
+    )
+    .await
+    {
+        Ok(stream) => {
+            let outbound = Arc::new(Mutex::new(Some(stream)));
+            let (abort_tx, abort_rx) = oneshot::channel();
+            *state.outbound_abort.lock().await = Some(abort_tx);
+
+            let outbound_read = outbound.clone();
+            let read_task = async move {
+                let mut guard = outbound_read.lock().await;
+                let stream = guard.take().ok_or(direct::HandshakeError::Cancelled)?;
+                direct::initiator_read_connect_response(stream).await
+            };
+
+            let result = tokio::select! {
+                result = read_task => result,
+                _ = abort_rx => {
+                    let mut guard = outbound.lock().await;
+                    if let Some(stream) = guard.take() {
+                        direct::initiator_abort(stream).await;
+                    }
+                    Err(direct::HandshakeError::Cancelled)
+                }
+            };
+
+            *state.outbound_abort.lock().await = None;
+            result
+        }
+        Err(error) => Err(error),
+    };
+
+    match handshake {
         Ok(InitiatorResult::Connected(conn)) => {
             let peer_name = conn.peer_name.clone();
             let peer_id = conn.peer_id.clone();
@@ -869,12 +930,14 @@ async fn reject_connection(state: tauri::State<'_, AppState>) -> Result<(), Stri
 
 #[tauri::command]
 async fn disconnect(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    abort_outbound_handshake(state.inner()).await;
+
     *state.connected.lock().await = false;
     *state.connection.lock().await = None;
     clear_connected_peer(&state.connected_peer).await;
 
-    if let Some(mut stream) = state.pending_initiator.lock().await.take() {
-        let _ = stream.shutdown().await;
+    if let Some(stream) = state.pending_initiator.lock().await.take() {
+        direct::initiator_abort(stream).await;
     }
 
     let _ = state.pending_accept_tx.lock().await.take();
@@ -1211,6 +1274,8 @@ pub fn run() {
         clipboard_history: Arc::new(Mutex::new(initial_clipboard_history)),
         lan_devices: Arc::new(Mutex::new(Vec::new())),
         pending_initiator: Arc::new(Mutex::new(None)),
+        pending_outbound: Arc::new(Mutex::new(None)),
+        outbound_abort: Arc::new(Mutex::new(None)),
         pending_accept_tx: Arc::new(Mutex::new(None)),
         pending_reject_tx: Arc::new(Mutex::new(None)),
         pending_connection_request: Arc::new(Mutex::new(None)),

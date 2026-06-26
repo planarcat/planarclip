@@ -12,13 +12,86 @@ export function rawMessage(error: unknown) {
 export function isConnectionRejected(error: unknown) {
   if (error && typeof error === "object" && "kind" in error) {
     const { kind } = error as { kind?: unknown };
-    if (kind === "rejected") {
+    if (kind === "rejected" || kind === "timeout" || kind === "cancelled") {
       return true;
     }
   }
 
   const raw = rawMessage(error);
-  return raw.includes("对方已拒绝连接") || raw.includes("对方已拒绝这次连接");
+  return (
+    raw.includes("对方已拒绝") ||
+    raw.includes("对方拒绝了") ||
+    raw.includes("连接请求已超时") ||
+    raw.includes("这次连接已超时") ||
+    raw.includes("你已取消") ||
+    raw.includes("已取消这次连接")
+  );
+}
+
+export function isConnectionTimeout(error: unknown) {
+  if (error && typeof error === "object" && "kind" in error) {
+    return (error as { kind?: unknown }).kind === "timeout";
+  }
+  const raw = rawMessage(error);
+  return raw.includes("连接请求已超时") || raw.includes("这次连接已超时");
+}
+
+export function isInvalidPairingCode(error: unknown) {
+  if (error && typeof error === "object" && "kind" in error) {
+    return (error as { kind?: unknown }).kind === "invalid_code";
+  }
+  const raw = rawMessage(error);
+  return raw.includes("配对码无效") || raw.includes("配对码不正确");
+}
+
+export function isPeerOffline(error: unknown) {
+  if (error && typeof error === "object" && "kind" in error) {
+    const kind = (error as { kind?: unknown }).kind;
+    return kind === "connection_lost" || kind === "peer_disconnected";
+  }
+  const raw = rawMessage(error);
+  return raw.includes("已下线") || raw.includes("已断开连接");
+}
+
+/** 主动发起连接时，对方明确拒绝 */
+export const MSG_PEER_REJECTED = "对方拒绝了这次连接。";
+
+/** 等待对方回应超时（与拒绝同等反馈） */
+export const MSG_PEER_RESPONSE_TIMEOUT = "对方拒绝了这次连接。";
+
+/** 本机关闭窗口取消出站连接 */
+export const MSG_SELF_CANCELLED_OUTBOUND = "你已取消这次连接。";
+
+/** 本机主动取消入站配对或连接流程 */
+export const MSG_SELF_CANCELLED_INBOUND = "你已取消这次连接。";
+
+/** 本机未及时回应入站连接确认（倒计时超时） */
+export const MSG_SELF_INCOMING_TIMEOUT = "未及时回应，这次连接已自动拒绝。";
+
+/** 配对码错误 */
+export const MSG_INVALID_PAIRING_CODE = "配对码错误，请重新输入。";
+
+/** 配对码输入阶段超时后轮换 */
+export const MSG_PAIRING_CODE_REFRESHED = "配对码已更新，请重新输入。";
+
+/** 连接数已达上限 */
+export const MSG_CONNECTION_LIMIT =
+  "已超出连接上限，请先断开其中一个设备后再连接。";
+
+/** 网络类连接失败 */
+export function connectionUnavailableMessage(targetName?: string) {
+  if (targetName) {
+    return `连接失败，请确认本机与 ${targetName} 的网络状态。`;
+  }
+  return "连接失败，请确认本机与对方的网络状态。";
+}
+
+/** 对方下线 */
+export function peerOfflineMessage(peerName?: string) {
+  if (peerName?.trim()) {
+    return `${peerName.trim()} 已下线。`;
+  }
+  return "对方设备已下线。";
 }
 
 export function normalizeUserMessage(error: unknown, fallback: string, targetName?: string) {
@@ -26,6 +99,10 @@ export function normalizeUserMessage(error: unknown, fallback: string, targetNam
 
   if (!raw) {
     return fallback;
+  }
+
+  if (raw.includes("已超出连接上限")) {
+    return MSG_CONNECTION_LIMIT;
   }
 
   if (raw.includes("配对码必须为 6 位数字")) {
@@ -40,24 +117,41 @@ export function normalizeUserMessage(error: unknown, fallback: string, targetNam
     return "设备还在准备连接信息，请稍后再试。";
   }
 
-  if (raw.includes("对方已拒绝连接") || raw.includes("对方已拒绝这次连接")) {
-    return "对方没有继续这次连接，请重新发起连接。";
+  if (raw.includes("对方已拒绝") || raw.includes("对方拒绝了")) {
+    return MSG_PEER_REJECTED;
   }
 
-  if (raw.includes("配对码已过期") || raw.includes("这次连接已超时")) {
-    return "这次配对已超时，请重新发起连接并输入新的配对码。";
+  if (raw.includes("连接请求已超时") || raw.includes("这次连接已超时")) {
+    return MSG_PEER_RESPONSE_TIMEOUT;
+  }
+
+  if (raw.includes("配对码已过期")) {
+    return MSG_PAIRING_CODE_REFRESHED;
   }
 
   if (raw.includes("配对码无效") || raw.includes("配对码不正确")) {
-    return "配对码不正确，请查看对方屏幕上最新的验证码后再试。";
+    return MSG_INVALID_PAIRING_CODE;
   }
 
-  if (raw.includes("已取消") || raw.includes("用户已取消")) {
-    return "这次连接已经取消，你可以重新选择设备。";
+  if (raw.includes("未及时回应") || raw.includes("已自动拒绝")) {
+    return MSG_SELF_INCOMING_TIMEOUT;
+  }
+
+  if (raw.includes("你已取消") || raw.includes("已取消这次连接")) {
+    return MSG_SELF_CANCELLED_OUTBOUND;
+  }
+
+  if (raw.includes("用户已取消") || raw.includes("已取消")) {
+    return MSG_SELF_CANCELLED_OUTBOUND;
+  }
+
+  if (raw.includes("已下线")) {
+    return peerOfflineMessage(targetName);
   }
 
   if (raw.includes("已断开连接")) {
-    return raw;
+    const nameFromRaw = raw.replace(/已断开连接.*/, "").trim();
+    return peerOfflineMessage(targetName ?? (nameFromRaw || undefined));
   }
 
   if (
@@ -68,14 +162,11 @@ export function normalizeUserMessage(error: unknown, fallback: string, targetNam
     raw.includes("actively refused") ||
     raw.includes("暂时无法连接对方设备")
   ) {
-    if (targetName) {
-      return `暂时连不上 ${targetName}，请确认对方应用已打开，而且你们在同一局域网内。`;
-    }
-    return "暂时无法连接对方设备，请确认对方应用已打开，而且你们在同一局域网内。";
+    return connectionUnavailableMessage(targetName);
   }
 
   if (raw.includes("协议错误") || raw.includes("帧错误") || raw.includes("连接过程中出了点问题")) {
-    return "连接过程中出了点问题，请重新发起连接。";
+    return connectionUnavailableMessage(targetName);
   }
 
   if (raw.startsWith("连接失败：") || raw.startsWith("配对失败：")) {

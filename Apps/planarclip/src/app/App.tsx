@@ -32,7 +32,7 @@ import type {
   ViewMode,
 } from "./types";
 import { buildDevices } from "./utils/device";
-import { normalizeUserMessage } from "./utils/message";
+import { MSG_PAIRING_CODE_REFRESHED, normalizeUserMessage } from "./utils/message";
 import { loadPreviewUiSettings } from "./utils/settings";
 
 const TAURI_AVAILABLE = isTauri();
@@ -79,6 +79,7 @@ export default function App() {
   const [isRefreshingDevices, setIsRefreshingDevices] = useState(false);
 
   const devices = useMemo(() => buildDevices(lanDevices, connectedPeer, trustedPeers), [lanDevices, connectedPeer, trustedPeers]);
+  const connectedCount = useMemo(() => devices.filter((device) => device.status === "connected").length, [devices]);
   const discoveredDevices = useMemo(
     () => devices.filter((device) => device.source === "discovery" && device.status !== "connected"),
     [devices],
@@ -133,22 +134,24 @@ export default function App() {
   const {
     openPairingModal,
     closePairingModal,
-    handleManualPair,
     handleConnectLan,
     switchPairingTarget,
     handleSubmitPairingCode,
     handleRotatePairingCode,
     handleAcceptIncoming,
     handleRejectIncoming,
+    handleIncomingResponseTimeout,
     handleDisconnect,
     handleConnectionRequest,
     handleConnectionEstablished,
     handleConnectionFailed,
     handleConnectionEnded,
     pairingStageRef,
+    connectionLocked,
   } = usePairingFlow({
     callCommand,
     status,
+    connectedCount,
     pairingInput,
     pairingStage,
     pairingTarget,
@@ -259,7 +262,7 @@ export default function App() {
 
   const handlePairingCodeRotated = useCallback(
     (payload: PairingCodeRotatedPayload) => {
-      setPairingRotationHint("验证码已更新，请让对方输入新的 6 位数字。");
+      setPairingRotationHint(MSG_PAIRING_CODE_REFRESHED);
       setPairingCode(payload.code);
     },
     [setPairingCode],
@@ -390,6 +393,9 @@ export default function App() {
           onReject={() => {
             void handleRejectIncoming();
           }}
+          onTimeout={() => {
+            void handleIncomingResponseTimeout();
+          }}
         />
       )}
 
@@ -403,13 +409,11 @@ export default function App() {
           helperText={pairingHelperText}
           errorMessage={pairingError}
           rotationHint={pairingRotationHint}
+          connectionLocked={connectionLocked}
           onClose={() => {
             void closePairingModal();
           }}
           onInputChange={setPairingInput}
-          onManualPair={() => {
-            void handleManualPair();
-          }}
           onSelectDevice={(device) => {
             void switchPairingTarget(device);
           }}
