@@ -148,15 +148,12 @@ export function isDeviceReachableOnLan(device: Device) {
   return Boolean(device.discoveredOnLan && device.host?.trim() && device.port);
 }
 
-/** Groups merged device records into the three device-management sections from design.
+/** Groups merged device records into the three device-management sections.
  *
- * Relationship rules:
- * - Familiar + offline → offline
- * - Familiar + online (not connected) → nearby (familiar)
- * - Familiar + connected → paired
- * - Stranger + offline → hidden
- * - Stranger + online (not connected) → nearby (stranger)
- * - Stranger + connected → paired (and persisted as familiar after session)
+ * UI zones:
+ * - Paired (已配对): currently connected
+ * - Nearby (附近): online on LAN but not connected
+ * - Offline (离线): familiar devices not currently online
  */
 export function categorizeDevices(devices: Device[]): DeviceBuckets {
   const paired: Device[] = [];

@@ -89,10 +89,10 @@ function formatActivityMeta(device: Device) {
 
 function getTrustTooltip(autoAccept: boolean) {
   if (autoAccept) {
-    return "已开启自动接受连接。点击后，该设备下次发起连接时需要你确认。";
+    return "已信任该设备：对方发起连接时将自动接受。点击后，下次连接需要你手动确认。";
   }
 
-  return "已关闭自动接受连接。点击后，该设备发起连接时将直接建立会话。";
+  return "未信任该设备：对方发起连接时需你手动确认。点击后，对方发起连接时将自动接受。";
 }
 
 function DeviceSectionHeader({ accent, action, count, icon, title }: DeviceSectionHeaderProps) {
@@ -153,7 +153,7 @@ function TrustShieldButton({
   onSetPeerAutoAccept: (device: Device, autoAccept: boolean) => void;
 }) {
   const autoAccept = Boolean(device.autoAccept);
-  const label = autoAccept ? `关闭 ${device.name} 的自动接受连接` : `开启 ${device.name} 的自动接受连接`;
+  const label = autoAccept ? `不再信任 ${device.name}` : `信任 ${device.name} 的来访`;
 
   return (
     <HoverTooltip content={getTrustTooltip(autoAccept)}>
@@ -456,7 +456,7 @@ export function DevicesPage({
               ))}
             </div>
           ) : (
-            <EmptyDeviceSection message="暂无在线设备" />
+            <EmptyDeviceSection message="暂无已连接设备" />
           )}
         </section>
 

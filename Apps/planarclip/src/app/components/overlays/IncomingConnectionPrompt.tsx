@@ -83,7 +83,13 @@ export function IncomingConnectionPrompt({
 
           {!isPairing && (
             <p className="text-[13px] font-medium text-muted-foreground">
-              允许后，这台设备会被加入已配对列表。
+              允许后，将与此设备建立连接。
+            </p>
+          )}
+
+          {isPairing && (
+            <p className="text-[13px] font-medium text-muted-foreground">
+              配对成功后，这台设备会加入熟悉列表，并默认信任其来访。
             </p>
           )}
 

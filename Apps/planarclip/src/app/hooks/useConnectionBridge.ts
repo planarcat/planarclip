@@ -11,6 +11,8 @@ import type {
   ConnectionFailedPayload,
   ConnectionRequestPayload,
   LanDevicePayload,
+  OutboundConnectionPendingPayload,
+  PairingCodeNeededPayload,
   PairingCodeRotatedPayload,
   PairingStage,
   TrustedPeerPayload,
@@ -57,6 +59,8 @@ type UseConnectionBridgeOptions = {
   onConnectionEstablished: (payload: ConnectionEstablishedPayload) => void;
   onConnectionFailed: (payload: ConnectionFailedPayload) => void;
   onConnectionEnded: (payload: ConnectionEndedPayload) => void;
+  onOutboundConnectionPending: (payload: OutboundConnectionPendingPayload) => void;
+  onPairingCodeNeeded: (payload: PairingCodeNeededPayload) => void;
 };
 
 /**
@@ -85,6 +89,8 @@ export function useConnectionBridge({
   onConnectionEstablished,
   onConnectionFailed,
   onConnectionEnded,
+  onOutboundConnectionPending,
+  onPairingCodeNeeded,
 }: UseConnectionBridgeOptions) {
   const statusRef = useRef(status);
   const connectedPeerRef = useRef(connectedPeer);
@@ -104,6 +110,8 @@ export function useConnectionBridge({
   const onConnectionEstablishedRef = useLatestRef(onConnectionEstablished);
   const onConnectionFailedRef = useLatestRef(onConnectionFailed);
   const onConnectionEndedRef = useLatestRef(onConnectionEnded);
+  const onOutboundConnectionPendingRef = useLatestRef(onOutboundConnectionPending);
+  const onPairingCodeNeededRef = useLatestRef(onPairingCodeNeeded);
 
   useEffect(() => {
     statusRef.current = status;
@@ -179,6 +187,12 @@ export function useConnectionBridge({
         }),
         listen<ConnectionEndedPayload>("connection-ended", (event) => {
           onConnectionEndedRef.current(event.payload);
+        }),
+        listen<OutboundConnectionPendingPayload>("outbound-connection-pending", (event) => {
+          onOutboundConnectionPendingRef.current(event.payload);
+        }),
+        listen<PairingCodeNeededPayload>("pairing-code-needed", (event) => {
+          onPairingCodeNeededRef.current(event.payload);
         }),
         listen<PairingCodeRotatedPayload>("pairing-code-rotated", (event) => {
           setPairingCodeRef.current(event.payload.code);

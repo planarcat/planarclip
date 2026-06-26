@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
@@ -63,8 +63,10 @@ pub struct AppState {
     pub pending_initiator: Arc<Mutex<Option<TcpStream>>>,
     pub pending_outbound: Arc<Mutex<Option<TcpStream>>>,
     pub outbound_abort: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    pub outbound_handshake_active: Arc<AtomicBool>,
     pub pending_accept_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     pub pending_reject_tx: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+    pub pending_incoming_timeout_tx: Arc<Mutex<Option<mpsc::Sender<()>>>>,
     pub pending_connection_request: Arc<Mutex<Option<window::ConnectionRequestPayload>>>,
     pub pairing_session_code: Arc<Mutex<Option<Arc<Mutex<String>>>>>,
     pub pairing_code_expires_at: Arc<Mutex<Option<i64>>>,
@@ -925,6 +927,7 @@ async fn submit_pairing_code(
 #[tauri::command]
 async fn accept_connection(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let tx = state.pending_accept_tx.lock().await.take();
+    let _ = state.pending_incoming_timeout_tx.lock().await.take();
     if let Some(tx) = tx {
         let _ = tx.send(());
         clear_pending_connection_request(state.inner()).await;
@@ -937,7 +940,19 @@ async fn accept_connection(state: tauri::State<'_, AppState>) -> Result<(), Stri
 #[tauri::command]
 async fn reject_connection(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let _ = state.pending_accept_tx.lock().await.take();
+    let _ = state.pending_incoming_timeout_tx.lock().await.take();
     if let Some(tx) = state.pending_reject_tx.lock().await.take() {
+        let _ = tx.send(()).await;
+    }
+    clear_pending_connection_request(state.inner()).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn timeout_incoming_connection(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _ = state.pending_accept_tx.lock().await.take();
+    let _ = state.pending_reject_tx.lock().await.take();
+    if let Some(tx) = state.pending_incoming_timeout_tx.lock().await.take() {
         let _ = tx.send(()).await;
     }
     clear_pending_connection_request(state.inner()).await;
@@ -958,6 +973,7 @@ async fn disconnect(state: tauri::State<'_, AppState>) -> Result<(), String> {
     }
 
     let _ = state.pending_accept_tx.lock().await.take();
+    let _ = state.pending_incoming_timeout_tx.lock().await.take();
     if let Some(tx) = state.pending_reject_tx.lock().await.take() {
         let _ = tx.send(()).await;
     }
@@ -1137,8 +1153,14 @@ async fn handle_incoming_connection(
 
         let (accept_tx, accept_rx) = oneshot::channel();
         let (reject_tx, reject_rx) = mpsc::channel(1);
+        let (timeout_tx, timeout_rx) = mpsc::channel(1);
         *pending_accept_tx.lock().await = Some(accept_tx);
         *pending_reject_tx.lock().await = Some(reject_tx);
+        *app_handle
+            .state::<AppState>()
+            .pending_incoming_timeout_tx
+            .lock()
+            .await = Some(timeout_tx);
 
         window::present_connection_request(
             &app_handle,
@@ -1157,6 +1179,7 @@ async fn handle_incoming_connection(
             initiator_pk.clone(),
             accept_rx,
             reject_rx,
+            timeout_rx,
         )
         .await
         {
@@ -1182,8 +1205,16 @@ async fn handle_incoming_connection(
                 tracing::info!("Incoming confirmation failed: {}", e);
                 *pending_accept_tx.lock().await = None;
                 *pending_reject_tx.lock().await = None;
+                *app_handle
+                    .state::<AppState>()
+                    .pending_incoming_timeout_tx
+                    .lock()
+                    .await = None;
                 clear_pending_connection_request(app_handle.state::<AppState>().inner()).await;
-                if !matches!(e, direct::HandshakeError::Cancelled) {
+                if !matches!(
+                    e,
+                    direct::HandshakeError::Cancelled | direct::HandshakeError::Timeout
+                ) {
                     emit_connection_failed(&app_handle, &e);
                 }
             }
@@ -1206,8 +1237,14 @@ async fn handle_incoming_connection(
 
         let (accept_tx, accept_rx) = oneshot::channel();
         let (reject_tx, reject_rx) = mpsc::channel(2);
+        let (timeout_tx, timeout_rx) = mpsc::channel(1);
         *pending_accept_tx.lock().await = Some(accept_tx);
         *pending_reject_tx.lock().await = Some(reject_tx);
+        *app_handle
+            .state::<AppState>()
+            .pending_incoming_timeout_tx
+            .lock()
+            .await = Some(timeout_tx);
 
         window::present_connection_request(
             &app_handle,
@@ -1238,6 +1275,7 @@ async fn handle_incoming_connection(
             },
             accept_rx,
             reject_rx,
+            timeout_rx,
         )
         .await
         {
@@ -1263,8 +1301,18 @@ async fn handle_incoming_connection(
                 tracing::info!("Incoming pairing failed: {}", e);
                 *pending_accept_tx.lock().await = None;
                 *pending_reject_tx.lock().await = None;
+                *app_handle
+                    .state::<AppState>()
+                    .pending_incoming_timeout_tx
+                    .lock()
+                    .await = None;
                 clear_pending_connection_request(app_handle.state::<AppState>().inner()).await;
-                if !matches!(e, direct::HandshakeError::Cancelled | direct::HandshakeError::InvalidCode) {
+                if !matches!(
+                    e,
+                    direct::HandshakeError::Cancelled
+                        | direct::HandshakeError::InvalidCode
+                        | direct::HandshakeError::Timeout
+                ) {
                     emit_connection_failed(&app_handle, &e);
                 }
             }
@@ -1279,6 +1327,11 @@ async fn handle_incoming_connection(
 
     *pending_reject_tx.lock().await = None;
     *pending_accept_tx.lock().await = None;
+    *app_handle
+        .state::<AppState>()
+        .pending_incoming_timeout_tx
+        .lock()
+        .await = None;
 }
 
 pub fn run() {
@@ -1309,8 +1362,10 @@ pub fn run() {
         pending_initiator: Arc::new(Mutex::new(None)),
         pending_outbound: Arc::new(Mutex::new(None)),
         outbound_abort: Arc::new(Mutex::new(None)),
+        outbound_handshake_active: Arc::new(AtomicBool::new(false)),
         pending_accept_tx: Arc::new(Mutex::new(None)),
         pending_reject_tx: Arc::new(Mutex::new(None)),
+        pending_incoming_timeout_tx: Arc::new(Mutex::new(None)),
         pending_connection_request: Arc::new(Mutex::new(None)),
         pairing_session_code: Arc::new(Mutex::new(None)),
         pairing_code_expires_at: Arc::new(Mutex::new(None)),
@@ -1421,6 +1476,12 @@ pub fn run() {
                     connection_generation: connection_generation.clone(),
                     clip_tx: clip_tx.clone(),
                     pending_initiator: app.state::<AppState>().pending_initiator.clone(),
+                    pending_outbound: app.state::<AppState>().pending_outbound.clone(),
+                    outbound_abort: app.state::<AppState>().outbound_abort.clone(),
+                    outbound_handshake_active: app
+                        .state::<AppState>()
+                        .outbound_handshake_active
+                        .clone(),
                     pending_connection_request: app.state::<AppState>().pending_connection_request.clone(),
                     tcp_port,
                 };
@@ -1473,6 +1534,11 @@ pub fn run() {
                                 connection_generation: auto_connect_deps.connection_generation.clone(),
                                 clip_tx: auto_connect_deps.clip_tx.clone(),
                                 pending_initiator: auto_connect_deps.pending_initiator.clone(),
+                                pending_outbound: auto_connect_deps.pending_outbound.clone(),
+                                outbound_abort: auto_connect_deps.outbound_abort.clone(),
+                                outbound_handshake_active: auto_connect_deps
+                                    .outbound_handshake_active
+                                    .clone(),
                                 pending_connection_request: auto_connect_deps
                                     .pending_connection_request
                                     .clone(),
@@ -1500,6 +1566,12 @@ pub fn run() {
                     connection_generation: connection_generation.clone(),
                     clip_tx: clip_tx.clone(),
                     pending_initiator: app.state::<AppState>().pending_initiator.clone(),
+                    pending_outbound: app.state::<AppState>().pending_outbound.clone(),
+                    outbound_abort: app.state::<AppState>().outbound_abort.clone(),
+                    outbound_handshake_active: app
+                        .state::<AppState>()
+                        .outbound_handshake_active
+                        .clone(),
                     pending_connection_request: app.state::<AppState>().pending_connection_request.clone(),
                     tcp_port,
                 };
@@ -1623,6 +1695,7 @@ pub fn run() {
             submit_pairing_code,
             accept_connection,
             reject_connection,
+            timeout_incoming_connection,
             disconnect,
         ])
         .run(tauri::generate_context!())

@@ -68,8 +68,8 @@ export const MSG_PEER_CANCELLED = "对方已取消这次连接。";
 /** 主动发起连接时，对方明确拒绝 */
 export const MSG_PEER_REJECTED = "对方拒绝了这次连接。";
 
-/** 等待对方回应超时（与拒绝同等反馈） */
-export const MSG_PEER_RESPONSE_TIMEOUT = "对方拒绝了这次连接。";
+/** 等待对方回应超时 */
+export const MSG_PEER_RESPONSE_TIMEOUT = "对方未及时回应，这次连接已超时。";
 
 /** 本机关闭窗口取消出站连接 */
 export const MSG_SELF_CANCELLED_OUTBOUND = "你已取消这次连接。";
@@ -78,7 +78,7 @@ export const MSG_SELF_CANCELLED_OUTBOUND = "你已取消这次连接。";
 export const MSG_SELF_CANCELLED_INBOUND = "你已取消这次连接。";
 
 /** 本机未及时回应入站连接确认（倒计时超时） */
-export const MSG_SELF_INCOMING_TIMEOUT = "未及时回应，这次连接已自动拒绝。";
+export const MSG_SELF_INCOMING_TIMEOUT = "未及时回应，这次连接已超时。";
 
 /** 配对码错误 */
 export const MSG_INVALID_PAIRING_CODE = "配对码错误，请重新输入。";
@@ -107,6 +107,13 @@ export function peerOfflineMessage(peerName?: string) {
 }
 
 export function normalizeUserMessage(error: unknown, fallback: string, targetName?: string) {
+  if (error && typeof error === "object" && "kind" in error) {
+    const { kind } = error as { kind?: unknown };
+    if (kind === "timeout") {
+      return MSG_PEER_RESPONSE_TIMEOUT;
+    }
+  }
+
   const raw = rawMessage(error);
 
   if (!raw) {

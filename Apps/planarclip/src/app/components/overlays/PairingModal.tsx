@@ -147,7 +147,6 @@ function LocalPairingCodeSection({
           style={{ width: `${Math.max(0, Math.min(100, progress * 100))}%` }}
         />
       </div>
-      <p className="text-[11px] font-medium text-muted-foreground">本机配对码 · 也可输入对方配对码</p>
     </div>
   );
 }

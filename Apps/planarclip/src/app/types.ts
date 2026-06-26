@@ -122,6 +122,22 @@ export type ConnectionFailedPayload = {
   message?: string;
 };
 
+export type OutboundConnectionPendingPayload = {
+  peer_id: string;
+  peer_name: string;
+  peer_ip: string;
+  peer_port: number;
+  source?: string;
+};
+
+export type PairingCodeNeededPayload = {
+  peer_ip: string;
+  peer_id?: string;
+  peer_name?: string;
+  peer_port?: number;
+  source?: string;
+};
+
 export type ConnectionEndedPayload = {
   kind?: string;
   message?: string;

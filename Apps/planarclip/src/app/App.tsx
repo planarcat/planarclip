@@ -146,6 +146,8 @@ export default function App() {
     handleConnectionEstablished,
     handleConnectionFailed,
     handleConnectionEnded,
+    handleOutboundConnectionPending,
+    handlePairingCodeNeeded,
     pairingStageRef,
     connectionLocked,
   } = usePairingFlow({
@@ -203,7 +205,7 @@ export default function App() {
       const peers = await callCommand<TrustedPeerPayload[]>("get_trusted_peers");
       setTrustedPeers(peers);
     } catch (error) {
-      setLastMessage(normalizeUserMessage(error, "读取已配对设备失败，请稍后重试。"));
+      setLastMessage(normalizeUserMessage(error, "读取熟悉设备列表失败，请稍后重试。"));
     }
   }, [setLastMessage]);
 
@@ -239,7 +241,7 @@ export default function App() {
   const handleSetPeerAutoAccept = useCallback(
     async (device: Device, autoAccept: boolean) => {
       if (!device.peerId) {
-        setLastMessage("这个设备缺少标识，暂时无法更新自动接受设置。");
+        setLastMessage("这个设备缺少标识，暂时无法更新信任设置。");
         return;
       }
 
@@ -252,12 +254,12 @@ export default function App() {
         if (updated) {
           setLastMessage(
             autoAccept
-              ? `已开启 ${device.name} 的自动接受连接。`
-              : `已关闭 ${device.name} 的自动接受连接，下次连接需要你确认。`,
+              ? `已信任 ${device.name}，对方发起连接时将自动接受。`
+              : `已改为不信任 ${device.name}，对方下次连接需要你确认。`,
           );
         }
       } catch (error) {
-        setLastMessage(normalizeUserMessage(error, `更新 ${device.name} 的自动接受设置失败，请稍后重试。`, device.name));
+        setLastMessage(normalizeUserMessage(error, `更新 ${device.name} 的信任设置失败，请稍后重试。`, device.name));
       }
     },
     [refreshTrustedPeers, setLastMessage],
@@ -299,6 +301,8 @@ export default function App() {
     onConnectionEstablished: handleTrustedConnectionEstablished,
     onConnectionFailed: handleConnectionFailed,
     onConnectionEnded: handleConnectionEnded,
+    onOutboundConnectionPending: handleOutboundConnectionPending,
+    onPairingCodeNeeded: handlePairingCodeNeeded,
     onPairingCodeRotated: handlePairingCodeRotated,
   });
 

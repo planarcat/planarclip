@@ -113,7 +113,7 @@ impl HandshakeError {
         match self.reason_code() {
             "rejected" => "对方拒绝了这次连接。".into(),
             "invalid_code" => "配对码不正确。".into(),
-            "timeout" => "对方拒绝了这次连接。".into(),
+            "timeout" => "对方未及时回应，这次连接已超时。".into(),
             "cancelled" => "你已取消这次连接。".into(),
             "peer_cancelled" => "对方已取消这次连接。".into(),
             "connection_lost" => "对方设备已下线。".into(),
@@ -372,9 +372,17 @@ pub async fn responder_verify_code(
     mut on_code_rotated: impl FnMut(String) + Send,
     accept_rx: oneshot::Receiver<()>,
     mut reject_rx: mpsc::Receiver<()>,
+    mut timeout_rx: mpsc::Receiver<()>,
 ) -> Result<DirectConnection, HandshakeError> {
     // 陌生设备需先在本机确认，再通知对方进入配对码输入流程。
-    wait_for_user_or_peer_abort(&mut stream, accept_rx, &mut reject_rx, PAIRING_CODE_WAIT_SECS).await?;
+    wait_for_user_or_peer_abort(
+        &mut stream,
+        accept_rx,
+        &mut reject_rx,
+        &mut timeout_rx,
+        PAIRING_CODE_WAIT_SECS,
+    )
+    .await?;
 
     write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AwaitCode)).await?;
 
@@ -480,10 +488,24 @@ async fn read_peer_abort_signal(stream: &mut TcpStream) -> Result<(), HandshakeE
     }
 }
 
+async fn notify_peer_response_timeout(stream: &mut TcpStream) {
+    let _ = write_frame(
+        stream,
+        &Frame::Handshake(HandshakeMessage::AuthResult {
+            success: false,
+            peer_name: None,
+            public_key: None,
+            reason: Some("timeout".into()),
+        }),
+    )
+    .await;
+}
+
 async fn wait_for_user_or_peer_abort(
     stream: &mut TcpStream,
     accept_rx: oneshot::Receiver<()>,
     reject_rx: &mut mpsc::Receiver<()>,
+    timeout_rx: &mut mpsc::Receiver<()>,
     timeout_secs: u64,
 ) -> Result<(), HandshakeError> {
     let mut accept_rx = accept_rx;
@@ -504,13 +526,12 @@ async fn wait_for_user_or_peer_abort(
                 })).await;
                 return Err(HandshakeError::Cancelled);
             }
+            _ = timeout_rx.recv() => {
+                notify_peer_response_timeout(stream).await;
+                return Err(HandshakeError::Timeout);
+            }
             _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
-                let _ = write_frame(stream, &Frame::Handshake(HandshakeMessage::AuthResult {
-                    success: false,
-                    peer_name: None,
-                    public_key: None,
-                    reason: Some("timeout".into()),
-                })).await;
+                notify_peer_response_timeout(stream).await;
                 return Err(HandshakeError::Timeout);
             }
         }
@@ -525,8 +546,9 @@ pub async fn responder_wait_for_decision(
     initiator_public_key: Vec<u8>,
     accept_rx: oneshot::Receiver<()>,
     mut reject_rx: mpsc::Receiver<()>,
+    mut timeout_rx: mpsc::Receiver<()>,
 ) -> Result<DirectConnection, HandshakeError> {
-    wait_for_user_or_peer_abort(&mut stream, accept_rx, &mut reject_rx, 60).await?;
+    wait_for_user_or_peer_abort(&mut stream, accept_rx, &mut reject_rx, &mut timeout_rx, 60).await?;
 
     responder_accept_trusted(
         stream,
@@ -638,6 +660,7 @@ mod tests {
             let request = read_connect_request(stream).await.unwrap();
             let (accept_tx, accept_rx) = oneshot::channel();
             let (_reject_tx, reject_rx) = mpsc::channel(2);
+            let (_timeout_tx, timeout_rx) = mpsc::channel(1);
             let pairing_code = std::sync::Arc::new(tokio::sync::Mutex::new("123456".to_string()));
             let verify = tokio::spawn(async move {
                 responder_verify_code(
@@ -650,6 +673,7 @@ mod tests {
                     |_| {},
                     accept_rx,
                     reject_rx,
+                    timeout_rx,
                 )
                 .await
             });
@@ -686,6 +710,7 @@ mod tests {
             let request = read_connect_request(stream).await.unwrap();
             let (accept_tx, accept_rx) = oneshot::channel();
             let (_reject_tx, reject_rx) = mpsc::channel(2);
+            let (_timeout_tx, timeout_rx) = mpsc::channel(1);
             let decision = tokio::spawn(async move {
                 responder_wait_for_decision(
                     request.stream,
@@ -695,6 +720,7 @@ mod tests {
                     request.initiator_public_key,
                     accept_rx,
                     reject_rx,
+                    timeout_rx,
                 )
                 .await
             });
@@ -728,6 +754,7 @@ mod tests {
             assert!(request.requires_confirmation);
             let (accept_tx, accept_rx) = oneshot::channel();
             let (_reject_tx, reject_rx) = mpsc::channel(2);
+            let (_timeout_tx, timeout_rx) = mpsc::channel(1);
             let decision = tokio::spawn(async move {
                 responder_wait_for_decision(
                     request.stream,
@@ -737,6 +764,7 @@ mod tests {
                     request.initiator_public_key,
                     accept_rx,
                     reject_rx,
+                    timeout_rx,
                 )
                 .await
             });
@@ -765,6 +793,7 @@ mod tests {
 
         let (accept_tx, accept_rx) = oneshot::channel();
         let (_reject_tx, reject_rx) = mpsc::channel(2);
+        let (_timeout_tx, timeout_rx) = mpsc::channel(1);
 
         let pairing_code = std::sync::Arc::new(tokio::sync::Mutex::new("123456".to_string()));
         let server = tokio::spawn(async move {
@@ -780,6 +809,7 @@ mod tests {
                 |_| {},
                 accept_rx,
                 reject_rx,
+                timeout_rx,
             )
             .await
             .unwrap()
@@ -817,6 +847,7 @@ mod tests {
             let request = read_connect_request(stream).await.unwrap();
             let (accept_tx, accept_rx) = oneshot::channel();
             let (_reject_tx, reject_rx) = mpsc::channel(2);
+            let (_timeout_tx, timeout_rx) = mpsc::channel(1);
             let pairing_code = std::sync::Arc::new(tokio::sync::Mutex::new("123456".to_string()));
             let verify = tokio::spawn(async move {
                 responder_verify_code(
@@ -829,6 +860,7 @@ mod tests {
                     |_| {},
                     accept_rx,
                     reject_rx,
+                    timeout_rx,
                 )
                 .await
             });

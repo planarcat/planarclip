@@ -71,8 +71,8 @@ export function useConnectionSettings({
         setAutoConnectTrusted(saved.auto_connect_trusted);
         setLastMessage(
           enabled
-            ? "已开启自动连接已信任设备，启动或发现设备上线时会自动发起连接。"
-            : "已关闭自动连接已信任设备。",
+            ? "已开启自动连接熟悉设备，启动或发现设备上线时会自动发起连接。"
+            : "已关闭自动连接熟悉设备。",
         );
       } catch (error) {
         setLastMessage(normalizeUserMessage(error, "这次没有保存成功，请稍后再试。"));
