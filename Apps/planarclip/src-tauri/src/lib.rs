@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
@@ -55,6 +56,7 @@ pub struct AppState {
     pub connected: Arc<Mutex<bool>>,
     pub connected_peer: Arc<Mutex<Option<ConnectedPeerPayload>>>,
     pub connection: Arc<Mutex<Option<ConnectionHandle>>>,
+    pub connection_generation: Arc<AtomicU64>,
     pub clip_tx: broadcast::Sender<ClipboardEvent>,
     pub clipboard_history: Arc<Mutex<Vec<ClipboardHistoryEntry>>>,
     pub lan_devices: Arc<Mutex<Vec<LanDevice>>>,
@@ -209,6 +211,10 @@ pub(crate) async fn store_connected_peer(
 
 async fn clear_connected_peer(connected_peer: &Arc<Mutex<Option<ConnectedPeerPayload>>>) {
     *connected_peer.lock().await = None;
+}
+
+fn next_connection_generation(state: &AppState) -> u64 {
+    state.connection_generation.fetch_add(1, Ordering::SeqCst) + 1
 }
 
 async fn persist_clipboard_history(
@@ -792,9 +798,14 @@ async fn connect_lan(
                 storage_json::save_config(&config);
             }
 
+            let session_generation = next_connection_generation(state.inner());
             let handle = ConnectionManager::connect_direct(
                 conn,
                 state.connected.clone(),
+                state.connection.clone(),
+                state.connected_peer.clone(),
+                state.connection_generation.clone(),
+                session_generation,
                 state.clip_tx.clone(),
                 app.clone(),
             )
@@ -873,9 +884,14 @@ async fn submit_pairing_code(
                 storage_json::save_config(&config);
             }
 
+            let session_generation = next_connection_generation(state.inner());
             let handle = ConnectionManager::connect_direct(
                 conn,
                 state.connected.clone(),
+                state.connection.clone(),
+                state.connected_peer.clone(),
+                state.connection_generation.clone(),
+                session_generation,
                 state.clip_tx.clone(),
                 app.clone(),
             )
@@ -914,7 +930,7 @@ async fn accept_connection(state: tauri::State<'_, AppState>) -> Result<(), Stri
         clear_pending_connection_request(state.inner()).await;
         Ok(())
     } else {
-        Err("当前没有待确认的连接请求".into())
+        Err("对方已取消这次连接".into())
     }
 }
 
@@ -930,6 +946,7 @@ async fn reject_connection(state: tauri::State<'_, AppState>) -> Result<(), Stri
 
 #[tauri::command]
 async fn disconnect(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    next_connection_generation(state.inner());
     abort_outbound_handshake(state.inner()).await;
 
     *state.connected.lock().await = false;
@@ -982,6 +999,7 @@ async fn finalize_incoming_connection(
     connected: Arc<Mutex<bool>>,
     connected_peer: Arc<Mutex<Option<ConnectedPeerPayload>>>,
     connection: Arc<Mutex<Option<ConnectionHandle>>>,
+    connection_generation: Arc<AtomicU64>,
     clip_tx: broadcast::Sender<ClipboardEvent>,
     app_handle: &tauri::AppHandle,
 ) {
@@ -1000,9 +1018,16 @@ async fn finalize_incoming_connection(
         storage_json::save_config(&cfg);
     }
 
+    let session_generation = next_connection_generation(
+        app_handle.state::<AppState>().inner(),
+    );
     let handle = ConnectionManager::connect_direct(
         conn,
         connected.clone(),
+        connection.clone(),
+        connected_peer.clone(),
+        connection_generation,
+        session_generation,
         clip_tx.clone(),
         app_handle.clone(),
     )
@@ -1089,6 +1114,7 @@ async fn handle_incoming_connection(
                     connected,
                     connected_peer,
                     connection,
+                    app_handle.state::<AppState>().connection_generation.clone(),
                     clip_tx,
                     &app_handle,
                 )
@@ -1146,6 +1172,7 @@ async fn handle_incoming_connection(
                     connected,
                     connected_peer,
                     connection,
+                    app_handle.state::<AppState>().connection_generation.clone(),
                     clip_tx,
                     &app_handle,
                 )
@@ -1153,6 +1180,8 @@ async fn handle_incoming_connection(
             }
             Err(e) => {
                 tracing::info!("Incoming confirmation failed: {}", e);
+                *pending_accept_tx.lock().await = None;
+                *pending_reject_tx.lock().await = None;
                 clear_pending_connection_request(app_handle.state::<AppState>().inner()).await;
                 if !matches!(e, direct::HandshakeError::Cancelled) {
                     emit_connection_failed(&app_handle, &e);
@@ -1224,6 +1253,7 @@ async fn handle_incoming_connection(
                     connected,
                     connected_peer,
                     connection,
+                    app_handle.state::<AppState>().connection_generation.clone(),
                     clip_tx,
                     &app_handle,
                 )
@@ -1231,6 +1261,8 @@ async fn handle_incoming_connection(
             }
             Err(e) => {
                 tracing::info!("Incoming pairing failed: {}", e);
+                *pending_accept_tx.lock().await = None;
+                *pending_reject_tx.lock().await = None;
                 clear_pending_connection_request(app_handle.state::<AppState>().inner()).await;
                 if !matches!(e, direct::HandshakeError::Cancelled | direct::HandshakeError::InvalidCode) {
                     emit_connection_failed(&app_handle, &e);
@@ -1270,6 +1302,7 @@ pub fn run() {
         connected: Arc::new(Mutex::new(false)),
         connected_peer: Arc::new(Mutex::new(None)),
         connection: Arc::new(Mutex::new(None)),
+        connection_generation: Arc::new(AtomicU64::new(0)),
         clip_tx: clip_tx.clone(),
         clipboard_history: Arc::new(Mutex::new(initial_clipboard_history)),
         lan_devices: Arc::new(Mutex::new(Vec::new())),
@@ -1357,6 +1390,7 @@ pub fn run() {
             let connected = app.state::<AppState>().connected.clone();
             let connected_peer = app.state::<AppState>().connected_peer.clone();
             let connection = app.state::<AppState>().connection.clone();
+            let connection_generation = app.state::<AppState>().connection_generation.clone();
             let config = app.state::<AppState>().config.clone();
 
             let (discovery_tx, mut discovery_rx) = mpsc::unbounded_channel::<DiscoveryEvent>();
@@ -1384,6 +1418,7 @@ pub fn run() {
                     connected: connected.clone(),
                     connected_peer: connected_peer.clone(),
                     connection: connection.clone(),
+                    connection_generation: connection_generation.clone(),
                     clip_tx: clip_tx.clone(),
                     pending_initiator: app.state::<AppState>().pending_initiator.clone(),
                     pending_connection_request: app.state::<AppState>().pending_connection_request.clone(),
@@ -1435,6 +1470,7 @@ pub fn run() {
                                 connected: auto_connect_deps.connected.clone(),
                                 connected_peer: auto_connect_deps.connected_peer.clone(),
                                 connection: auto_connect_deps.connection.clone(),
+                                connection_generation: auto_connect_deps.connection_generation.clone(),
                                 clip_tx: auto_connect_deps.clip_tx.clone(),
                                 pending_initiator: auto_connect_deps.pending_initiator.clone(),
                                 pending_connection_request: auto_connect_deps
@@ -1461,6 +1497,7 @@ pub fn run() {
                     connected: connected.clone(),
                     connected_peer: connected_peer.clone(),
                     connection: connection.clone(),
+                    connection_generation: connection_generation.clone(),
                     clip_tx: clip_tx.clone(),
                     pending_initiator: app.state::<AppState>().pending_initiator.clone(),
                     pending_connection_request: app.state::<AppState>().pending_connection_request.clone(),

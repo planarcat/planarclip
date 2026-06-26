@@ -295,7 +295,6 @@ export default function App() {
     <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
       <Sidebar
         activeNav={activeNav}
-        devices={devices}
         status={status}
         identityLabel={identityLabel}
         colorScheme={colorScheme}
@@ -305,18 +304,8 @@ export default function App() {
         isSavingDeviceName={isSavingSettings}
         onThemeChange={handleThemeChange}
         onNavigate={setActiveNav}
-        onRefreshDevices={() => {
-          void handleRefreshDevices();
-        }}
-        onConnectDevice={(device) => {
-          void handleConnectLan(device);
-        }}
         onDeviceNameChange={handleDeviceNameChange}
         onDeviceNameSave={handleDeviceNameSave}
-        onDisconnect={() => {
-          void handleDisconnect();
-        }}
-        isRefreshingDevices={isRefreshingDevices}
         tauriAvailable={TAURI_AVAILABLE}
       />
 

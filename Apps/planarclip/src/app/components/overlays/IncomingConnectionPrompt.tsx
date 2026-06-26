@@ -1,4 +1,4 @@
-import { Loader2, ShieldCheck, Smartphone, X } from "lucide-react";
+import { Loader2, Smartphone, X } from "lucide-react";
 import { CONNECTION_RESPONSE_TIMEOUT_SECS } from "../../constants/connection";
 import { usePairingCountdown } from "../../hooks/usePairingCountdown";
 import type { ConnectionRequestPayload } from "../../types";
@@ -81,14 +81,11 @@ export function IncomingConnectionPrompt({
             </div>
           )}
 
-          <div className="flex items-center gap-3 rounded-xl border border-border bg-secondary/30 p-3">
-            <ShieldCheck size={14} className="shrink-0 text-primary" />
+          {!isPairing && (
             <p className="text-[13px] font-medium text-muted-foreground">
-              {isPairing
-                ? "允许后，将进入配对流程，对方需要输入你屏幕上的配对码。"
-                : "允许后，这台设备会被加入已配对列表。"}
+              允许后，这台设备会被加入已配对列表。
             </p>
-          </div>
+          )}
 
           <div className="flex gap-2">
             <button

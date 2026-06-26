@@ -24,7 +24,14 @@ impl SyncEngine {
                 Ok(event) => {
                     let conn = self.connection.lock().await;
                     if let Some(ref handle) = *conn {
-                        handle.send_clipboard(&event.snapshot);
+                        let is_connected = handle
+                            .connected()
+                            .try_lock()
+                            .map(|guard| *guard)
+                            .unwrap_or(false);
+                        if is_connected {
+                            handle.send_clipboard(&event.snapshot);
+                        }
                     }
                 }
                 Err(e) => {

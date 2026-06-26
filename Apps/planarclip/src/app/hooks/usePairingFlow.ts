@@ -16,6 +16,7 @@ import {
   MSG_CONNECTION_LIMIT,
   MSG_INVALID_PAIRING_CODE,
   MSG_PAIRING_CODE_REFRESHED,
+  MSG_PEER_CANCELLED,
   MSG_PEER_REJECTED,
   MSG_SELF_CANCELLED_INBOUND,
   MSG_SELF_CANCELLED_OUTBOUND,
@@ -270,9 +271,14 @@ export function usePairingFlow({
         if (result === "awaiting_code") {
           setShowPairing(true);
           setPairingStage("awaiting_code");
-          setPairingHelperText("对方已同意连接，请输入 6 位配对码。");
-          setLastMessage("对方已同意连接，请输入 6 位配对码。");
+          setPairingHelperText("请输入对方设备上显示的 6 位配对码。");
+          setLastMessage("请输入对方设备上显示的 6 位配对码。");
           setPairingInput("");
+          try {
+            const code = await callCommand<string>("get_pairing_code");
+            setPairingCode(code);
+          } catch {
+          }
           return;
         }
 
@@ -400,30 +406,30 @@ export function usePairingFlow({
       return;
     }
 
+    const peerName = incomingRequest.device_name;
     setPairingError(null);
     setPairingRotationHint(null);
     setStatus("connecting");
-
-    if (incomingRequest.requires_pairing) {
-      setPairingStage("incoming_pairing");
-      setShowPairing(true);
-      setPairingHelperText(`${incomingRequest.device_name} 已同意配对，请等待对方输入本机配对码。`);
-      setLastMessage(`${incomingRequest.device_name} 已同意配对，请等待对方输入本机配对码。`);
-      try {
-        const code = await callCommand<string>("get_pairing_code");
-        setPairingCode(code);
-      } catch {
-      }
-    } else {
-      setPairingStage("incoming_accepting");
-      setLastMessage(`正在允许 ${incomingRequest.device_name} 连接…`);
-    }
+    setPairingStage("incoming_accepting");
+    setLastMessage(`正在允许 ${peerName} 连接…`);
 
     try {
       await callCommand("accept_connection");
+
+      if (incomingRequest.requires_pairing) {
+        setShowPairing(true);
+        setPairingStage("incoming_pairing");
+        setPairingHelperText("请输入对方设备上显示的 6 位配对码。");
+        setLastMessage("请输入对方设备上显示的 6 位配对码。");
+        try {
+          const code = await callCommand<string>("get_pairing_code");
+          setPairingCode(code);
+        } catch {
+        }
+      }
     } catch (error) {
-      const message = normalizeUserMessage(error, connectionUnavailableMessage(incomingRequest.device_name), incomingRequest.device_name);
-      if (isConnectionRejected(error)) {
+      const message = normalizeUserMessage(error, MSG_PEER_CANCELLED, peerName);
+      if (isConnectionRejected(error) || message === MSG_PEER_CANCELLED) {
         handleTerminalConnectionFailure(message);
         return;
       }
@@ -513,14 +519,23 @@ export function usePairingFlow({
         return;
       }
 
+      const inboundWaitStage =
+        pairingStageRef.current === "incoming_request" ||
+        pairingStageRef.current === "incoming_accepting";
+
       const message = normalizeUserMessage(
         payload,
-        connectionUnavailableMessage(pairingTargetRef.current?.name),
-        pairingTargetRef.current?.name,
+        inboundWaitStage ? MSG_PEER_CANCELLED : connectionUnavailableMessage(pairingTargetRef.current?.name),
+        pairingTargetRef.current?.name ?? incomingRequest?.device_name,
       );
 
       if (isConnectionRejected(payload)) {
         handleTerminalConnectionFailure(message);
+        return;
+      }
+
+      if (inboundWaitStage && isPeerOffline(payload)) {
+        handleTerminalConnectionFailure(MSG_PEER_CANCELLED);
         return;
       }
 
@@ -546,20 +561,24 @@ export function usePairingFlow({
       setStatus(resolveAppStatus(connectedCount, false));
       setLastMessage(message);
     },
-    [connectedCount, handleTerminalConnectionFailure, resetPairingFlow, setLastMessage, setPairingError, setPairingHelperText, setPairingStage, setStatus],
+    [connectedCount, handleTerminalConnectionFailure, incomingRequest, resetPairingFlow, setLastMessage, setPairingError, setPairingHelperText, setPairingStage, setStatus],
   );
 
   const handleConnectionEnded = useCallback(
-    (payload: ConnectionEndedPayload) => {
+    async (payload: ConnectionEndedPayload) => {
       const message = isPeerOffline(payload)
         ? peerOfflineMessage(payload.peer_name)
         : peerOfflineMessage(payload.peer_name);
+      try {
+        await callCommand("disconnect");
+      } catch {
+      }
       setConnectedPeer(null);
       setStatus(resolveAppStatus(Math.max(0, connectedCount - 1), false));
       showTerminalNotice(message);
       resetPairingFlow(true);
     },
-    [connectedCount, resetPairingFlow, setConnectedPeer, setStatus, showTerminalNotice],
+    [callCommand, connectedCount, resetPairingFlow, setConnectedPeer, setStatus, showTerminalNotice],
   );
 
   const connectionLocked = isOutboundLockedStage(pairingStage);

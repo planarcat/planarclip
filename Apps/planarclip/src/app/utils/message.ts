@@ -12,13 +12,14 @@ export function rawMessage(error: unknown) {
 export function isConnectionRejected(error: unknown) {
   if (error && typeof error === "object" && "kind" in error) {
     const { kind } = error as { kind?: unknown };
-    if (kind === "rejected" || kind === "timeout" || kind === "cancelled") {
+    if (kind === "rejected" || kind === "timeout" || kind === "cancelled" || kind === "peer_cancelled") {
       return true;
     }
   }
 
   const raw = rawMessage(error);
   return (
+    raw.includes("对方已取消") ||
     raw.includes("对方已拒绝") ||
     raw.includes("对方拒绝了") ||
     raw.includes("连接请求已超时") ||
@@ -44,6 +45,14 @@ export function isInvalidPairingCode(error: unknown) {
   return raw.includes("配对码无效") || raw.includes("配对码不正确");
 }
 
+export function isPeerCancelled(error: unknown) {
+  if (error && typeof error === "object" && "kind" in error) {
+    return (error as { kind?: unknown }).kind === "peer_cancelled";
+  }
+  const raw = rawMessage(error);
+  return raw.includes("对方已取消这次连接");
+}
+
 export function isPeerOffline(error: unknown) {
   if (error && typeof error === "object" && "kind" in error) {
     const kind = (error as { kind?: unknown }).kind;
@@ -52,6 +61,9 @@ export function isPeerOffline(error: unknown) {
   const raw = rawMessage(error);
   return raw.includes("已下线") || raw.includes("已断开连接");
 }
+
+/** 对方主动取消连接 */
+export const MSG_PEER_CANCELLED = "对方已取消这次连接。";
 
 /** 主动发起连接时，对方明确拒绝 */
 export const MSG_PEER_REJECTED = "对方拒绝了这次连接。";
@@ -115,6 +127,10 @@ export function normalizeUserMessage(error: unknown, fallback: string, targetNam
 
   if (raw.includes("密钥对尚未初始化")) {
     return "设备还在准备连接信息，请稍后再试。";
+  }
+
+  if (raw.includes("对方已取消")) {
+    return MSG_PEER_CANCELLED;
   }
 
   if (raw.includes("对方已拒绝") || raw.includes("对方拒绝了")) {

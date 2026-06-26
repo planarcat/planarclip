@@ -84,6 +84,8 @@ pub enum HandshakeError {
     Timeout,
     #[error("用户已取消")]
     Cancelled,
+    #[error("对方已取消连接")]
+    PeerCancelled,
     #[error("协议错误：{0}")]
     Protocol(&'static str),
 }
@@ -95,6 +97,7 @@ impl HandshakeError {
             Self::InvalidCode => "invalid_code",
             Self::Timeout => "timeout",
             Self::Cancelled => "cancelled",
+            Self::PeerCancelled => "peer_cancelled",
             Self::Protocol(_) | Self::Frame(_) => "protocol_error",
             Self::Io(error) => match error.kind() {
                 ErrorKind::UnexpectedEof
@@ -112,6 +115,7 @@ impl HandshakeError {
             "invalid_code" => "配对码不正确。".into(),
             "timeout" => "对方拒绝了这次连接。".into(),
             "cancelled" => "你已取消这次连接。".into(),
+            "peer_cancelled" => "对方已取消这次连接。".into(),
             "connection_lost" => "对方设备已下线。".into(),
             "protocol_error" => "连接过程中出了点问题，请重新发起连接。".into(),
             _ => "暂时无法连接对方设备，请确认对方应用已打开，而且你们在同一局域网内。".into(),
@@ -123,6 +127,7 @@ impl HandshakeError {
             Some("invalid_code") => Self::InvalidCode,
             Some("timeout") => Self::Timeout,
             Some("cancelled") => Self::Cancelled,
+            Some("peer_cancelled") => Self::PeerCancelled,
             Some("rejected") => Self::Rejected,
             Some("protocol_error") => Self::Protocol("协议状态异常"),
             _ => Self::Rejected,
@@ -255,7 +260,7 @@ pub async fn initiator_abort(mut stream: TcpStream) {
             success: false,
             peer_name: None,
             public_key: None,
-            reason: Some("rejected".into()),
+            reason: Some("peer_cancelled".into()),
         }),
     )
     .await;
@@ -369,39 +374,17 @@ pub async fn responder_verify_code(
     mut reject_rx: mpsc::Receiver<()>,
 ) -> Result<DirectConnection, HandshakeError> {
     // 陌生设备需先在本机确认，再通知对方进入配对码输入流程。
-    tokio::select! {
-        _ = accept_rx => {}
-        reject = reject_rx.recv() => {
-            if reject.is_none() {
-                return Err(HandshakeError::Cancelled);
-            }
-            let _ = write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AuthResult {
-                success: false,
-                peer_name: None,
-                public_key: None,
-                reason: Some("rejected".into()),
-            })).await;
-            return Err(HandshakeError::Cancelled);
-        }
-        _ = tokio::time::sleep(std::time::Duration::from_secs(PAIRING_CODE_WAIT_SECS)) => {
-            let _ = write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AuthResult {
-                success: false,
-                peer_name: None,
-                public_key: None,
-                reason: Some("timeout".into()),
-            })).await;
-            return Err(HandshakeError::Timeout);
-        }
-    };
+    wait_for_user_or_peer_abort(&mut stream, accept_rx, &mut reject_rx, PAIRING_CODE_WAIT_SECS).await?;
 
     write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AwaitCode)).await?;
 
     let received_code = loop {
         let received_code = tokio::select! {
             frame = read_frame(&mut stream) => {
-                match frame? {
-                    Frame::Handshake(HandshakeMessage::AuthCode { code }) => Some(code),
-                    _ => return Err(HandshakeError::Protocol("应收到配对码消息")),
+                match frame {
+                    Ok(Frame::Handshake(HandshakeMessage::AuthCode { code })) => Some(code),
+                    Ok(_) => return Err(HandshakeError::Protocol("应收到配对码消息")),
+                    Err(e) => return Err(frame_error_to_handshake(e)),
                 }
             }
             reject = reject_rx.recv() => {
@@ -465,8 +448,77 @@ pub async fn responder_verify_code(
     Ok(spawn_data_bridge(stream, initiator_name, pid, initiator_public_key))
 }
 
+fn is_connection_closed(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::UnexpectedEof
+            | ErrorKind::ConnectionReset
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::BrokenPipe
+    )
+}
+
+fn frame_error_to_handshake(error: FrameError) -> HandshakeError {
+    if let FrameError::Io(ref io_error) = error {
+        if is_connection_closed(io_error) {
+            return HandshakeError::PeerCancelled;
+        }
+    }
+    HandshakeError::Frame(error)
+}
+
+async fn read_peer_abort_signal(stream: &mut TcpStream) -> Result<(), HandshakeError> {
+    stream.readable().await?;
+    match read_frame(stream).await {
+        Ok(Frame::Handshake(HandshakeMessage::AuthResult {
+            success: false,
+            reason,
+            ..
+        })) => Err(HandshakeError::from_reason_code(reason.as_deref())),
+        Ok(_) => Err(HandshakeError::Protocol("等待连接确认时收到异常握手消息")),
+        Err(e) => Err(frame_error_to_handshake(e)),
+    }
+}
+
+async fn wait_for_user_or_peer_abort(
+    stream: &mut TcpStream,
+    accept_rx: oneshot::Receiver<()>,
+    reject_rx: &mut mpsc::Receiver<()>,
+    timeout_secs: u64,
+) -> Result<(), HandshakeError> {
+    let mut accept_rx = accept_rx;
+    loop {
+        tokio::select! {
+            biased;
+            abort = read_peer_abort_signal(stream) => return abort,
+            _ = &mut accept_rx => return Ok(()),
+            reject = reject_rx.recv() => {
+                if reject.is_none() {
+                    return Err(HandshakeError::Cancelled);
+                }
+                let _ = write_frame(stream, &Frame::Handshake(HandshakeMessage::AuthResult {
+                    success: false,
+                    peer_name: None,
+                    public_key: None,
+                    reason: Some("rejected".into()),
+                })).await;
+                return Err(HandshakeError::Cancelled);
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
+                let _ = write_frame(stream, &Frame::Handshake(HandshakeMessage::AuthResult {
+                    success: false,
+                    peer_name: None,
+                    public_key: None,
+                    reason: Some("timeout".into()),
+                })).await;
+                return Err(HandshakeError::Timeout);
+            }
+        }
+    }
+}
+
 pub async fn responder_wait_for_decision(
-    stream: TcpStream,
+    mut stream: TcpStream,
     device_name: &str,
     key_pair: &KeyPair,
     initiator_name: String,
@@ -474,41 +526,16 @@ pub async fn responder_wait_for_decision(
     accept_rx: oneshot::Receiver<()>,
     mut reject_rx: mpsc::Receiver<()>,
 ) -> Result<DirectConnection, HandshakeError> {
-    tokio::select! {
-        _ = accept_rx => {
-            responder_accept_trusted(
-                stream,
-                device_name,
-                key_pair,
-                initiator_name,
-                initiator_public_key,
-            )
-            .await
-        }
-        reject = reject_rx.recv() => {
-            if reject.is_none() {
-                return Err(HandshakeError::Cancelled);
-            }
-            let mut stream = stream;
-            let _ = write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AuthResult {
-                success: false,
-                peer_name: None,
-                public_key: None,
-                reason: Some("rejected".into()),
-            })).await;
-            Err(HandshakeError::Cancelled)
-        }
-        _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
-            let mut stream = stream;
-            let _ = write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AuthResult {
-                success: false,
-                peer_name: None,
-                public_key: None,
-                reason: Some("timeout".into()),
-            })).await;
-            Err(HandshakeError::Timeout)
-        }
-    }
+    wait_for_user_or_peer_abort(&mut stream, accept_rx, &mut reject_rx, 60).await?;
+
+    responder_accept_trusted(
+        stream,
+        device_name,
+        key_pair,
+        initiator_name,
+        initiator_public_key,
+    )
+    .await
 }
 
 pub enum ListenerEvent {

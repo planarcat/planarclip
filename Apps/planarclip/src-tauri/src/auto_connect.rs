@@ -6,6 +6,7 @@ use crate::storage::json::{AppConfig, TrustedPeerData};
 use crate::{store_connected_peer, upsert_trusted_peer, ConnectedPeerPayload};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -20,6 +21,7 @@ pub struct AutoConnectDeps {
     pub connected: Arc<Mutex<bool>>,
     pub connected_peer: Arc<Mutex<Option<ConnectedPeerPayload>>>,
     pub connection: Arc<Mutex<Option<ConnectionHandle>>>,
+    pub connection_generation: Arc<AtomicU64>,
     pub clip_tx: broadcast::Sender<ClipboardEvent>,
     pub pending_initiator: Arc<Mutex<Option<TcpStream>>>,
     pub pending_connection_request: Arc<Mutex<Option<crate::window::ConnectionRequestPayload>>>,
@@ -115,9 +117,14 @@ pub async fn attempt_connect_trusted_peer(
                 crate::storage::json::save_config(&config);
             }
 
+            let session_generation = deps.connection_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
             let handle = ConnectionManager::connect_direct(
                 conn,
                 deps.connected.clone(),
+                deps.connection.clone(),
+                deps.connected_peer.clone(),
+                deps.connection_generation.clone(),
+                session_generation,
                 deps.clip_tx.clone(),
                 app.clone(),
             )

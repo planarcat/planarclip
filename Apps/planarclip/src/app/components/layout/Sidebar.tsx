@@ -1,14 +1,11 @@
-import { Clipboard, Moon, Palette, PlugZap, Radio, RefreshCw, Settings, Sun, SunMoon, Unplug } from "lucide-react";
+import { Clipboard, Moon, Palette, Radio, Settings, Sun, SunMoon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { THEME_COLORS } from "../../constants/theme";
-import type { AppConnectionStatus, ColorScheme, Device, NavId, ThemeColor } from "../../types";
-import { MAX_CONNECTIONS } from "../../constants/connection";
-import { StatusDot } from "../common/StatusDot";
+import type { AppConnectionStatus, ColorScheme, NavId, ThemeColor } from "../../types";
 import { ThemeSwatch } from "../common/ThemeSwatch";
 
 type SidebarProps = {
   activeNav: NavId;
-  devices: Device[];
   status: AppConnectionStatus;
   identityLabel: string;
   colorScheme: ColorScheme;
@@ -18,18 +15,13 @@ type SidebarProps = {
   isSavingDeviceName: boolean;
   onThemeChange: (theme: ThemeColor) => void;
   onNavigate: (nav: NavId) => void;
-  onRefreshDevices: () => void;
-  onConnectDevice: (device: Device) => void;
   onDeviceNameChange: (deviceName: string) => void;
   onDeviceNameSave: (deviceName?: string) => void;
-  onDisconnect: () => void;
-  isRefreshingDevices: boolean;
   tauriAvailable: boolean;
 };
 
 export function Sidebar({
   activeNav,
-  devices,
   status,
   identityLabel,
   colorScheme,
@@ -39,12 +31,8 @@ export function Sidebar({
   isSavingDeviceName,
   onThemeChange,
   onNavigate,
-  onRefreshDevices,
-  onConnectDevice,
   onDeviceNameChange,
   onDeviceNameSave,
-  onDisconnect,
-  isRefreshingDevices,
   tauriAvailable,
 }: SidebarProps) {
   const [isEditingDeviceName, setIsEditingDeviceName] = useState(false);
@@ -152,80 +140,6 @@ export function Sidebar({
           </button>
         ))}
       </nav>
-
-      <div className="px-4 pb-2 pt-4">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <p className="text-[13px] font-medium text-primary">设备列表</p>
-          <button
-            onClick={onRefreshDevices}
-            disabled={isRefreshingDevices}
-            aria-label="刷新设备列表"
-            className="rounded-md p-1.5 text-secondary-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40 cursor-pointer"
-            title="刷新设备列表"
-            type="button"
-          >
-            <RefreshCw size={13} className={isRefreshingDevices ? "animate-spin" : undefined} />
-          </button>
-        </div>
-        {devices.length > 0 ? (
-          <div className="space-y-1.5">
-            {devices.map((device) => {
-              const connectedCount = devices.filter((entry) => entry.status === "connected").length;
-              const atConnectionLimit = connectedCount >= MAX_CONNECTIONS;
-              const connectDisabled =
-                status === "connecting" || (atConnectionLimit && device.status !== "connected");
-              const hostNameLabel = device.hostName?.trim();
-              const showHostName = Boolean(hostNameLabel && hostNameLabel.toLocaleLowerCase() !== device.name.trim().toLocaleLowerCase());
-              const actionTitle =
-                device.status === "connected"
-                  ? `断开与 ${device.name} 的连接`
-                  : status === "connecting"
-                    ? `正在处理 ${device.name} 的连接`
-                    : atConnectionLimit
-                      ? "已超出连接上限，请先断开其中一个设备"
-                      : `连接到 ${device.name}`;
-
-              return (
-                <div key={device.id} className="flex items-center justify-between gap-2 rounded-lg px-1 py-1 hover:bg-secondary/40">
-                  <div className="min-w-0 flex-1" title={showHostName ? `${device.name} · ${hostNameLabel}` : device.name}>
-                    <p className="truncate text-[13px] font-medium text-primary">{device.name}</p>
-                    {showHostName && <p className="truncate text-[11px] font-medium text-primary/65">{hostNameLabel}</p>}
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <StatusDot status={device.status} size="md" />
-                    {device.status === "connected" ? (
-                      <button
-                        onClick={onDisconnect}
-                        aria-label={actionTitle}
-                        className="rounded-md p-1.5 text-secondary-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-                        title={actionTitle}
-                        type="button"
-                      >
-                        <Unplug size={13} />
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => onConnectDevice(device)}
-                        disabled={connectDisabled}
-                        aria-label={actionTitle}
-                        className="rounded-md p-1.5 text-secondary-foreground transition-colors hover:bg-primary/10 hover:text-primary disabled:opacity-40"
-                        title={actionTitle}
-                        type="button"
-                      >
-                        <PlugZap size={13} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="rounded-lg border border-dashed border-border px-3 py-3 text-center text-[13px] font-medium text-primary/75">
-            暂无发现更多设备
-          </div>
-        )}
-      </div>
 
       <div className="mt-auto space-y-3 border-t border-border px-3 pb-3 pt-3">
         <div className="flex items-center justify-between gap-2">

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{broadcast, Mutex};
@@ -23,6 +24,15 @@ impl ConnectionHandle {
     }
 
     pub fn send_clipboard(&self, snapshot: &ClipboardSnapshot) {
+        let is_connected = self
+            .connected
+            .try_lock()
+            .map(|guard| *guard)
+            .unwrap_or(false);
+        if !is_connected {
+            return;
+        }
+
         if let ClipboardSnapshot::Text(ref text) = snapshot {
             let hash = snapshot.content_hash();
             let hash_hex = hex::encode(hash);
@@ -119,6 +129,10 @@ impl ConnectionManager {
     pub async fn connect_direct(
         conn: DirectConnection,
         connected: Arc<Mutex<bool>>,
+        connection: Arc<Mutex<Option<ConnectionHandle>>>,
+        connected_peer: Arc<Mutex<Option<crate::ConnectedPeerPayload>>>,
+        connection_generation: Arc<AtomicU64>,
+        session_generation: u64,
         clip_tx: broadcast::Sender<ClipboardEvent>,
         app_handle: AppHandle,
     ) -> ConnectionHandle {
@@ -176,7 +190,16 @@ impl ConnectionManager {
             }
 
             tracing::warn!("Direct connection lost");
+            let was_connected = *connected.lock().await;
             *connected.lock().await = false;
+            if connection_generation.load(Ordering::SeqCst) == session_generation {
+                *connection.lock().await = None;
+                *connected_peer.lock().await = None;
+            }
+
+            if !was_connected {
+                return;
+            }
 
             let message = if peer_name.is_empty() {
                 "对方设备已下线。".to_string()

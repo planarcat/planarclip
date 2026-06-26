@@ -41,7 +41,7 @@ function PairingModalHeader({
 
   const subtitle =
     stage === "incoming_pairing"
-      ? "请让对方输入下方配对码以完成连接"
+      ? "输入对方配对码，或让对方输入你的配对码"
       : selectedDevice
         ? "选择设备后发起连接，按提示完成配对"
         : "请先从列表中选择要连接的设备";
@@ -97,7 +97,7 @@ function PairingStatusBar({ stage }: { stage: PairingStage }) {
       ? "等待对方回应…"
       : stage === "submitting_code"
         ? "正在验证…"
-        : stage === "awaiting_code"
+        : stage === "awaiting_code" || stage === "incoming_pairing"
           ? "请输入配对码"
           : "等待对方输入配对码";
 
@@ -147,7 +147,7 @@ function LocalPairingCodeSection({
           style={{ width: `${Math.max(0, Math.min(100, progress * 100))}%` }}
         />
       </div>
-      <p className="text-[11px] font-medium text-muted-foreground">请在对方设备上输入此配对码</p>
+      <p className="text-[11px] font-medium text-muted-foreground">本机配对码 · 也可输入对方配对码</p>
     </div>
   );
 }
@@ -234,8 +234,9 @@ export function PairingModal({
   const activeTarget = selectedDevice?.name ? selectedDevice : null;
   const listDevices = allDiscoverable.filter((device) => device.id !== activeTarget?.id);
 
-  const showLocalPairingCode = stage === "incoming_pairing";
-  const showPairingInput = stage === "awaiting_code" || stage === "submitting_code";
+  const inMutualPairing = stage === "awaiting_code" || stage === "incoming_pairing";
+  const showLocalPairingCode = inMutualPairing;
+  const showPairingInput = inMutualPairing || stage === "submitting_code";
   const inboundPairing = stage === "incoming_pairing";
 
   const pairingCodeCountdownActive = stage === "awaiting_code" || stage === "incoming_pairing";
@@ -312,19 +313,9 @@ export function PairingModal({
             </div>
           )}
 
-          {!showPairingInput && !inboundPairing && (
+          {!showPairingInput && !inMutualPairing && (
             <p
               className={`text-[11px] font-medium ${
-                errorMessage ? "text-destructive" : rotationHint ? "text-primary" : "text-muted-foreground"
-              }`}
-            >
-              {helperLine}
-            </p>
-          )}
-
-          {inboundPairing && (
-            <p
-              className={`text-center text-[11px] font-medium ${
                 errorMessage ? "text-destructive" : rotationHint ? "text-primary" : "text-muted-foreground"
               }`}
             >
