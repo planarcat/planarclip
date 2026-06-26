@@ -1,14 +1,14 @@
 import {
   CloudOff,
-  HelpCircle,
   Plus,
-  PlugZap,
-  History,
   RefreshCw,
+  Shield,
   ShieldCheck,
+  ShieldOff,
   Smartphone,
   Unplug,
-  UserMinus,
+  UserX,
+  Zap,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { AppConnectionStatus, Device } from "../../types";
@@ -16,7 +16,6 @@ import { MAX_CONNECTIONS } from "../../constants/connection";
 import { categorizeDevices } from "../../utils/device";
 import { relativeTime } from "../../utils/time";
 import { OsIcon } from "../common/OsIcon";
-import { StatusDot } from "../common/StatusDot";
 
 type DevicesPageProps = {
   devices: Device[];
@@ -33,7 +32,6 @@ type DevicesPageProps = {
 type DeviceSectionHeaderProps = {
   accent: "emerald" | "cyan" | "muted";
   count: number;
-  description?: string;
   icon: ReactNode;
   title: string;
   action?: ReactNode;
@@ -89,7 +87,15 @@ function formatActivityMeta(device: Device) {
   return segments.join(" · ");
 }
 
-function DeviceSectionHeader({ accent, action, count, description, icon, title }: DeviceSectionHeaderProps) {
+function getTrustTooltip(autoAccept: boolean) {
+  if (autoAccept) {
+    return "已开启自动接受连接。点击后，该设备下次发起连接时需要你确认。";
+  }
+
+  return "已关闭自动接受连接。点击后，该设备发起连接时将直接建立会话。";
+}
+
+function DeviceSectionHeader({ accent, action, count, icon, title }: DeviceSectionHeaderProps) {
   const accentClassName =
     accent === "emerald" ? "text-emerald-400" : accent === "cyan" ? "text-primary" : "text-muted-foreground";
 
@@ -101,7 +107,6 @@ function DeviceSectionHeader({ accent, action, count, description, icon, title }
         <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground">{count}</span>
       </div>
       <div className="flex shrink-0 items-center gap-3">
-        {description && <p className="hidden text-[11px] font-medium text-muted-foreground sm:block">{description}</p>}
         {action}
       </div>
     </div>
@@ -118,93 +123,140 @@ function EmptyDeviceSection({ message }: { message: string }) {
   );
 }
 
-function TrustToggle({
-  checked,
-  disabled,
-  onChange,
-  ariaLabel,
-}: {
-  checked: boolean;
-  disabled?: boolean;
-  onChange: (checked: boolean) => void;
-  ariaLabel: string;
-}) {
+function HoverTooltip({ children, content }: { children: ReactNode; content: string }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={ariaLabel}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={`inline-flex h-[19px] w-[34px] shrink-0 items-center rounded-full p-[2px] transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-        checked ? "bg-primary" : "bg-[var(--switch-background)]"
-      }`}
-    >
+    <span className="group/tooltip relative inline-flex">
+      {children}
       <span
-        aria-hidden="true"
-        className={`block h-[15px] w-[15px] rounded-full bg-white transition-transform duration-200 ${
-          checked ? "translate-x-[15px]" : "translate-x-0"
-        }`}
-      />
-    </button>
+        role="tooltip"
+        className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-20 w-max max-w-[240px] -translate-y-1/2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[11px] font-medium leading-snug text-muted-foreground opacity-0 shadow-md transition-opacity group-hover/tooltip:opacity-100 group-focus-within/tooltip:opacity-100"
+      >
+        <span
+          aria-hidden="true"
+          className="absolute right-full top-1/2 -translate-y-1/2 border-[6px] border-transparent border-r-border"
+        />
+        <span
+          aria-hidden="true"
+          className="absolute right-full top-1/2 mr-px -translate-y-1/2 border-[5px] border-transparent border-r-card"
+        />
+        {content}
+      </span>
+    </span>
   );
 }
 
-function RemoveDeviceButton({ device, onRemoveTrustedPeer }: { device: Device; onRemoveTrustedPeer: (device: Device) => void }) {
-  const title = `移除 ${device.name}`;
-
-  return (
-    <button
-      onClick={() => onRemoveTrustedPeer(device)}
-      aria-label={title}
-      className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-      title="移除后，该设备将变为陌生设备"
-      type="button"
-    >
-      <UserMinus size={12} />
-      移除
-    </button>
-  );
-}
-
-function DeviceTrustRow({
+function TrustShieldButton({
   device,
-  disabled,
-  onRemoveTrustedPeer,
   onSetPeerAutoAccept,
 }: {
   device: Device;
-  disabled?: boolean;
-  onRemoveTrustedPeer: (device: Device) => void;
+  onSetPeerAutoAccept: (device: Device, autoAccept: boolean) => void;
+}) {
+  const autoAccept = Boolean(device.autoAccept);
+  const label = autoAccept ? `关闭 ${device.name} 的自动接受连接` : `开启 ${device.name} 的自动接受连接`;
+
+  return (
+    <HoverTooltip content={getTrustTooltip(autoAccept)}>
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={autoAccept}
+        onClick={() => onSetPeerAutoAccept(device, !autoAccept)}
+        className="inline-flex shrink-0 items-center justify-center rounded-md p-0.5 transition-colors hover:bg-secondary/60"
+      >
+        {autoAccept ? (
+          <Shield size={13} className="text-primary" aria-hidden="true" />
+        ) : (
+          <ShieldOff size={13} className="text-primary/40" aria-hidden="true" />
+        )}
+      </button>
+    </HoverTooltip>
+  );
+}
+
+function DeviceNameRow({
+  device,
+  onSetPeerAutoAccept,
+}: {
+  device: Device;
   onSetPeerAutoAccept: (device: Device, autoAccept: boolean) => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-t border-border px-4 py-3">
-      <div className="flex min-w-0 items-center gap-2">
-        <ShieldCheck size={14} className="text-muted-foreground" />
-        <p className="text-[12px] font-medium text-muted-foreground">自动接受连接</p>
-        <span
-          className="inline-flex h-[13px] w-[13px] items-center justify-center rounded-full border border-muted-foreground/50 text-[9px] text-muted-foreground"
-          title="开启后，该熟悉设备发起连接时会直接建立会话；关闭后仍保留为熟悉设备，但需要你确认。"
-        >
-          <HelpCircle size={9} aria-hidden="true" />
-        </span>
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <TrustToggle
-          checked={Boolean(device.autoAccept)}
-          disabled={disabled}
-          ariaLabel={`${device.name} 的自动接受连接`}
-          onChange={(checked) => onSetPeerAutoAccept(device, checked)}
-        />
-        <RemoveDeviceButton device={device} onRemoveTrustedPeer={onRemoveTrustedPeer} />
-      </div>
+    <div className="flex min-w-0 items-center gap-1.5">
+      <p className="truncate text-sm font-semibold leading-none text-primary">{device.name}</p>
+      {device.isTrusted ? (
+        <TrustShieldButton device={device} onSetPeerAutoAccept={onSetPeerAutoAccept} />
+      ) : (
+        <HoverTooltip content="该设备尚未加入熟悉列表，重新配对成功后才能设置自动接受连接。">
+          <span
+            className="inline-flex shrink-0 cursor-not-allowed items-center justify-center rounded-md p-0.5"
+            aria-label="尚未加入熟悉列表，暂不可设置自动接受连接"
+          >
+            <ShieldOff size={13} className="text-primary/25" aria-hidden="true" />
+          </span>
+        </HoverTooltip>
+      )}
     </div>
   );
 }
 
-function KnownDeviceCard({ device, onDisconnect, onRemoveTrustedPeer, onSetPeerAutoAccept }: KnownDeviceCardProps) {
+function DeviceIconButton({
+  ariaLabel,
+  disabled,
+  hoverDestructive,
+  icon: Icon,
+  onClick,
+  title,
+}: {
+  ariaLabel: string;
+  disabled?: boolean;
+  hoverDestructive?: boolean;
+  icon: typeof Zap;
+  onClick: () => void;
+  title: string;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      disabled={disabled}
+      onClick={onClick}
+      title={title}
+      className={`inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[5.5px] text-muted-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+        hoverDestructive ? "hover:text-destructive" : "hover:text-foreground"
+      }`}
+    >
+      <Icon size={14} aria-hidden="true" />
+    </button>
+  );
+}
+
+function RemoveDeviceIconButton({
+  device,
+  onRemoveTrustedPeer,
+}: {
+  device: Device;
+  onRemoveTrustedPeer: (device: Device) => void;
+}) {
+  const title = `移除 ${device.name}`;
+
+  return (
+    <DeviceIconButton
+      ariaLabel={title}
+      hoverDestructive
+      icon={UserX}
+      onClick={() => onRemoveTrustedPeer(device)}
+      title="移除后，该设备将变为陌生设备"
+    />
+  );
+}
+
+function KnownDeviceCard({
+  device,
+  onDisconnect,
+  onRemoveTrustedPeer,
+  onSetPeerAutoAccept,
+}: KnownDeviceCardProps) {
   const osLabel = getOsLabel(device);
   const disconnectTitle = `断开与 ${device.name} 的连接`;
   const activityMeta = formatActivityMeta(device);
@@ -216,21 +268,19 @@ function KnownDeviceCard({ device, onDisconnect, onRemoveTrustedPeer, onSetPeerA
           <OsIcon os={device.os} size={18} />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold leading-none text-primary">{device.name}</p>
+          <DeviceNameRow device={device} onSetPeerAutoAccept={onSetPeerAutoAccept} />
           <p className="mt-1.5 text-[13px] font-medium text-muted-foreground">{osLabel}</p>
           <p className="mt-0.5 truncate font-mono text-[13px] font-medium text-secondary-foreground">{device.address}</p>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
-          <StatusDot status={device.status} size="md" />
-          <button
+        <div className="flex shrink-0 items-center gap-1">
+          {device.isTrusted && <RemoveDeviceIconButton device={device} onRemoveTrustedPeer={onRemoveTrustedPeer} />}
+          <DeviceIconButton
+            ariaLabel={disconnectTitle}
+            hoverDestructive
+            icon={Unplug}
             onClick={onDisconnect}
-            aria-label={disconnectTitle}
-            className="rounded-lg bg-secondary p-2 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
             title={disconnectTitle}
-            type="button"
-          >
-            <Unplug size={15} />
-          </button>
+          />
         </div>
       </div>
 
@@ -245,15 +295,6 @@ function KnownDeviceCard({ device, onDisconnect, onRemoveTrustedPeer, onSetPeerA
             <p className="shrink-0 font-mono text-[11px] font-medium text-emerald-400">{device.latencyMs}ms</p>
           )}
         </div>
-      )}
-
-      {device.isTrusted && (
-        <DeviceTrustRow
-          device={device}
-          disabled={device.status === "connected"}
-          onRemoveTrustedPeer={onRemoveTrustedPeer}
-          onSetPeerAutoAccept={onSetPeerAutoAccept}
-        />
       )}
     </article>
   );
@@ -274,33 +315,21 @@ function NearbyFamiliarCard({
           <OsIcon os={device.os} size={18} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <p className="truncate text-sm font-semibold leading-none text-emerald-400">{device.name}</p>
-            <span title="曾连接过的熟悉设备">
-              <History size={13} className="shrink-0 text-emerald-400" aria-label="曾连接过的熟悉设备" />
-            </span>
-          </div>
+          <DeviceNameRow device={device} onSetPeerAutoAccept={onSetPeerAutoAccept} />
           <p className="mt-1.5 text-[13px] font-medium text-muted-foreground">{getOsLabel(device)}</p>
           <p className="mt-0.5 truncate font-mono text-[13px] font-medium text-secondary-foreground">{device.address}</p>
         </div>
-        <button
-          onClick={() => onConnectDevice(device)}
-          disabled={connectDisabled}
-          aria-label={connectTitle}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
-          title={connectTitle}
-          type="button"
-        >
-          <PlugZap size={14} />
-          重新连接
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          {device.isTrusted && <RemoveDeviceIconButton device={device} onRemoveTrustedPeer={onRemoveTrustedPeer} />}
+          <DeviceIconButton
+            ariaLabel={connectTitle}
+            disabled={connectDisabled}
+            icon={Zap}
+            onClick={() => onConnectDevice(device)}
+            title={connectTitle}
+          />
+        </div>
       </div>
-
-      <DeviceTrustRow
-        device={device}
-        onRemoveTrustedPeer={onRemoveTrustedPeer}
-        onSetPeerAutoAccept={onSetPeerAutoAccept}
-      />
     </article>
   );
 }
@@ -317,17 +346,13 @@ function NearbyStrangerCard({ device, connectDisabled, connectTitle, onConnectDe
           <p className="mt-1.5 text-[13px] font-medium text-muted-foreground">{getDeviceSubtitle(device)}</p>
           <p className="mt-0.5 truncate font-mono text-[13px] font-medium text-secondary-foreground">{device.address}</p>
         </div>
-        <button
-          onClick={() => onConnectDevice(device)}
+        <DeviceIconButton
+          ariaLabel={connectTitle}
           disabled={connectDisabled}
-          aria-label={connectTitle}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-secondary px-3 py-2 text-[12px] font-medium text-primary transition-colors hover:border-primary/30 hover:bg-secondary/80 disabled:opacity-40"
+          icon={Zap}
+          onClick={() => onConnectDevice(device)}
           title={connectTitle}
-          type="button"
-        >
-          <PlugZap size={14} />
-          建立连接
-        </button>
+        />
       </div>
     </article>
   );
@@ -343,26 +368,18 @@ function OfflineDeviceCard({ device, onRemoveTrustedPeer, onSetPeerAutoAccept }:
           <OsIcon os={device.os} size={18} />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold leading-none text-primary">{device.name}</p>
+          <DeviceNameRow device={device} onSetPeerAutoAccept={onSetPeerAutoAccept} />
           <p className="mt-1.5 text-[13px] font-medium text-muted-foreground">{getOsLabel(device)}</p>
           <p className="mt-0.5 truncate font-mono text-[13px] font-medium text-secondary-foreground">{device.address}</p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <CloudOff size={14} className="text-primary/60" aria-hidden="true" />
-          <RemoveDeviceButton device={device} onRemoveTrustedPeer={onRemoveTrustedPeer} />
-        </div>
+        <RemoveDeviceIconButton device={device} onRemoveTrustedPeer={onRemoveTrustedPeer} />
       </div>
 
-      <div className="flex items-center justify-between gap-4 border-t border-border bg-secondary/20 px-4 py-2">
-        <p className="text-[11px] font-medium text-muted-foreground">{lastOnlineLabel}</p>
-        <div className="flex shrink-0 items-center gap-2">
-          <TrustToggle
-            checked={Boolean(device.autoAccept)}
-            ariaLabel={`${device.name} 的自动接受连接`}
-            onChange={(checked) => onSetPeerAutoAccept(device, checked)}
-          />
+      {lastOnlineLabel && (
+        <div className="border-t border-border bg-secondary/20 px-4 py-2">
+          <p className="text-[11px] font-medium text-muted-foreground">{lastOnlineLabel}</p>
         </div>
-      </div>
+      )}
     </article>
   );
 }
@@ -392,7 +409,9 @@ export function DevicesPage({
         ? `正在处理 ${device.name} 的连接`
         : atConnectionLimit
           ? "已超出连接上限，请先断开其中一个设备"
-          : `连接到 ${device.name}`;
+          : device.status === "connected"
+            ? `重新连接到 ${device.name}`
+            : `连接到 ${device.name}`;
 
     return { connectDisabled, connectTitle };
   };
@@ -522,3 +541,4 @@ export function DevicesPage({
     </div>
   );
 }
+

@@ -214,15 +214,26 @@ export default function App() {
         return;
       }
 
+      const wasConnected = device.status === "connected" || connectedPeer?.peerId === device.peerId;
+
       try {
         const removed = await callCommand<boolean>("remove_trusted_peer", { peerId: device.peerId });
         await refreshTrustedPeers();
-        setLastMessage(removed ? `已移除 ${device.name}，它将显示为陌生设备。` : `没有找到 ${device.name} 的记录。`);
+
+        if (!removed) {
+          setLastMessage(`没有找到 ${device.name} 的记录。`);
+          return;
+        }
+
+        if (wasConnected) {
+          await handleDisconnect();
+          return;
+        }
       } catch (error) {
         setLastMessage(normalizeUserMessage(error, `移除 ${device.name} 失败，请稍后重试。`, device.name));
       }
     },
-    [refreshTrustedPeers, setLastMessage],
+    [connectedPeer, handleDisconnect, refreshTrustedPeers, setLastMessage],
   );
 
   const handleSetPeerAutoAccept = useCallback(
