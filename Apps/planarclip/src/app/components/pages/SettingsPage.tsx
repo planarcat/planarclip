@@ -2,6 +2,7 @@ import { Moon, Save, Sun, SunMoon } from "lucide-react";
 import { THEME_COLORS } from "../../constants/theme";
 import type { ColorScheme, SettingAvailability, ThemeColor } from "../../types";
 import { SettingBadge } from "../common/SettingBadge";
+import { SettingToggle } from "../common/SettingToggle";
 import { ThemeSwatch } from "../common/ThemeSwatch";
 
 type SettingsPageProps = {
@@ -10,10 +11,16 @@ type SettingsPageProps = {
   isDark: boolean;
   theme: ThemeColor;
   isSaving: boolean;
+  launchAtStartup: boolean;
+  silentStart: boolean;
+  isSavingStartupSettings: boolean;
+  startupSettingsLoaded: boolean;
   onSchemeChange: (scheme: ColorScheme) => void;
   onThemeChange: (theme: ThemeColor) => void;
   onDeviceNameChange: (deviceName: string) => void;
   onDeviceNameSave: () => void;
+  onLaunchAtStartupChange: (enabled: boolean) => void;
+  onSilentStartChange: (enabled: boolean) => void;
 };
 
 export function SettingsPage({
@@ -22,10 +29,16 @@ export function SettingsPage({
   isDark,
   theme,
   isSaving,
+  launchAtStartup,
+  silentStart,
+  isSavingStartupSettings,
+  startupSettingsLoaded,
   onSchemeChange,
   onThemeChange,
   onDeviceNameChange,
   onDeviceNameSave,
+  onLaunchAtStartupChange,
+  onSilentStartChange,
 }: SettingsPageProps) {
   const settingRows: Array<{
     label: string;
@@ -60,7 +73,7 @@ export function SettingsPage({
   ];
 
   return (
-    <div className="max-w-3xl flex-1 overflow-y-auto px-4 pt-6 md:px-6 md:pt-8 xl:px-8">
+    <div className="flex-1 overflow-y-auto px-4 pt-6 md:px-6 md:pt-8 xl:px-8">
       <h2 className="mb-1 text-base font-semibold text-primary">设置</h2>
       <p className="mb-6 text-sm text-secondary-foreground">管理已落地的外观项、设备名称，并查看当前版本可用的同步能力边界。</p>
 
@@ -154,6 +167,38 @@ export function SettingsPage({
               ))}
             </div>
           </div>
+        </div>
+      </div>
+
+      <p className="mb-3 text-[13px] font-medium text-primary">启动与驻留</p>
+      <div className="mb-6 rounded-xl border border-border bg-card px-4">
+        <div className="flex items-start justify-between gap-4 border-b border-border py-3.5">
+          <div>
+            <p className="text-sm font-medium text-primary">登录时自动启动</p>
+            <p className="mt-0.5 text-[13px] font-medium leading-6 text-muted-foreground">
+              开启后，系统登录时会自动启动 PlanarClip，并在后台继续监听剪贴板同步。
+            </p>
+          </div>
+          <SettingToggle
+            checked={launchAtStartup}
+            disabled={!startupSettingsLoaded || isSavingStartupSettings}
+            label="登录时自动启动"
+            onChange={onLaunchAtStartupChange}
+          />
+        </div>
+        <div className="flex items-start justify-between gap-4 py-3.5">
+          <div>
+            <p className="text-sm font-medium text-primary">静默启动</p>
+            <p className="mt-0.5 text-[13px] font-medium leading-6 text-muted-foreground">
+              开启后，启动时不显示主界面，只驻留托盘；关闭时，启动后会自动打开主界面。
+            </p>
+          </div>
+          <SettingToggle
+            checked={silentStart}
+            disabled={!startupSettingsLoaded || isSavingStartupSettings}
+            label="静默启动"
+            onChange={onSilentStartChange}
+          />
         </div>
       </div>
 

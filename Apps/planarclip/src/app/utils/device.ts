@@ -21,6 +21,27 @@ export function inferOs(name: string): OS {
   return /mac|iphone|ipad|ios/i.test(name) ? "macos" : "windows";
 }
 
+export function areLanDevicesEqual(left: LanDevicePayload[], right: LanDevicePayload[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  const sortKey = (device: LanDevicePayload) => device.peer_id;
+  const sortedLeft = [...left].sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+  const sortedRight = [...right].sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+
+  return sortedLeft.every((device, index) => {
+    const other = sortedRight[index];
+    return (
+      device.peer_id === other.peer_id &&
+      device.name === other.name &&
+      device.ip === other.ip &&
+      device.host_name === other.host_name &&
+      device.port === other.port
+    );
+  });
+}
+
 export function createDeviceId(prefix: string, value: string) {
   return `${prefix}:${value}`;
 }

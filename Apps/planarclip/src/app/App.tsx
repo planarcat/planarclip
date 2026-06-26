@@ -10,6 +10,7 @@ import { SettingsPage } from "./components/pages/SettingsPage";
 import { getThemeById, normalizeColorScheme } from "./constants/theme";
 import { useConnectionBridge } from "./hooks/useConnectionBridge";
 import { usePairingFlow } from "./hooks/usePairingFlow";
+import { useStartupSettings } from "./hooks/useStartupSettings";
 import { useUiTheme } from "./hooks/useUiTheme";
 import type {
   AppConnectionStatus,
@@ -22,6 +23,7 @@ import type {
   Device,
   LanDevicePayload,
   NavId,
+  PairingCodeRotatedPayload,
   PairingStage,
   ThemeColor,
   TrustedPeerPayload,
@@ -99,6 +101,19 @@ export default function App() {
     setIsDark,
     setSettingsMessage,
     setIsSavingSettings,
+  });
+
+  const {
+    launchAtStartup,
+    silentStart,
+    isSavingStartupSettings,
+    startupSettingsLoaded,
+    handleLaunchAtStartupChange,
+    handleSilentStartChange,
+  } = useStartupSettings({
+    tauriAvailable: TAURI_AVAILABLE,
+    callCommand,
+    setLastMessage,
   });
 
   const {
@@ -227,6 +242,14 @@ export default function App() {
     [handleConnectionEstablished, refreshTrustedPeers],
   );
 
+  const handlePairingCodeRotated = useCallback(
+    (payload: PairingCodeRotatedPayload) => {
+      setPairingRotationHint("验证码已更新，请让对方输入新的 6 位数字。");
+      setPairingCode(payload.code);
+    },
+    [setPairingCode],
+  );
+
   useConnectionBridge({
     tauriAvailable: TAURI_AVAILABLE,
     callCommand,
@@ -247,10 +270,7 @@ export default function App() {
     onConnectionEstablished: handleTrustedConnectionEstablished,
     onConnectionFailed: handleConnectionFailed,
     onConnectionEnded: handleConnectionEnded,
-    onPairingCodeRotated: (payload) => {
-      setPairingRotationHint("验证码已更新，请让对方输入新的 6 位数字。");
-      setPairingCode(payload.code);
-    },
+    onPairingCodeRotated: handlePairingCodeRotated,
   });
 
   return (
@@ -326,10 +346,16 @@ export default function App() {
             isDark={isDark}
             theme={theme}
             isSaving={isSavingSettings}
+            launchAtStartup={launchAtStartup}
+            silentStart={silentStart}
+            isSavingStartupSettings={isSavingStartupSettings}
+            startupSettingsLoaded={startupSettingsLoaded}
             onSchemeChange={handleColorSchemeChange}
             onThemeChange={handleThemeChange}
             onDeviceNameChange={handleDeviceNameChange}
             onDeviceNameSave={handleDeviceNameSave}
+            onLaunchAtStartupChange={handleLaunchAtStartupChange}
+            onSilentStartChange={handleSilentStartChange}
           />
         )}
       </main>

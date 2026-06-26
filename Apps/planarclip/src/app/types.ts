@@ -66,6 +66,16 @@ export type UiSettingsPayload = {
   device_name: string;
 };
 
+export type StartupSettingsPayload = {
+  launch_at_startup: boolean;
+  silent_start: boolean;
+};
+
+export type ConnectedPeerPayload = {
+  peer_name: string;
+  peer_id: string;
+};
+
 export type SettingAvailability = "editable" | "managed" | "planned";
 
 export type ClipboardHistoryPayload = {

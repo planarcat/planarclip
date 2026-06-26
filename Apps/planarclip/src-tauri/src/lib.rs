@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager, WindowEvent};
+use tauri::{Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
@@ -13,8 +13,10 @@ mod network;
 mod storage;
 mod sync;
 mod tray;
+mod window;
 
 use clipboard::monitor::ClipboardMonitor;
+use tauri_plugin_autostart::ManagerExt;
 use clipboard::types::{ClipboardEvent, ClipboardHistoryEntry, ClipboardOrigin};
 use crypto::keys::{peer_id_from_public_key, KeyPair};
 use network::direct::{self, InitiatorResult, ListenerEvent};
@@ -50,6 +52,7 @@ pub struct AppState {
     pub config: Arc<Mutex<AppConfig>>,
     pub key_pair: Arc<Mutex<Option<KeyPair>>>,
     pub connected: Arc<Mutex<bool>>,
+    pub connected_peer: Arc<Mutex<Option<ConnectedPeerPayload>>>,
     pub connection: Arc<Mutex<Option<ConnectionHandle>>>,
     pub clip_tx: broadcast::Sender<ClipboardEvent>,
     pub clipboard_history: Arc<Mutex<Vec<ClipboardHistoryEntry>>>,
@@ -57,6 +60,7 @@ pub struct AppState {
     pub pending_initiator: Arc<Mutex<Option<TcpStream>>>,
     pub pending_accept_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     pub pending_reject_tx: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+    pub pending_connection_request: Arc<Mutex<Option<window::ConnectionRequestPayload>>>,
     pub pairing_session_code: Arc<Mutex<Option<Arc<Mutex<String>>>>>,
     pub pairing_code_expires_at: Arc<Mutex<Option<i64>>>,
 }
@@ -66,6 +70,18 @@ struct UiSettingsPayload {
     color_scheme: String,
     theme_color: String,
     device_name: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct StartupSettingsPayload {
+    launch_at_startup: bool,
+    silent_start: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ConnectedPeerPayload {
+    peer_name: String,
+    peer_id: String,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -147,6 +163,66 @@ fn ui_settings_from_config(config: &AppConfig) -> UiSettingsPayload {
             .to_string(),
         device_name: normalize_stored_device_name(&config.device_name),
     }
+}
+
+fn startup_settings_from_config(config: &AppConfig) -> StartupSettingsPayload {
+    StartupSettingsPayload {
+        launch_at_startup: config.launch_at_startup.unwrap_or(false),
+        silent_start: config.silent_start.unwrap_or(false),
+    }
+}
+
+fn load_clipboard_history_from_config(config: &AppConfig) -> Vec<ClipboardHistoryEntry> {
+    config
+        .clipboard_history
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .take(MAX_CLIPBOARD_HISTORY)
+        .collect()
+}
+
+async fn store_connected_peer(
+    connected_peer: &Arc<Mutex<Option<ConnectedPeerPayload>>>,
+    peer_name: String,
+    peer_id: String,
+) {
+    *connected_peer.lock().await = Some(ConnectedPeerPayload {
+        peer_name,
+        peer_id,
+    });
+}
+
+async fn clear_connected_peer(connected_peer: &Arc<Mutex<Option<ConnectedPeerPayload>>>) {
+    *connected_peer.lock().await = None;
+}
+
+async fn persist_clipboard_history(
+    config: &Arc<Mutex<AppConfig>>,
+    history: &[ClipboardHistoryEntry],
+) {
+    let mut cfg = config.lock().await;
+    cfg.clipboard_history = Some(history.to_vec());
+    storage_json::save_config(&cfg);
+}
+
+fn sync_autostart(app: &tauri::AppHandle, launch_at_startup: bool) -> Result<(), String> {
+    let autostart = app.autolaunch();
+    let enabled = autostart
+        .is_enabled()
+        .map_err(|error| format!("读取开机启动状态失败：{}", error))?;
+
+    if launch_at_startup && !enabled {
+        autostart
+            .enable()
+            .map_err(|error| format!("开启开机启动失败：{}", error))?;
+    } else if !launch_at_startup && enabled {
+        autostart
+            .disable()
+            .map_err(|error| format!("关闭开机启动失败：{}", error))?;
+    }
+
+    Ok(())
 }
 
 fn trusted_peer_payload(peer: &TrustedPeerData) -> TrustedPeerPayload {
@@ -313,31 +389,8 @@ fn merge_clipboard_history(history: &mut Vec<ClipboardHistoryEntry>, entry: Clip
     history.truncate(MAX_CLIPBOARD_HISTORY);
 }
 
-fn show_main_window(app: &tauri::AppHandle) {
-    if let Some(win) = app.get_webview_window("main") {
-        let _ = win.unminimize();
-        let _ = win.show();
-        let _ = win.set_focus();
-    }
-}
-
-fn hide_main_window(app: &tauri::AppHandle) {
-    if let Some(win) = app.get_webview_window("main") {
-        let _ = win.hide();
-    }
-}
-
-fn toggle_main_window(app: &tauri::AppHandle) {
-    if let Some(win) = app.get_webview_window("main") {
-        let visible = win.is_visible().unwrap_or(false);
-        let minimized = win.is_minimized().unwrap_or(false);
-
-        if visible && !minimized {
-            let _ = win.hide();
-        } else {
-            show_main_window(app);
-        }
-    }
+async fn clear_pending_connection_request(state: &AppState) {
+    *state.pending_connection_request.lock().await = None;
 }
 
 fn emit_connection_failed(app: &tauri::AppHandle, error: &direct::HandshakeError) {
@@ -348,6 +401,54 @@ fn emit_connection_failed(app: &tauri::AppHandle, error: &direct::HandshakeError
             "message": error.user_message(),
         }),
     );
+}
+
+#[tauri::command]
+async fn get_pending_connection_request(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<window::ConnectionRequestPayload>, String> {
+    Ok(state.pending_connection_request.lock().await.clone())
+}
+
+#[tauri::command]
+async fn get_connected_peer(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<ConnectedPeerPayload>, String> {
+    let connected = *state.connected.lock().await;
+    if !connected {
+        clear_connected_peer(&state.connected_peer).await;
+        return Ok(None);
+    }
+
+    Ok(state.connected_peer.lock().await.clone())
+}
+
+#[tauri::command]
+async fn get_startup_settings(
+    state: tauri::State<'_, AppState>,
+) -> Result<StartupSettingsPayload, String> {
+    let config = state.config.lock().await;
+    Ok(startup_settings_from_config(&config))
+}
+
+#[tauri::command]
+async fn save_startup_settings(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    launch_at_startup: bool,
+    silent_start: bool,
+) -> Result<StartupSettingsPayload, String> {
+    {
+        let mut config = state.config.lock().await;
+        config.launch_at_startup = Some(launch_at_startup);
+        config.silent_start = Some(silent_start);
+        storage_json::save_config(&config);
+    }
+
+    sync_autostart(&app, launch_at_startup)?;
+
+    let config = state.config.lock().await;
+    Ok(startup_settings_from_config(&config))
 }
 
 #[tauri::command]
@@ -603,6 +704,12 @@ async fn connect_lan(
             )
             .await;
             *state.connection.lock().await = Some(handle);
+            store_connected_peer(
+                &state.connected_peer,
+                peer_name.clone(),
+                peer_id.clone(),
+            )
+            .await;
 
             let _ = app.emit(
                 "connection-established",
@@ -678,6 +785,12 @@ async fn submit_pairing_code(
             )
             .await;
             *state.connection.lock().await = Some(handle);
+            store_connected_peer(
+                &state.connected_peer,
+                peer_name.clone(),
+                peer_id.clone(),
+            )
+            .await;
 
             let _ = app.emit(
                 "connection-established",
@@ -702,6 +815,7 @@ async fn accept_connection(state: tauri::State<'_, AppState>) -> Result<(), Stri
     let tx = state.pending_accept_tx.lock().await.take();
     if let Some(tx) = tx {
         let _ = tx.send(());
+        clear_pending_connection_request(state.inner()).await;
         Ok(())
     } else {
         Err("当前没有待确认的连接请求".into())
@@ -714,6 +828,7 @@ async fn reject_connection(state: tauri::State<'_, AppState>) -> Result<(), Stri
     if let Some(tx) = state.pending_reject_tx.lock().await.take() {
         let _ = tx.send(()).await;
     }
+    clear_pending_connection_request(state.inner()).await;
     Ok(())
 }
 
@@ -721,6 +836,7 @@ async fn reject_connection(state: tauri::State<'_, AppState>) -> Result<(), Stri
 async fn disconnect(state: tauri::State<'_, AppState>) -> Result<(), String> {
     *state.connected.lock().await = false;
     *state.connection.lock().await = None;
+    clear_connected_peer(&state.connected_peer).await;
 
     if let Some(mut stream) = state.pending_initiator.lock().await.take() {
         let _ = stream.shutdown().await;
@@ -766,6 +882,7 @@ async fn finalize_incoming_connection(
     is_reconnect: bool,
     config: Arc<Mutex<AppConfig>>,
     connected: Arc<Mutex<bool>>,
+    connected_peer: Arc<Mutex<Option<ConnectedPeerPayload>>>,
     connection: Arc<Mutex<Option<ConnectionHandle>>>,
     clip_tx: broadcast::Sender<ClipboardEvent>,
     app_handle: &tauri::AppHandle,
@@ -793,12 +910,18 @@ async fn finalize_incoming_connection(
     )
     .await;
     *connection.lock().await = Some(handle);
+    store_connected_peer(
+        &connected_peer,
+        initiator_name.clone(),
+        initiator_peer_id.clone(),
+    )
+    .await;
 
     let _ = app_handle.emit(
         "connection-established",
         serde_json::json!({
             "peer_name": initiator_name,
-            "peer_id": direct::short_fingerprint(&initiator_pk),
+            "peer_id": initiator_peer_id,
             "is_reconnect": is_reconnect,
         }),
     );
@@ -810,6 +933,7 @@ async fn handle_incoming_connection(
     config: Arc<Mutex<AppConfig>>,
     app_handle: tauri::AppHandle,
     connected: Arc<Mutex<bool>>,
+    connected_peer: Arc<Mutex<Option<ConnectedPeerPayload>>>,
     connection: Arc<Mutex<Option<ConnectionHandle>>>,
     clip_tx: broadcast::Sender<ClipboardEvent>,
     pending_accept_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
@@ -865,6 +989,7 @@ async fn handle_incoming_connection(
                     true,
                     config,
                     connected,
+                    connected_peer,
                     connection,
                     clip_tx,
                     &app_handle,
@@ -878,7 +1003,7 @@ async fn handle_incoming_connection(
         return;
     }
 
-    show_main_window(&app_handle);
+    let pending_connection_request = app_handle.state::<AppState>().pending_connection_request.clone();
 
     if initiator_is_familiar {
         tracing::info!(
@@ -886,19 +1011,19 @@ async fn handle_incoming_connection(
             initiator_name,
         );
 
-        let _ = app_handle.emit(
-            "connection-request",
-            serde_json::json!({
-                "device_name": initiator_name,
-                "peer_id": initiator_peer_id,
-                "requires_pairing": false,
-            }),
-        );
-
         let (accept_tx, accept_rx) = oneshot::channel();
         let (reject_tx, reject_rx) = mpsc::channel(1);
         *pending_accept_tx.lock().await = Some(accept_tx);
         *pending_reject_tx.lock().await = Some(reject_tx);
+
+        window::present_connection_request(
+            &app_handle,
+            &pending_connection_request,
+            initiator_name.clone(),
+            initiator_peer_id.clone(),
+            false,
+        )
+        .await;
 
         match direct::responder_wait_for_decision(
             req.stream,
@@ -921,6 +1046,7 @@ async fn handle_incoming_connection(
                     true,
                     config,
                     connected,
+                    connected_peer,
                     connection,
                     clip_tx,
                     &app_handle,
@@ -929,6 +1055,7 @@ async fn handle_incoming_connection(
             }
             Err(e) => {
                 tracing::info!("Incoming confirmation failed: {}", e);
+                clear_pending_connection_request(app_handle.state::<AppState>().inner()).await;
                 if !matches!(e, direct::HandshakeError::Cancelled) {
                     emit_connection_failed(&app_handle, &e);
                 }
@@ -950,19 +1077,19 @@ async fn handle_incoming_connection(
             initiator_name,
         );
 
-        let _ = app_handle.emit(
-            "connection-request",
-            serde_json::json!({
-                "device_name": initiator_name,
-                "peer_id": initiator_peer_id,
-                "requires_pairing": true,
-            }),
-        );
-
         let (accept_tx, accept_rx) = oneshot::channel();
         let (reject_tx, reject_rx) = mpsc::channel(2);
         *pending_accept_tx.lock().await = Some(accept_tx);
         *pending_reject_tx.lock().await = Some(reject_tx);
+
+        window::present_connection_request(
+            &app_handle,
+            &pending_connection_request,
+            initiator_name.clone(),
+            initiator_peer_id.clone(),
+            true,
+        )
+        .await;
 
         let app_handle_rotate = app_handle.clone();
 
@@ -997,6 +1124,7 @@ async fn handle_incoming_connection(
                     false,
                     config,
                     connected,
+                    connected_peer,
                     connection,
                     clip_tx,
                     &app_handle,
@@ -1005,6 +1133,7 @@ async fn handle_incoming_connection(
             }
             Err(e) => {
                 tracing::info!("Incoming pairing failed: {}", e);
+                clear_pending_connection_request(app_handle.state::<AppState>().inner()).await;
                 if !matches!(e, direct::HandshakeError::Cancelled | direct::HandshakeError::InvalidCode) {
                     emit_connection_failed(&app_handle, &e);
                 }
@@ -1015,6 +1144,7 @@ async fn handle_incoming_connection(
     {
         let app_state = app_handle.state::<AppState>();
         clear_pairing_session(app_state.inner()).await;
+        clear_pending_connection_request(app_state.inner()).await;
     }
 
     *pending_reject_tx.lock().await = None;
@@ -1032,6 +1162,7 @@ pub fn run() {
     storage_json::save_config(&config);
 
     let tcp_port = config.tcp_port.unwrap_or(app_profile::DEFAULT_TCP_PORT);
+    let initial_clipboard_history = load_clipboard_history_from_config(&config);
 
     let (clip_tx, _) = broadcast::channel::<ClipboardEvent>(16);
 
@@ -1039,30 +1170,47 @@ pub fn run() {
         config: Arc::new(Mutex::new(config)),
         key_pair: Arc::new(Mutex::new(Some(key_pair.clone()))),
         connected: Arc::new(Mutex::new(false)),
+        connected_peer: Arc::new(Mutex::new(None)),
         connection: Arc::new(Mutex::new(None)),
         clip_tx: clip_tx.clone(),
-        clipboard_history: Arc::new(Mutex::new(Vec::new())),
+        clipboard_history: Arc::new(Mutex::new(initial_clipboard_history)),
         lan_devices: Arc::new(Mutex::new(Vec::new())),
         pending_initiator: Arc::new(Mutex::new(None)),
         pending_accept_tx: Arc::new(Mutex::new(None)),
         pending_reject_tx: Arc::new(Mutex::new(None)),
+        pending_connection_request: Arc::new(Mutex::new(None)),
         pairing_session_code: Arc::new(Mutex::new(None)),
         pairing_code_expires_at: Arc::new(Mutex::new(None)),
     };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name("PlanarClip")
+                .build(),
+        )
         .manage(app_state)
         .setup(move |app| {
-            if let Some(win) = app.get_webview_window("main") {
-                let app_handle = app.handle().clone();
-                win.on_window_event(move |event| {
-                    if let WindowEvent::CloseRequested { api, .. } = event {
-                        // 桌面端关闭主窗时改为收回托盘，避免误触后直接退出同步会话。
-                        api.prevent_close();
-                        hide_main_window(&app_handle);
-                    }
-                });
+            use tauri_plugin_notification::NotificationExt;
+
+            let _ = app.handle().notification().request_permission();
+
+            let startup = startup_settings_from_config(&app.state::<AppState>().config.blocking_lock());
+            if let Err(error) = sync_autostart(app.handle(), startup.launch_at_startup) {
+                tracing::warn!("Failed to sync autostart on startup: {}", error);
+            }
+            if !startup.silent_start {
+                window::ensure_main_window(app.handle().clone());
+            }
+
+            if let Some(win) = app.get_webview_window(window::MAIN_WINDOW_LABEL) {
+                window::attach_main_window_close_handler(app.handle().clone(), win);
+            }
+
+            if startup.silent_start {
+                window::destroy_main_window(app.handle());
             }
 
             let toggle = MenuItemBuilder::with_id("toggle", "打开 PlanarClip").build(app)?;
@@ -1085,12 +1233,12 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        toggle_main_window(&tray.app_handle());
+                        window::toggle_main_window(&tray.app_handle());
                     }
                 })
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "toggle" => {
-                        show_main_window(app);
+                        window::ensure_main_window(app.clone());
                     }
                     "quit" => {
                         app.exit(0);
@@ -1107,6 +1255,7 @@ pub fn run() {
             let pending_accept_tx = app.state::<AppState>().pending_accept_tx.clone();
             let pending_reject_tx = app.state::<AppState>().pending_reject_tx.clone();
             let connected = app.state::<AppState>().connected.clone();
+            let connected_peer = app.state::<AppState>().connected_peer.clone();
             let connection = app.state::<AppState>().connection.clone();
             let config = app.state::<AppState>().config.clone();
 
@@ -1132,20 +1281,25 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     while let Some(event) = discovery_rx.recv().await {
                         let mut devices = lan_devices.lock().await;
+                        let mut changed = false;
                         match event {
                             DiscoveryEvent::Added(dev) => {
                                 if let Some(existing) =
                                     devices.iter_mut().find(|d| d.peer_id == dev.peer_id)
                                 {
-                                    tracing::info!(
-                                        "LAN device refreshed: {} ({})",
-                                        dev.name,
-                                        dev.ip
-                                    );
-                                    *existing = dev;
+                                    if *existing != dev {
+                                        tracing::info!(
+                                            "LAN device refreshed: {} ({})",
+                                            dev.name,
+                                            dev.ip
+                                        );
+                                        *existing = dev;
+                                        changed = true;
+                                    }
                                 } else {
                                     tracing::info!("LAN device added: {} ({})", dev.name, dev.ip);
                                     devices.push(dev);
+                                    changed = true;
                                 }
                             }
                             DiscoveryEvent::Removed { service_fullname } => {
@@ -1153,10 +1307,13 @@ pub fn run() {
                                 devices.retain(|d| !lan_device_matches_removal(d, &service_fullname));
                                 if devices.len() != before {
                                     tracing::info!("LAN device removed: {}", service_fullname);
+                                    changed = true;
                                 }
                             }
                         }
-                        let _ = app_handle.emit("lan-devices-changed", &*devices);
+                        if changed {
+                            let _ = app_handle.emit("lan-devices-changed", &*devices);
+                        }
                     }
                 });
             }
@@ -1172,6 +1329,7 @@ pub fn run() {
             {
                 let app_handle = app_handle.clone();
                 let connected = connected.clone();
+                let connected_peer = connected_peer.clone();
                 let connection = connection.clone();
                 let clip_tx = clip_tx.clone();
                 let pending_accept_tx = pending_accept_tx.clone();
@@ -1189,6 +1347,7 @@ pub fn run() {
                                     config.clone(),
                                     app_handle.clone(),
                                     connected.clone(),
+                                    connected_peer.clone(),
                                     connection.clone(),
                                     clip_tx.clone(),
                                     pending_accept_tx.clone(),
@@ -1204,10 +1363,10 @@ pub fn run() {
             {
                 let app_handle = app_handle.clone();
                 let clipboard_history = clipboard_history.clone();
+                let config = config.clone();
                 let mut clip_history_rx = clip_tx.subscribe();
 
                 tauri::async_runtime::spawn(async move {
-                    // 统一从广播流汇总本机会话内的文本历史，前端只消费这份裁剪后的摘要列表。
                     while let Ok(event) = clip_history_rx.recv().await {
                         if let Some(entry) = build_clipboard_history_entry(&event) {
                             let updated_history = {
@@ -1215,6 +1374,7 @@ pub fn run() {
                                 merge_clipboard_history(&mut history, entry);
                                 history.clone()
                             };
+                            persist_clipboard_history(&config, &updated_history).await;
                             let _ = app_handle.emit("clipboard-history-changed", updated_history);
                         }
                     }
@@ -1247,10 +1407,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_status,
+            get_connected_peer,
             get_pairing_code,
             rotate_pairing_code,
             get_ui_settings,
+            get_startup_settings,
+            save_startup_settings,
             get_clipboard_history,
+            get_pending_connection_request,
             save_ui_settings,
             pair,
             get_lan_devices,

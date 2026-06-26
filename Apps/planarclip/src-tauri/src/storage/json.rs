@@ -1,4 +1,5 @@
 use crate::app_profile::CONFIG_FILE_NAME;
+use crate::clipboard::types::ClipboardHistoryEntry;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -12,6 +13,9 @@ pub struct AppConfig {
     pub trusted_peers: Option<Vec<TrustedPeerData>>,
     pub ui_color_scheme: Option<String>,
     pub ui_theme_color: Option<String>,
+    pub clipboard_history: Option<Vec<ClipboardHistoryEntry>>,
+    pub launch_at_startup: Option<bool>,
+    pub silent_start: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

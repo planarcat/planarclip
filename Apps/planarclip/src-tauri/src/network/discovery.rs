@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 
 pub use mdns_sd::{ServiceDaemon, ServiceEvent};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LanDevice {
     pub name: String,
     pub peer_id: String,

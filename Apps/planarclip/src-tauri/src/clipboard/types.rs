@@ -55,7 +55,7 @@ impl ClipboardEvent {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClipboardHistoryEntry {
     pub id: String,
     pub content: String,

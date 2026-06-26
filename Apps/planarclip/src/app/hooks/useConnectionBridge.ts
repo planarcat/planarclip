@@ -1,10 +1,11 @@
 import { listen } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import type {
   AppConnectionStatus,
   ClipboardHistoryPayload,
   CommandExecutor,
   ConnectedPeer,
+  ConnectedPeerPayload,
   ConnectionEndedPayload,
   ConnectionEstablishedPayload,
   ConnectionFailedPayload,
@@ -16,6 +17,24 @@ import type {
   UiSettingsPayload,
 } from "../types";
 import { mapClipboardHistory } from "../utils/clipboard";
+import { areLanDevicesEqual, inferOs } from "../utils/device";
+
+function mapConnectedPeerPayload(payload: ConnectedPeerPayload): ConnectedPeer {
+  const peerName = payload.peer_name || "已连接设备";
+  return {
+    name: peerName,
+    peerId: payload.peer_id,
+    address: "局域网直连",
+    os: inferOs(peerName),
+    source: "lan",
+  };
+}
+
+function useLatestRef<T>(value: T) {
+  const ref = useRef(value);
+  ref.current = value;
+  return ref;
+}
 
 type UseConnectionBridgeOptions = {
   tauriAvailable: boolean;
@@ -27,7 +46,7 @@ type UseConnectionBridgeOptions = {
   setLastMessage: (message: string) => void;
   setPairingCode: (pairingCode: string) => void;
   onPairingCodeRotated?: (payload: PairingCodeRotatedPayload) => void;
-  setLanDevices: (devices: LanDevicePayload[]) => void;
+  setLanDevices: Dispatch<SetStateAction<LanDevicePayload[]>>;
   setTrustedPeers: (peers: TrustedPeerPayload[]) => void;
   setClips: (clips: ReturnType<typeof mapClipboardHistory>) => void;
   setConnectedPeer: (peer: ConnectedPeer | null) => void;
@@ -70,6 +89,22 @@ export function useConnectionBridge({
   const statusRef = useRef(status);
   const connectedPeerRef = useRef(connectedPeer);
 
+  const setLanDevicesRef = useLatestRef(setLanDevices);
+  const setClipsRef = useLatestRef(setClips);
+  const setPairingCodeRef = useLatestRef(setPairingCode);
+  const setStatusRef = useLatestRef(setStatus);
+  const setLastMessageRef = useLatestRef(setLastMessage);
+  const setTrustedPeersRef = useLatestRef(setTrustedPeers);
+  const setConnectedPeerRef = useLatestRef(setConnectedPeer);
+  const applyDesktopUiSettingsRef = useLatestRef(applyDesktopUiSettings);
+  const applyUiSettingsFallbackRef = useLatestRef(applyUiSettingsFallback);
+  const toUserMessageRef = useLatestRef(toUserMessage);
+  const onPairingCodeRotatedRef = useLatestRef(onPairingCodeRotated);
+  const onConnectionRequestRef = useLatestRef(onConnectionRequest);
+  const onConnectionEstablishedRef = useLatestRef(onConnectionEstablished);
+  const onConnectionFailedRef = useLatestRef(onConnectionFailed);
+  const onConnectionEndedRef = useLatestRef(onConnectionEnded);
+
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
@@ -85,30 +120,38 @@ export function useConnectionBridge({
 
       if (isConnected) {
         if (statusRef.current !== "online") {
-          setStatus("online");
+          setStatusRef.current("online");
+        }
+        if (!connectedPeerRef.current) {
+          const peer = await callCommand<ConnectedPeerPayload | null>("get_connected_peer");
+          if (peer) {
+            setConnectedPeerRef.current(mapConnectedPeerPayload(peer));
+          }
         }
         return;
       }
 
       if (pairingStageRef.current === "idle") {
         if (connectedPeerRef.current) {
-          setConnectedPeer(null);
-          setLastMessage("当前连接已断开，请重新连接。");
+          setConnectedPeerRef.current(null);
+          setLastMessageRef.current("当前连接已断开，请重新连接。");
         }
-        setStatus("offline");
+        setStatusRef.current("offline");
       }
     } catch {
       if (pairingStageRef.current === "idle") {
-        setStatus("offline");
+        setStatusRef.current("offline");
       }
     }
-  }, [callCommand, pairingStageRef, setConnectedPeer, setLastMessage, setStatus]);
+  }, [callCommand, pairingStageRef]);
+
+  const refreshConnectionStatusRef = useLatestRef(refreshConnectionStatus);
 
   useEffect(() => {
     if (!tauriAvailable) {
-      setPairingCode("桌面端可用");
-      setStatus("offline");
-      setLastMessage("当前是浏览器预览模式，连接能力需在桌面应用中体验。");
+      setPairingCodeRef.current("桌面端可用");
+      setStatusRef.current("offline");
+      setLastMessageRef.current("当前是浏览器预览模式，连接能力需在桌面应用中体验。");
       return;
     }
 
@@ -116,68 +159,30 @@ export function useConnectionBridge({
     let eventCleanup: Array<() => void> = [];
 
     const setup = async () => {
-      try {
-        const [
-          initialStatus,
-          initialPairingCode,
-          initialLanDevices,
-          initialTrustedPeers,
-          initialUiSettings,
-          initialClipboardHistory,
-        ] = await Promise.all([
-          callCommand<string>("get_status"),
-          callCommand<string>("get_pairing_code"),
-          callCommand<LanDevicePayload[]>("get_lan_devices"),
-          callCommand<TrustedPeerPayload[]>("get_trusted_peers"),
-          callCommand<UiSettingsPayload>("get_ui_settings"),
-          callCommand<ClipboardHistoryPayload[]>("get_clipboard_history"),
-        ]);
-
-        if (disposed) {
-          return;
-        }
-
-        setPairingCode(initialPairingCode);
-        setLanDevices(initialLanDevices);
-        setTrustedPeers(initialTrustedPeers);
-        setClips(mapClipboardHistory(initialClipboardHistory));
-        applyDesktopUiSettings(initialUiSettings);
-        setStatus(initialStatus === "connected" ? "online" : "offline");
-        setLastMessage(
-          initialStatus === "connected"
-            ? "已恢复现有连接，可以继续同步剪贴板。"
-            : "正在监听设备列表与连接请求。",
-        );
-      } catch (error) {
-        if (!disposed) {
-          setStatus("offline");
-          applyUiSettingsFallback();
-          setLastMessage(toUserMessage(error, "连接桥接初始化失败，请稍后再试。"));
-        }
-      }
-
       const listeners = await Promise.all([
         listen<LanDevicePayload[]>("lan-devices-changed", (event) => {
-          setLanDevices(event.payload);
+          setLanDevicesRef.current((previous) =>
+            areLanDevicesEqual(previous, event.payload) ? previous : event.payload,
+          );
         }),
         listen<ClipboardHistoryPayload[]>("clipboard-history-changed", (event) => {
-          setClips(mapClipboardHistory(event.payload));
+          setClipsRef.current(mapClipboardHistory(event.payload));
         }),
         listen<ConnectionRequestPayload>("connection-request", (event) => {
-          onConnectionRequest(event.payload);
+          onConnectionRequestRef.current(event.payload);
         }),
         listen<ConnectionEstablishedPayload>("connection-established", (event) => {
-          onConnectionEstablished(event.payload);
+          onConnectionEstablishedRef.current(event.payload);
         }),
         listen<ConnectionFailedPayload>("connection-failed", (event) => {
-          onConnectionFailed(event.payload);
+          onConnectionFailedRef.current(event.payload);
         }),
         listen<ConnectionEndedPayload>("connection-ended", (event) => {
-          onConnectionEnded(event.payload);
+          onConnectionEndedRef.current(event.payload);
         }),
         listen<PairingCodeRotatedPayload>("pairing-code-rotated", (event) => {
-          setPairingCode(event.payload.code);
-          onPairingCodeRotated?.(event.payload);
+          setPairingCodeRef.current(event.payload.code);
+          onPairingCodeRotatedRef.current?.(event.payload);
         }),
       ]);
 
@@ -187,12 +192,64 @@ export function useConnectionBridge({
       }
 
       eventCleanup = listeners;
+
+      try {
+        const [
+          initialStatus,
+          initialPairingCode,
+          initialLanDevices,
+          initialTrustedPeers,
+          initialUiSettings,
+          initialClipboardHistory,
+          initialConnectedPeer,
+          initialPendingConnectionRequest,
+        ] = await Promise.all([
+          callCommand<string>("get_status"),
+          callCommand<string>("get_pairing_code"),
+          callCommand<LanDevicePayload[]>("get_lan_devices"),
+          callCommand<TrustedPeerPayload[]>("get_trusted_peers"),
+          callCommand<UiSettingsPayload>("get_ui_settings"),
+          callCommand<ClipboardHistoryPayload[]>("get_clipboard_history"),
+          callCommand<ConnectedPeerPayload | null>("get_connected_peer"),
+          callCommand<ConnectionRequestPayload | null>("get_pending_connection_request"),
+        ]);
+
+        if (disposed) {
+          return;
+        }
+
+        setPairingCodeRef.current(initialPairingCode);
+        setLanDevicesRef.current(initialLanDevices);
+        setTrustedPeersRef.current(initialTrustedPeers);
+        setClipsRef.current(mapClipboardHistory(initialClipboardHistory));
+        applyDesktopUiSettingsRef.current(initialUiSettings);
+        if (initialStatus === "connected") {
+          setStatusRef.current("online");
+          if (initialConnectedPeer) {
+            setConnectedPeerRef.current(mapConnectedPeerPayload(initialConnectedPeer));
+          }
+          setLastMessageRef.current("已恢复现有连接，可以继续同步剪贴板。");
+        } else {
+          setStatusRef.current("offline");
+          setLastMessageRef.current("正在监听设备列表与连接请求。");
+        }
+
+        if (initialPendingConnectionRequest) {
+          onConnectionRequestRef.current(initialPendingConnectionRequest);
+        }
+      } catch (error) {
+        if (!disposed) {
+          setStatusRef.current("offline");
+          applyUiSettingsFallbackRef.current();
+          setLastMessageRef.current(toUserMessageRef.current(error, "连接桥接初始化失败，请稍后再试。"));
+        }
+      }
     };
 
     void setup();
 
     const timer = window.setInterval(() => {
-      void refreshConnectionStatus();
+      void refreshConnectionStatusRef.current();
     }, 5_000);
 
     return () => {
@@ -200,23 +257,5 @@ export function useConnectionBridge({
       window.clearInterval(timer);
       eventCleanup.forEach((unlisten) => unlisten());
     };
-  }, [
-    applyDesktopUiSettings,
-    applyUiSettingsFallback,
-    callCommand,
-    onConnectionEnded,
-    onConnectionEstablished,
-    onConnectionFailed,
-    onConnectionRequest,
-    onPairingCodeRotated,
-    refreshConnectionStatus,
-    setClips,
-    setLanDevices,
-    setLastMessage,
-    setPairingCode,
-    setStatus,
-    setTrustedPeers,
-    tauriAvailable,
-    toUserMessage,
-  ]);
+  }, [callCommand, tauriAvailable]);
 }
