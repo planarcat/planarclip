@@ -1,524 +1,407 @@
-# PlanarClip 连接行为说明
+# PlanarClip 连接流程说明（产品视角）
 
-> 基于当前代码实现整理（2026-06-26）。描述局域网直连下的发现、配对、连接、断开及相关 UI 行为。  
-> 浏览器预览模式（`pnpm dev:web`）仅展示界面，所有连接能力需在 Tauri 桌面应用中体验。
-
----
-
-## 1. 架构概览
-
-PlanarClip 的连接能力由 **Rust 后端** 与 **React 前端** 协作完成：
-
-| 层级 | 职责 |
-|------|------|
-| Rust | mDNS 设备发现、TCP 监听（默认端口 dev `19877` / release `19876`）、握手协议、配对码会话、剪贴板同步通道、自动连接、持久化已信任设备 |
-| React | 设备列表展示、配对弹层、入站确认弹层、状态提示、用户操作 invoke |
-
-**传输方式**：局域网 TCP 直连 + JSON 帧握手，连接建立后走 `SignalMessage` 数据通道（剪贴板同步等）。  
-**信令配对码路径**（`pair` 命令 → WebSocket 信令服务器 `ws://localhost:8765`）仍保留在 UI 中，但主流程为局域网直连。
-
-```mermaid
-flowchart LR
-  subgraph Frontend
-    UI[React UI]
-    Bridge[useConnectionBridge]
-    Flow[usePairingFlow]
-  end
-  subgraph Backend
-    Discovery[mDNS 发现]
-    Listener[TCP Listener]
-    Handshake[direct 握手]
-    Sync[SyncEngine]
-  end
-  UI --> Flow
-  Flow -->|invoke| Handshake
-  Bridge -->|listen events| UI
-  Discovery -->|lan-devices-changed| Bridge
-  Listener --> Handshake
-  Handshake --> Sync
-```
+> 描述当前版本中，用户如何发现设备、建立连接、完成配对，以及期间会看到什么、需要做什么。  
+> 本文从**使用流程**出发，不涉及实现细节。  
+> 完整连接能力仅在**桌面应用**中可用；浏览器预览只能看界面。
 
 ---
 
-## 2. 状态模型
+## 1. 使用前需要知道的事
 
-### 2.1 前端连接状态 `AppConnectionStatus`
+- 两台设备需在同一局域网，且都打开了 PlanarClip。
+- 应用启动后会自动**监听附近设备**和**等待别人连进来**；侧栏显示「监听中」即表示就绪。
+- 同一时间只能与**一台**设备保持连接；要换设备，需先断开当前连接。
+- 成功连过一次后，对方会进入你的**已信任设备**列表，下次流程会简化。
 
-| 值 | 含义 | 典型 UI |
-|----|------|---------|
-| `offline` | 未连接 | 侧栏「监听中」/ 设备页可发起连接 |
-| `connecting` | 连接进行中 | 侧栏「连接中…」/ 配对弹层或入站确认 |
-| `online` | 已建立会话 | 侧栏「已连接」/ 剪贴板可同步 |
+---
 
-### 2.2 配对阶段 `PairingStage`
+## 2. 核心概念
 
-| 阶段 | 含义 | 谁触发 |
-|------|------|--------|
-| `idle` | 无进行中的配对流程 | 初始 / 重置后 |
-| `requesting_device` | 主动连接中，等待对端握手结果 | 点击连接局域网设备 |
-| `awaiting_code` | 对端要求配对码，等待本机输入 | `connect_lan` 返回 `awaiting_code` |
-| `submitting_code` | 正在提交 6 位配对码 | 用户在配对弹层点「验证」 |
-| `manual_pairing` | 正在通过信令服务器 `pair` 命令配对 | 配对弹层手动输入码 + 非 `awaiting_code` 模式 |
-| `incoming_request` | 收到入站连接，等待用户允许/拒绝 | `connection-request` 事件 |
-| `incoming_accepting` | 用户已点允许，等待后端完成握手 | 熟悉设备入站、非配对流程 |
-| `incoming_pairing` | 用户已允许陌生设备配对，展示本机配对码 | 陌生设备入站且 `requires_pairing` |
-| `error` | 连接失败（非「被拒绝」类） | 各类错误回写 |
+### 2.1 你与对方的关系
 
-### 2.3 后端关键 pending 状态
-
-| 状态 | 说明 |
-|------|------|
-| `connected` | 是否已有活跃数据通道 |
-| `pending_initiator` | 主动方已收到 `AwaitCode`，等待 `submit_pairing_code` |
-| `pending_connection_request` | 入站连接等待用户确认（可跨 WebView 重建恢复） |
-| `pending_accept_tx` / `pending_reject_tx` | 入站握手与用户操作的桥接 |
-| `pairing_session_code` | 陌生设备入站时的会话级 6 位配对码（与静态码不同） |
-
-### 2.4 设备分类（前端 `buildDevices` + `categorizeDevices`）
-
-| 关系 | 判定 | 设备页分区 |
+| 关系 | 含义 | 连一次之后 |
 |------|------|------------|
-| **已配对（connected）** | 当前会话已连接 | 「已配对」 |
-| **熟悉 + 在线未连** | `isTrusted` 且 mDNS 可见 | 「附近」熟悉区 |
-| **陌生 + 在线未连** | 非 trusted 且 mDNS 可见 | 「附近」陌生区 |
-| **熟悉 + 离线** | trusted 但当前 LAN 不可见 | 「离线」 |
-| **陌生 + 离线** | 不展示 | — |
+| **陌生设备** | 从未成功连通过 | 需要配对码或明确确认 |
+| **熟悉设备** | 曾经成功连通过 | 可配置「自动接受」；也可手动再连 |
 
-熟悉关系由配置 `trusted_peers` 持久化；成功完成任意一次局域网配对/连接后会写入该列表。
+关系是**双向各自维护**的：你信任了对方，不代表对方也一定信任你；双方各自的设置会影响各自看到的流程。
+
+### 2.2 设备在列表里的位置
+
+设备页把设备分成三个区域：
+
+| 区域 | 什么时候出现 |
+|------|--------------|
+| **已配对** | 当前正与这台设备连着 |
+| **附近** | 同一局域网内在线，但还没连上（分「熟悉的」和「陌生的」） |
+| **离线** | 曾经连通过，但现在局域网里找不到（只显示熟悉设备） |
+
+侧栏也会列出附近发现的设备，可直接点连接。
+
+### 2.3 你看到的三种连接状态
+
+| 状态 | 侧栏显示 | 你能做什么 |
+|------|----------|------------|
+| 未连接 | 监听中 | 可发起连接、可等别人连进来 |
+| 连接中 | 连接中… | 等待对方确认或正在验证配对码 |
+| 已连接 | 已连接 | 可同步剪贴板；要先断开才能连别的设备 |
 
 ---
 
-## 3. 连接发起方式总览
+## 3. 连接从哪里来
+
+整体上只有三条路：
 
 ```mermaid
 flowchart TD
-  Start([用户或系统触发连接])
-  Start --> Manual[手动主动连接]
-  Start --> AutoOut[自动出站连接]
-  Start --> Inbound[被动入站连接]
+  A([开始]) --> B{谁发起?}
+  B -->|你点连接| C[主动连接]
+  B -->|对方连你| D[被动接收]
+  B -->|你没操作| E[自动连接]
 
-  Manual --> M1[侧栏 / 设备页点击连接]
-  Manual --> M2[配对弹层选设备]
-  Manual --> M3[配对弹层输入信令配对码 pair]
-  Manual --> M4[配对弹层输入对方验证码 submit]
+  C --> C1[侧栏 / 设备页点连接]
+  C --> C2[连接新设备弹层里选设备]
+  C --> C2b[弹层里输入配对码]
 
-  AutoOut --> A1[启动后 auto_connect_trusted]
-  AutoOut --> A2[mDNS 发现 trusted 设备上线]
-
-  Inbound --> I1[对端 TCP 连入]
-  I1 --> I2{本机策略}
-  I2 -->|auto_accept| I3[静默接受]
-  I2 -->|熟悉需确认| I4[IncomingConnectionPrompt]
-  I2 -->|陌生| I5[IncomingConnectionPrompt + 配对码]
+  E --> E1[设置里开了「自动连接已信任设备」]
+  E --> E2[启动后或发现熟悉设备上线]
 ```
 
----
+| 方式 | 谁触发 | 你会不会看到界面 |
+|------|--------|------------------|
+| **主动连接** | 你点击连接 | 通常会弹出「连接设备」窗口 |
+| **被动接收** | 对方连你 | 弹出「是否允许连接」确认窗 |
+| **自动连接** | 应用后台 | 成功时几乎无感；失败也不打扰你 |
 
-## 4. 主动连接（出站）
+另外还有两个**独立设置**，不要混在一起：
 
-### 4.1 触发入口
-
-| 入口 | 行为 |
-|------|------|
-| **侧栏设备列表** | 点击 `PlugZap` → `handleConnectLan(device)` |
-| **设备页 · 附近** | 熟悉/陌生卡片上的连接按钮 |
-| **设备页 · 离线** | 仅有 `last_ip` 时显示地址，无连接按钮（需等 mDNS 发现） |
-| **配对弹层 · 设备列表** | 切换目标设备 → 先 `disconnect` 再连新设备 |
-| **设置 · 自动连接已信任设备** | 不直接点连，见 §5 |
-
-**前置限制**（前端）：
-
-- 已有 `online` 连接时，不能再连其他设备（需先断开）。
-- `connecting` 时侧栏/设备页连接按钮禁用。
-- 设备缺少 `host`/`port` 时无法连接。
-
-### 4.2 熟悉 vs 陌生（主动方视角）
-
-`connect_lan` 根据 **本机** `trusted_peers` 是否包含目标 `peer_id` 决定握手参数：
-
-| 本机是否认识目标 | `requires_confirmation` | 预期对端行为 |
-|------------------|-------------------------|--------------|
-| 认识（熟悉） | `false` | 对端若 `auto_accept` → 直接连通；否则弹出确认 |
-| 不认识（陌生） | `true` | 对端走陌生入站流程 → 通常返回 `AwaitCode` |
-
-### 4.3 出站阶段与 UI
-
-#### 阶段 A：`requesting_device`
-
-1. 打开 **PairingModal**，显示目标设备卡片。
-2. `status` → `connecting`，状态栏「正在建立连接…」。
-3. 调用 `connect_lan`。
-
-**可能结果：**
-
-| 结果 | 后续 |
-|------|------|
-| 返回 `"connected"` | 直接 `online`，关闭弹层，提示「已与 XX 建立连接…」 |
-| 返回 `"awaiting_code"` | 进入 `awaiting_code`，提示输入对端屏幕配对码 |
-| 命令抛错 | 见 §8 失败处理 |
-
-#### 阶段 B：`awaiting_code`
-
-1. 配对弹层显示 60 秒倒计时进度条（`usePairingCountdown`）。
-2. 用户输入 6 位数字 → 点「验证」→ `submitting_code` → `submit_pairing_code`。
-3. 倒计时归零 → 自动 `rotate_pairing_code`（仅当后端有活跃配对会话时有效；此阶段主动方等的是**对方屏幕上的码**，本机 rotate 主要服务于入站展示）。
-
-**成功**：后端 emit `connection-established` → 前端 `online`，关闭弹层。  
-**失败**：见 §8。
-
-#### 阶段 C：配对弹层 · 信令 `pair`（`manual_pairing`）
-
-- 不选设备、直接输入 6 位码并提交（`stage !== awaiting_code` 时走 `handleManualPair`）。
-- 调用 `pair` 命令连接 WebSocket 信令服务器，**非当前主路径**。
-- 成功则 `online`，显示「已配对设备」；失败停留 `error` 状态于弹层内。
-
-### 4.4 关闭 / 取消主动连接
-
-用户在 **PairingModal** 点关闭（× 或遮罩）时 `closePairingModal`：
-
-| 当前阶段 | 行为 |
-|----------|------|
-| 存在 `incomingRequest` | 等同拒绝入站（见 §6） |
-| `awaiting_code` / `requesting_device` / `submitting_code` | 调用 `disconnect`，提示「已取消本次连接…」，关闭弹层 |
-| 其他 | 仅重置并关闭弹层 |
-
----
-
-## 5. 自动连接
-
-自动连接分 **两种独立机制**，不要混淆：
-
-### 5.1 全局：自动连接已信任设备（出站）
-
-**设置项**：设置页 →「自动连接已信任设备」→ 持久化 `auto_connect_trusted`。
-
-**触发时机：**
-
-1. **应用启动约 2 秒后**：遍历所有 trusted peers，优先用 mDNS 快照中的 IP:port，否则用 `last_ip` + 默认端口。
-2. **mDNS 发现变更**：新设备上线且 `peer_id` 在 trusted 列表中。
-
-**执行条件**（全部满足才发起）：
-
-- `auto_connect_trusted == true`
-- 当前未连接（`connected == false`）
-- 无 `pending_initiator`
-- 无待处理入站请求
-
-**握手特点**：
-
-- 始终以熟悉设备身份发起（`requires_confirmation = false`）。
-- 若对端仍需配对码（`AwaitingCode`），**静默放弃**（关闭 TCP，不弹 UI，仅写日志）。
-- 失败时 **默认不** emit `connection-failed`（避免骚扰）；仅 debug 日志。
-
-**成功 UI**：与其他出站相同，收到 `connection-established`（`is_reconnect: true`）→ 提示「已恢复与 XX 的连接」。
-
-### 5.2 单设备：自动接受连接（入站）
-
-**设置项**：设备页 trusted 设备卡片 →「自动接受连接」→ `set_peer_auto_accept` → 持久化 `trusted_peers[].auto_accept`。
-
-**默认值**：`true`（`peer_auto_accepts` 对 `None` 视为开启）。
-
-**效果**：该 familiar 设备 TCP 连入时，**跳过** `IncomingConnectionPrompt`，后端直接 `responder_accept_trusted`，emit `connection-established`。
-
-**关闭后**：仍视为熟悉设备，但会弹出确认窗口，需用户点「允许连接」。
-
----
-
-## 6. 被动连接（入站）
-
-### 6.1 后端处理分支
-
-对端 TCP 连入 → `read_connect_request` → `handle_incoming_connection`：
-
-```mermaid
-flowchart TD
-  IN[TCP 入站 ConnectRequest]
-  IN --> AC{trusted 且 auto_accept?}
-  AC -->|是| OK[responder_accept_trusted → 连接建立]
-  AC -->|否| FM{本机 trusted 列表有该公钥?}
-  FM -->|是 熟悉| CF[IncomingConnectionPrompt requires_pairing=false]
-  FM -->|否 陌生| ST[生成会话配对码 + IncomingConnectionPrompt requires_pairing=true]
-  CF --> WAIT1[responder_wait_for_decision 最多 60s]
-  ST --> WAIT2[responder_verify_code：先等用户允许，再等对方输入码]
-  WAIT1 -->|accept| OK
-  WAIT1 -->|reject| REJ[AuthResult rejected]
-  WAIT2 -->|accept + 正确码| OK
-  WAIT2 -->|reject / 错码 / 超时| FAIL[握手失败]
-```
-
-### 6.2 窗口与通知
-
-`present_connection_request` 会：
-
-1. 写入 `pending_connection_request`（供 WebView 重建后 `get_pending_connection_request` 恢复）。
-2. 若主窗口不可见 → 发送 **系统通知** + 任务栏闪烁（不抢焦点）。
-3. 必要时重建 WebView 窗口。
-
-### 6.3 入站 UI 流程
-
-#### 第一步：`IncomingConnectionPrompt`（z-index 60）
-
-显示条件：`incomingRequest` 存在且 `pairingStage` 为 `incoming_request` 或 `incoming_accepting`。
-
-| 类型 | 标题 | 允许按钮 |
-|------|------|----------|
-| 熟悉设备 | 「收到新的连接请求」 | 「允许连接」 |
-| 陌生设备 | 「陌生设备请求配对」 | 「允许配对」 |
-
-用户操作：
-
-| 操作 | 前端 | 后端 |
+| 设置 | 在哪 | 作用 |
 |------|------|------|
-| **拒绝** | `reject_connection` → 重置 → `offline` | 向对端发 `rejected` |
-| **允许** | `accept_connection` | 熟悉：直接完成握手；陌生：进入配对码等待 |
-
-#### 第二步（仅陌生设备）：`PairingModal` · `incoming_pairing`
-
-- 展示 **本机会话配对码**（6 位，60 秒倒计时，过期自动轮换）。
-- 输入框禁用（等**对方**输入本机码）。
-- 关闭按钮文案：「取消这次连接」→ 等同拒绝。
-
-#### 熟悉设备允许后：`incoming_accepting`
-
-- 仅 **IncomingConnectionPrompt** 显示「正在连接…」，无 PairingModal。
-- 成功后 `connection-established`，弹层全部关闭。
-
-### 6.4 入站失败
-
-后端在以下情况 emit `connection-failed`（用户主动拒绝/取消 **不** emit）：
-
-- 熟悉设备确认超时（60s）
-- 陌生设备配对超时、协议错误等
-- **不包括**：`Cancelled`（用户拒绝）、`InvalidCode`（配对码错误，对端会收到错误）
-
-前端 `handleConnectionFailed`：
-
-- **`kind: rejected`**：StatusNotice 弹窗 + 关闭所有配对 UI（主动方正等待时）。
-- **入站相关阶段**：先 `resetPairingFlow(false)` 清 incoming，再 `error` 阶段（**PairingModal 不强制打开**，除非 `showPairing` 仍为 true）。
-- 其他错误：同上，`error` 状态。
+| **自动连接已信任设备** | 设置页 | 你去找已经熟悉的设备连（出站） |
+| **自动接受连接** | 设备页，每台熟悉设备单独开关 | 别人来找你时，是否不问你就直接连上（入站） |
 
 ---
 
-## 7. 配对码机制
+## 4. 主动连接：完整流程
 
-### 7.1 两类配对码
+### 4.1 能不能发起？
 
-| 类型 | 来源 | 何时使用 |
-|------|------|----------|
-| **静态码** | 由本机密钥指纹派生（`pairing_code_from_key_pair`） | 无活跃入站配对会话时；配对弹层默认展示 |
-| **会话码** | 陌生入站时 `generate_pairing_code()` 随机生成 | 陌生设备入站且用户点「允许配对」后；存于 `pairing_session_code` |
+点连接之前，系统会先判断：
 
-### 7.2 有效期与轮换
+```mermaid
+flowchart TD
+  Start([点击连接]) --> Q1{已经连着别的设备?}
+  Q1 -->|是| Block1[提示：请先断开当前连接]
+  Q1 -->|否| Q2{正在连接中?}
+  Q2 -->|是| Block2[按钮不可用]
+  Q2 -->|否| Q3{设备有可用地址?}
+  Q3 -->|否| Block3[提示：等设备上线或刷新列表]
+  Q3 -->|是| Go[进入连接流程]
+```
 
-| 位置 | 时长 | 轮换方式 |
-|------|------|----------|
-| 前端倒计时 | 60 秒 | 归零调用 `rotate_pairing_code`（需有会话） |
-| 后端 `responder_verify_code` | 60 秒无输入 | 自动生成新码 + emit `pairing-code-rotated` |
-| 后端 `responder_wait_for_decision` | 60 秒无确认 | 超时失败 `timeout` |
+### 4.2 连接过程分几步？
 
-`pairing-code-rotated` 事件会更新前端 `pairingCode` 与轮换提示文案。
+点连接后，会打开**连接设备**窗口，并进入「正在连接」状态。
 
-### 7.3 主动方输入配对码
+```mermaid
+flowchart TD
+  Start([你发起连接]) --> Show[显示连接窗口 + 「正在建立连接…」]
+  Show --> Branch{对方是谁?}
 
-陌生设备互连时：**主动方**在 `awaiting_code` 阶段输入 **被动方屏幕显示** 的 6 位码 → `submit_pairing_code`。
+  Branch -->|对方认识你且开了自动接受| Fast[直接连上]
+  Branch -->|对方认识你但没开自动接受| WaitConfirm[等对方在弹窗里点「允许」]
+  Branch -->|对方不认识你| NeedCode[对方要你输入配对码]
 
----
+  WaitConfirm --> ConfirmResult{对方选择}
+  ConfirmResult -->|允许| Fast
+  ConfirmResult -->|拒绝| Rejected[提示：对方没有继续这次连接]
+  ConfirmResult -->|一直不操作 60 秒| Timeout[提示：配对已超时]
 
-## 8. 成功路径汇总
+  NeedCode --> ShowCode[窗口提示：去看对方屏幕上的 6 位码]
+  ShowCode --> Input[你输入 6 位数字并点「验证」]
+  Input --> CodeResult{码对不对?}
+  CodeResult -->|对| Fast
+  CodeResult -->|错| WrongCode[提示：配对码不正确，可看最新码再试]
+  CodeResult -->|对方拒绝或超时| Rejected
 
-| 场景 | 后端事件/返回值 | 前端结果 |
-|------|-----------------|----------|
-| 主动连熟悉且对端 auto_accept | `connect_lan` → `connected` 或 `connection-established` | `online`，关闭弹层 |
-| 主动连熟悉需对端确认 | 对端允许 → `connection-established` | `online`，关闭弹层 |
-| 主动连陌生 | 输入正确配对码 → `connection-established` | `online`，写入 trusted |
-| 入站 auto_accept | `connection-established` (`is_reconnect: true`) | `online` |
-| 入站手动允许 | `connection-established` | `online`，写入 trusted |
-| 自动连接成功 | `connection-established` (`is_reconnect: true`) | `online` |
-| 信令 pair 成功 | `pair` 返回 | `online`（显示「已配对设备」） |
+  Fast --> Done([已连接，窗口关闭，可同步剪贴板])
+```
 
-成功后：
+### 4.3 各阶段你会看到什么
 
-- 对端加入 `trusted_peers`（含 `name`、`peer_id`、`public_key`、`last_ip`）。
-- 侧栏 / 设备页该设备显示为「已连接」。
-- 剪贴板同步引擎开始工作。
+| 阶段 | 窗口里显示 | 你需要做什么 |
+|------|------------|--------------|
+| 正在连接 | 目标设备信息 + 「正在建立连接…」 | 等待 |
+| 等待对方确认 | 同上 | 等对方点允许（熟悉设备场景） |
+| 等待输入配对码 | 提示去看对方屏幕 + 输入框 | 输入 6 位数字，点「验证」 |
+| 正在验证 | 「正在验证…」 | 等待 |
+| 已连接 | 窗口自动关闭 | 无需操作 |
+| 出错 | 窗口内红色提示 | 可关闭后重试 |
 
----
+### 4.4 主动连接时，你还可以
 
-## 9. 失败与异常处理
+- **换一台设备**：在连接窗口底部的设备列表里点另一台（会先取消当前这次连接，再连新的）。
+- **取消连接**：点窗口关闭按钮或遮罩——若已在等待对方或正在输码，会取消本次连接并回到「监听中」。
 
-### 9.1 错误码（后端 `HandshakeError.reason_code`）
+### 4.5 不选设备、只输入配对码
 
-| kind | 用户可见文案（经 `normalizeUserMessage`） | 前端 UI 行为 |
-|------|-------------------------------------------|--------------|
-| `rejected` | 对方没有继续这次连接，请重新发起连接。 | **StatusNotice** + 关闭 PairingModal |
-| `invalid_code` | 配对码不正确，请查看对方屏幕上最新的验证码后再试。 | PairingModal 停留 `error` |
-| `timeout` | 这次配对已超时，请重新发起连接并输入新的配对码。 | PairingModal `error` 或入站 reset |
-| `cancelled` | 这次连接已经取消，你可以重新选择设备。 | 通常不 emit（用户主动操作） |
-| `connection_lost` | 对方设备已断开连接，请重新发起连接。 | `connection-ended` |
-| `protocol_error` | 连接过程中出了点问题，请重新发起连接。 | `error` |
-| `connection_unavailable` | 暂时无法连接对方设备… | `error` |
-
-### 9.2 失败信号来源
-
-| 来源 | 场景 |
-|------|------|
-| `connect_lan` / `submit_pairing_code` 命令 reject | 主动连接同步失败 |
-| `connection-failed` 事件 | 入站握手失败、主动连接异步失败 |
-| `connection-ended` 事件 | 已连接会话中断 |
-
-### 9.3 `connection-ended`
-
-对端断开或 TCP 丢失时 emit，前端：
-
-- `connectedPeer` 清空
-- `status` → `offline`
-- `resetPairingFlow(true)`
-- 提示「XX 已断开连接，请重新连接。」
-
-### 9.4 断开连接
-
-用户点 **断开**（侧栏 Unplug / 设备页）→ `disconnect`：
-
-- 关闭连接、清空 pending 握手、清除配对会话。
-- 前端 `offline`，提示「已断开当前连接。」
+在设备页点「+」打开连接窗口，不选列表里的设备，直接在输入框填 6 位码也可以发起连接。  
+这是备用入口，主流程仍是**在列表里选附近设备**来连。
 
 ---
 
-## 10. UI 组件与显示条件
+## 5. 被动接收：别人连你时的流程
 
-| 组件 | z-index | 显示条件 |
-|------|---------|----------|
-| **PairingModal** | 50 | `showPairing === true` |
-| **IncomingConnectionPrompt** | 60 | 有 `incomingRequest` 且 stage 为 `incoming_request` / `incoming_accepting` |
-| **StatusNotice** | 70 | `noticeMessage` 非空（当前用于「被拒绝」） |
+### 5.1 你会怎么知道有人要连？
 
-### PairingModal 内容随 stage 变化
+| 情况 | 你怎么感知 |
+|------|------------|
+| 应用窗口开着 | 弹出确认窗口；任务栏可能闪烁 |
+| 窗口关着或最小化 | 系统通知「XX 请求连接」；窗口会在后台出现（不抢焦点） |
 
-| stage | 设备卡片 | 本机配对码区 | 输入框 | 设备列表 |
-|-------|----------|--------------|--------|----------|
-| `requesting_device` | ✓ | 展示静态码 | 可用（信令 pair） | 可切换 |
-| `awaiting_code` | ✓ | 展示静态码 + 倒计时 | 可用（submit） | 可切换 |
-| `submitting_code` | ✓ | ✓ | 禁用 | 禁用 |
-| `incoming_pairing` | ✗ | 会话码 + 倒计时 | 禁用 | 隐藏 |
-| `error` | 视情况 | ✓ | 视情况 | 视情况 |
-| 打开但未连设备 | ✗ | ✓ | 可用 | 可选设备 |
+即使关过主窗口，后台仍会监听；重新打开窗口后，未处理的连接请求会恢复显示。
 
-### 侧栏状态标签
+### 5.2 收到请求后的第一步：是否允许？
 
-| status | 文案 |
-|--------|------|
-| `connecting` | 连接中… |
-| `online` | 已连接 |
-| `offline` + 桌面 | 监听中 |
-| `offline` + 浏览器 | 预览模式 |
+弹出**连接确认**小窗（不是大的配对窗口）：
 
----
+| 对方是谁 | 标题 | 说明 |
+|----------|------|------|
+| 熟悉设备 | 收到新的连接请求 | 允许后对方会加入已配对列表 |
+| 陌生设备 | 陌生设备请求配对 | 允许后需让对方输入你屏幕上的配对码 |
 
-## 11. 事件与命令对照
+你必须在 **60 秒内** 点「允许」或「拒绝」，否则这次请求会超时失败。
 
-### 11.1 后端 → 前端事件
+```mermaid
+flowchart TD
+  In([有人连你]) --> Auto{熟悉且你开了「自动接受」?}
+  Auto -->|是| Silent[无弹窗，直接连上]
+  Auto -->|否| Prompt[弹出确认窗]
 
-| 事件 | Payload | 处理 |
-|------|---------|------|
-| `lan-devices-changed` | `LanDevice[]` | 更新设备列表；可能触发自动连接 |
-| `connection-request` | `device_name, peer_id, requires_pairing?` | 入站确认流程 |
-| `connection-established` | `peer_name, peer_id, is_reconnect` | 连接成功 |
-| `connection-failed` | `kind?, message?` | 连接失败 |
-| `connection-ended` | `kind?, message?, peer_name?` | 会话结束 |
-| `pairing-code-rotated` | `code, expires_at_ms` | 更新本机展示码 |
-| `pairing-code-needed` | `peer_ip` | **已 emit，前端未单独监听**（由 `connect_lan` 返回值驱动） |
+  Prompt --> Choice{你的选择}
+  Choice -->|拒绝| EndReject[对方会收到「对方没有继续连接」提示]
+  Choice -->|允许 + 熟悉| Silent
+  Choice -->|允许 + 陌生| ShowMyCode[打开配对窗口，展示你的 6 位码]
 
-### 11.2 前端 → 后端命令
+  ShowMyCode --> WaitOther[等对方在他的设备上输入你的码]
+  WaitOther --> CodeOk{对方输入}
+  CodeOk -->|正确| Silent
+  CodeOk -->|错误| TheirProblem[对方那边提示码不对]
+  CodeOk -->|超时| BothFail[双方这次连接失败]
 
-| 命令 | 用途 |
-|------|------|
-| `connect_lan` | 主动连接 `{ ip, port, peerId? }` |
-| `submit_pairing_code` | 提交 6 位配对码 |
-| `accept_connection` / `reject_connection` | 入站允许 / 拒绝 |
-| `disconnect` | 取消或断开 |
-| `get_status` | `connected` / `disconnected`（5 秒轮询） |
-| `get_pairing_code` / `rotate_pairing_code` | 读取 / 轮换会话码 |
-| `get_pending_connection_request` | WebView 重建恢复入站请求 |
-| `get_lan_devices` / `get_trusted_peers` | 设备数据 |
-| `set_peer_auto_accept` / `remove_trusted_peer` | 单设备信任策略 |
-| `save_connection_settings` | 全局自动连接开关 |
-| `pair` | 信令服务器配对（辅路径） |
+  Silent --> Done([已连接])
+```
+
+### 5.3 陌生设备允许配对之后
+
+- 会弹出大的**连接设备**窗口，中间显示**你的 6 位配对码**和 60 秒倒计时。
+- 你把码告诉对方（或让对方看你的屏幕），**不需要**你在输入框里打字。
+- 码快过期时会自动换新，并提示「验证码已更新」。
+- 若你此时关闭窗口，等同**拒绝**这次连接。
+
+### 5.4 熟悉设备点「允许」之后
+
+- 确认窗显示「正在连接…」，一般很快完成。
+- 不需要配对码。
 
 ---
 
-## 12. 连接状态恢复与轮询
+## 6. 自动连接
 
-`useConnectionBridge` 初始化时并行拉取：状态、配对码、LAN 设备、trusted peers、**pending 入站请求**、已连接 peer 等。
+### 6.1 自动去找熟悉的设备（设置页开关）
 
-**5 秒轮询** `get_status`：
+**开启后：**
 
-- 后端已连接而前端未同步 → 补全 `online` 与 `connectedPeer`。
-- 后端已断开且 `pairingStage === idle` → 强制 `offline` 并提示「当前连接已断开…」。
-- **配对进行中**（`pairingStage !== idle`）时，轮询 **不会** 因断开而覆盖 UI 状态。
+1. 应用启动约 2 秒，会按顺序尝试连接已信任列表里的设备（优先用局域网里刚发现的，否则用上次记录的地址）。
+2. 之后在局域网里**新发现**一台你熟悉的设备上线，也会自动去连。
+3. 连上第一条就停止，不会同时连多台。
+
+**前提条件（全部满足才会自动连）：**
+
+- 设置里开关已打开
+- 当前没有连着别的设备
+- 你没有正在进行的连接或配对
+- 对方那边没有拦你（例如需要配对码时，自动连接会**悄悄放弃**，不弹窗打扰你）
+
+**失败时：** 不会有错误弹窗，你仍保持「监听中」，可手动去连。
+
+### 6.2 自动接受熟悉设备的来访（设备页每台设备单独开关）
+
+**默认开启。** 熟悉设备来连你时，跳过确认窗，直接建立连接。
+
+**关闭后：** 每次仍要你在确认窗里点「允许连接」。
+
+这只影响**别人连你**，不影响你去找别人。
 
 ---
 
-## 13. 信任与设备管理
+## 7. 配对码规则
+
+### 7.1 什么时候需要配对码？
+
+- **双方至少有一方把对方当陌生人**时，通常需要 6 位配对码。
+- 两台都互相熟悉，且相关自动设置都开着，可以**完全不要码**。
+
+### 7.2 谁看谁屏幕上的码？
+
+| 场景 | 谁输入 | 看谁屏幕 |
+|------|--------|----------|
+| 你主动连陌生设备 | 你输入 | 看**对方**屏幕上显示的码 |
+| 陌生设备来连你（你已点允许配对） | 对方输入 | 看**你**屏幕上显示的码 |
+
+### 7.3 码的有效期
+
+- 每个码大约 **60 秒**有效，过期会自动换新。
+- 输入过期或错误的码，会提示重新核对**最新**的 6 位数字。
+
+### 7.4 连接窗口里始终有一块「本机配对码」
+
+即使当前没在等人连你，连接窗口也会展示一组本机码。  
+那是备用展示；**真正生效的配对码**以「允许陌生设备配对」后窗口里倒计时那一组为准。
+
+---
+
+## 8. 连接成功之后
+
+- 侧栏变为「已连接」，设备出现在设备页**已配对**区域。
+- 剪贴板开始在这两台设备间同步文本。
+- 对方记入你的**已信任设备**；下次在附近出现时会归到「熟悉的」。
+- 你会看到类似「已与 XX 建立连接，现在可以开始同步剪贴板了」的提示。
+- 若是自动重连或恢复，提示可能是「已恢复与 XX 的连接」。
+
+---
+
+## 9. 失败、拒绝与断开
+
+### 9.1 各种结果你会看到什么
+
+| 情况 | 提示大意 | 界面怎样 |
+|------|----------|----------|
+| **对方拒绝** | 对方没有继续这次连接，请重新发起 | 居中弹窗提示；连接窗口关闭 |
+| **配对码错误** | 配对码不正确，请查看对方最新验证码 | 连接窗口保留，可改码重试 |
+| **超时（60 秒）** | 这次配对已超时，请重新发起 | 连接窗口内错误或需重新连 |
+| **连不上（网络等）** | 暂时连不上，请确认对方应用已打开且在同一局域网 | 连接窗口内错误提示 |
+| **自己取消** | 已取消本次连接 | 窗口关闭，回到监听 |
+| **自己拒绝来访** | 已拒绝这次连接请求 | 确认窗关闭 |
+| **对方断开或掉线** | XX 已断开连接，请重新连接 | 回到未连接，可再连 |
+| **你点断开** | 已断开当前连接 | 回到未连接 |
+
+### 9.2 拒绝的特殊处理
+
+当你正在等对方确认，或正在输入配对码时，若对方点了拒绝：
+
+- **不会**在连接窗口里留一个错误页让你盯着；
+- 会单独弹一层简短提示，然后关掉连接窗口，方便你重新选设备。
+
+### 9.3 断开连接
+
+在侧栏或设备页点断开图标即可。断开后：
+
+- 同步停止；
+- 对方仍保留在熟悉设备列表里（除非你在设备页「移除」）；
+- 可再次手动连接，或等自动连接（若已开启）。
+
+---
+
+## 10. 设备管理相关操作
 
 | 操作 | 效果 |
 |------|------|
-| 连接 / 配对成功 | 对端写入 `trusted_peers` |
-| 移除设备 | `remove_trusted_peer` → 下次视为陌生 |
-| 自动接受开关 | 仅影响 **入站** 是否弹确认 |
-| 自动连接开关 | 仅影响 **出站** 是否在启动/发现时自动连 |
+| **刷新设备列表** | 重新扫描局域网；离线熟悉设备不会因此上线 |
+| **移除设备** | 从熟悉列表删除；下次视其为陌生，需重新配对 |
+| **关闭某台的「自动接受」** | 仅影响它来找你时是否要确认 |
+| **开启「自动连接已信任设备」** | 仅影响你是否自动去找熟悉的设备 |
 
 ---
 
-## 14. 典型端到端场景
+## 11. 典型场景走查
 
-### 场景 A：两台设备首次互连（陌生）
+### 场景 A：两台设备第一次互连
 
-1. A 在设备页点击陌生设备 B → `requesting_device`。
-2. B 收到 `IncomingConnectionPrompt`（陌生）→ 点「允许配对」→ B 显示会话配对码。
-3. A 收到 `awaiting_code` → 输入 B 屏幕上的码 → 验证。
-4. 双方 `connection-established`，A/B 互相写入 trusted。
+1. A、B 都在同一 Wi-Fi，应用显示「监听中」。
+2. A 在设备页「附近 · 陌生」里看到 B，点连接。
+3. A 的连接窗口显示「正在向 B 请求连接…」。
+4. B 弹出「陌生设备请求配对」，点「允许配对」。
+5. B 的连接窗口出现 **6 位配对码**（带倒计时）。
+6. A 的连接窗口变为「请查看 B 屏幕上的配对码」，A 输入这 6 位并验证。
+7. 双方显示已连接，剪贴板可同步；此后互相视为熟悉设备。
 
-### 场景 B：已信任设备再次连接（双方 auto_accept）
+### 场景 B：老设备再次见面，双方都开了自动
 
-1. A 点击熟悉 B，或自动连接触发。
-2. B 的 `auto_accept` 为 true → 无 UI，直接连通。
-3. A 提示「已与 B 建立连接」或「已恢复与 B 的连接」。
+1. A 的设置里开了「自动连接已信任设备」，B 的设备页里 A 的「自动接受」也开着。
+2. A 启动应用（或 B 刚上线被发现）。
+3. 几秒内自动连上，无弹窗，A 看到「已恢复与 B 的连接」。
 
-### 场景 C：已信任但 B 关闭了 auto_accept
+### 场景 C：熟悉设备，但 B 关掉了自动接受
 
-1. A 发起连接 → B 弹 `IncomingConnectionPrompt`。
-2. B 点「允许连接」→ 连通；点「拒绝」→ A 收到 **StatusNotice**，配对窗关闭。
+1. A 点连接 B。
+2. B 收到确认窗「收到新的连接请求」。
+3. B 点「允许连接」→ 连上；点「拒绝」→ A 看到拒绝提示，连接窗关闭。
 
-### 场景 D：A 正在等配对码时 B 拒绝
+### 场景 D：A 在输配对码，B 反悔拒绝
 
-1. A 处于 `awaiting_code`。
-2. B 在确认窗点拒绝 → A 的 `connect_lan` 或后续 read 失败 / `connection-failed` with `rejected`。
-3. A 显示 StatusNotice，不保留错误态配对窗。
+1. A 已在「请输入对方屏幕上的配对码」步骤。
+2. B 在确认窗点拒绝。
+3. A 弹出「对方没有继续这次连接」，连接窗口关闭，不会卡在错误页。
 
----
+### 场景 E：窗口关着时有人要连你
 
-## 15. 代码索引
-
-| 模块 | 路径 |
-|------|------|
-| 配对流程状态机 | `Apps/planarclip/src/app/hooks/usePairingFlow.ts` |
-| 事件桥接 | `Apps/planarclip/src/app/hooks/useConnectionBridge.ts` |
-| 自动连接 | `Apps/planarclip/src-tauri/src/auto_connect.rs` |
-| 入站分发 | `Apps/planarclip/src-tauri/src/lib.rs` → `handle_incoming_connection` |
-| TCP 握手 | `Apps/planarclip/src-tauri/src/network/direct.rs` |
-| 窗口/通知 | `Apps/planarclip/src-tauri/src/window/mod.rs` |
-| 错误文案 | `Apps/planarclip/src/app/utils/message.ts` |
-| 配对弹层 | `Apps/planarclip/src/app/components/overlays/PairingModal.tsx` |
-| 入站确认 | `Apps/planarclip/src/app/components/overlays/IncomingConnectionPrompt.tsx` |
-| 拒绝提示 | `Apps/planarclip/src/app/components/overlays/StatusNotice.tsx` |
-| UI 装配 | `Apps/planarclip/src/app/App.tsx` |
+1. B 关掉了 PlanarClip 主窗口（托盘仍在）。
+2. A 发起连接 B。
+3. B 收到系统通知；任务栏图标闪烁；窗口在后台打开并显示确认窗。
+4. B 点允许后按熟悉/陌生分支继续。
 
 ---
 
-## 16. 已知限制（当前实现）
+## 12. 流程总图（主动 + 被动）
 
-- 同时只支持 **一条** 活跃连接；切换设备需先断开。
-- 自动连接失败 **不** 弹窗，仅日志。
-- 信令 `pair` 路径依赖本地 WebSocket 服务，与局域网主流程并行存在。
-- 浏览器预览模式无法执行任何真实连接命令。
-- 关窗销毁 WebView 后，Rust 后端仍监听 TCP / 剪贴板；入站请求靠系统通知 + 窗口重建恢复 UI（见 `Plans/2026-06-26-destroy-webview-on-close/`）。
+```mermaid
+flowchart TB
+  subgraph 主动
+    A1[你点连接] --> A2{已连着别人?}
+    A2 -->|是| AX[请先断开]
+    A2 -->|否| A3[连接窗口：建立连接中]
+    A3 --> A4{对方反应}
+    A4 -->|直接接受| OK
+    A4 -->|要确认| A5[等对方允许]
+    A4 -->|要配对码| A6[你输入对方屏幕上的码]
+    A5 --> A4b{对方?}
+    A4b -->|允许| OK
+    A4b -->|拒绝| FAIL1[拒绝提示 + 关窗]
+    A6 --> A7{码正确?}
+    A7 -->|是| OK
+    A7 -->|否| A8[窗口内报错可重试]
+  end
+
+  subgraph 被动
+    B1[对方连你] --> B2{自动接受?}
+    B2 -->|是| OK
+    B2 -->|否| B3[确认窗 60 秒内选择]
+    B3 --> B4{你?}
+    B4 -->|拒绝| FAIL2[对方收到拒绝提示]
+    B4 -->|允许熟悉| OK
+    B4 -->|允许陌生| B5[展示你的配对码]
+    B5 --> B6[等对方输入]
+    B6 --> OK
+  end
+
+  OK([已连接 · 可同步剪贴板])
+```
+
+---
+
+## 13. 当前产品限制
+
+- 一次只能连接一台设备。
+- 自动连接失败时不会提示，需手动连接。
+- 仅支持文本剪贴板同步；图片、文件尚未接入。
+- 陌生设备离线后不会出现在列表里，无法从远处发起连接。
+- 浏览器里打开的只是界面预览，不能真正连设备。
+- 关闭主窗口后，连接和剪贴板同步在后台仍可进行；但界面要重新打开才能操作，未处理的连接请求靠通知提醒。
+
+---
+
+## 14. 文档说明
+
+- 本文依据 **2026-06-26** 当前产品行为整理。
+- 若与你在应用中看到的不一致，以实际界面为准；实现变更后应同步更新本文。
