@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 
@@ -52,6 +51,7 @@ fn default_device_name() -> String {
     host_name.unwrap_or_else(|| DEFAULT_DEVICE_NAME.to_string())
 }
 
+#[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Mutex<AppConfig>>,
     pub key_pair: Arc<Mutex<Option<KeyPair>>>,
@@ -72,6 +72,8 @@ pub struct AppState {
     pub pending_connection_request: Arc<Mutex<Option<window::ConnectionRequestPayload>>>,
     pub pairing_session_code: Arc<Mutex<Option<Arc<Mutex<String>>>>>,
     pub pairing_code_expires_at: Arc<Mutex<Option<i64>>>,
+    pub pending_responder_submit_tx:
+        Arc<Mutex<Option<mpsc::Sender<(String, oneshot::Sender<Result<(), direct::HandshakeError>>)>>>>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -145,6 +147,96 @@ fn lan_device_matches_removal(device: &LanDevice, service_fullname: &str) -> boo
 
 const LAN_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const LAN_PROBE_INTERVAL: Duration = Duration::from_secs(15);
+
+async fn discover_trusted_peers_by_tcp_probe(
+    config: &Arc<Mutex<AppConfig>>,
+    lan_devices: &Arc<Mutex<Vec<LanDevice>>>,
+    tcp_port: u16,
+    app: &tauri::AppHandle,
+) {
+    let (trusted_peers, known_peer_ids) = {
+        let config_guard = config.lock().await;
+        let peers = config_guard.trusted_peers.clone().unwrap_or_default();
+        let known_peer_ids = lan_devices
+            .lock()
+            .await
+            .iter()
+            .map(|device| device.peer_id.clone())
+            .collect::<std::collections::HashSet<_>>();
+        (peers, known_peer_ids)
+    };
+
+    let probe_ports = app_profile::tcp_probe_port_candidates(tcp_port);
+    let mut discovered = Vec::new();
+
+    for peer in trusted_peers {
+        if known_peer_ids.contains(&peer.peer_id) {
+            continue;
+        }
+        let Some(last_ip) = peer
+            .last_ip
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+
+        let Some(port) =
+            direct::probe_tcp_reachable_on_any_port(last_ip, &probe_ports, LAN_PROBE_TIMEOUT).await
+        else {
+            continue;
+        };
+
+        discovered.push(LanDevice {
+            name: peer.name.clone(),
+            peer_id: peer.peer_id.clone(),
+            ip: last_ip.to_string(),
+            host_name: String::new(),
+            port,
+            service_fullname: String::new(),
+        });
+    }
+
+    if discovered.is_empty() {
+        return;
+    }
+
+    let mut devices = lan_devices.lock().await;
+    let mut changed = false;
+    for device in discovered {
+        if devices.iter().any(|entry| entry.peer_id == device.peer_id) {
+            continue;
+        }
+        tracing::info!(
+            "Familiar peer {} reachable at {}:{} via TCP probe (mDNS miss)",
+            device.name,
+            device.ip,
+            device.port
+        );
+        devices.push(device);
+        changed = true;
+    }
+
+    if !changed {
+        return;
+    }
+
+    let updated = devices.clone();
+    drop(devices);
+    let _ = app.emit("lan-devices-changed", &updated);
+}
+
+async fn refresh_lan_presence(
+    config: &Arc<Mutex<AppConfig>>,
+    lan_devices: &Arc<Mutex<Vec<LanDevice>>>,
+    connected_peer: &Arc<Mutex<Option<ConnectedPeerPayload>>>,
+    tcp_port: u16,
+    app: &tauri::AppHandle,
+) {
+    discover_trusted_peers_by_tcp_probe(config, lan_devices, tcp_port, app).await;
+    reconcile_lan_devices(lan_devices, connected_peer, app).await;
+}
 
 async fn reconcile_lan_devices(
     lan_devices: &Arc<Mutex<Vec<LanDevice>>>,
@@ -334,9 +426,14 @@ async fn start_pairing_session(state: &AppState, code: Arc<Mutex<String>>) {
     *state.pairing_code_expires_at.lock().await = Some(pairing_code_expires_at_ms());
 }
 
+async fn clear_pending_responder_submit(state: &AppState) {
+    *state.pending_responder_submit_tx.lock().await = None;
+}
+
 async fn clear_pairing_session(state: &AppState) {
     *state.pairing_session_code.lock().await = None;
     *state.pairing_code_expires_at.lock().await = None;
+    clear_pending_responder_submit(state).await;
 }
 
 fn emit_pairing_code_rotated(app: &tauri::AppHandle, code: &str, expires_at_ms: i64) {
@@ -350,16 +447,7 @@ fn emit_pairing_code_rotated(app: &tauri::AppHandle, code: &str, expires_at_ms: 
 }
 
 fn pairing_code_from_key_pair(kp: &KeyPair) -> String {
-    let fp = kp.fingerprint();
-    let numeric: String = fp.chars().filter(|c| c.is_ascii_digit()).collect();
-    if numeric.len() >= 6 {
-        numeric[numeric.len() - 6..].to_string()
-    } else {
-        format!(
-            "{:06}",
-            u32::from_str_radix(&fp[..6.min(fp.len())], 16).unwrap_or(0) % 1_000_000
-        )
-    }
+    direct::pairing_code_from_public_key_bytes(&kp.public_bytes())
 }
 
 fn peer_auto_accepts(peer: &TrustedPeerData) -> bool {
@@ -505,50 +593,105 @@ pub(crate) fn emit_connection_failed(app: &tauri::AppHandle, error: &direct::Han
     );
 }
 
-async fn watch_pending_initiator_peer_abort(
+async fn watch_pending_initiator_peer(
     pending_initiator: Arc<Mutex<Option<TcpStream>>>,
     app: tauri::AppHandle,
+    state: AppState,
 ) {
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-        let mut stream = {
+        let stream = {
             let mut guard = pending_initiator.lock().await;
             guard.take()
         };
 
-        let Some(mut stream) = stream else {
+        let Some(stream) = stream else {
             return;
         };
 
-        match direct::check_initiator_peer_abort(&mut stream).await {
-            Ok(Some(error)) => {
-                emit_connection_failed(&app, &error);
-                let _ = stream.shutdown().await;
-                return;
-            }
-            Ok(None) => {
+        match direct::poll_initiator_peer_message(stream).await {
+            Ok((direct::InitiatorPendingMessage::None, Some(stream))) => {
                 *pending_initiator.lock().await = Some(stream);
             }
+            Ok((direct::InitiatorPendingMessage::PeerFailed(error), _)) => {
+                emit_connection_failed(&app, &error);
+                return;
+            }
+            Ok((direct::InitiatorPendingMessage::PeerAccepted(conn), _)) => {
+                finalize_outbound_pairing(&state, &app, conn, None).await;
+                return;
+            }
+            Ok((_, None)) => return,
             Err(error) => {
                 emit_connection_failed(&app, &error);
-                let _ = stream.shutdown().await;
                 return;
             }
         }
     }
 }
 
+async fn finalize_outbound_pairing(
+    state: &AppState,
+    app: &tauri::AppHandle,
+    conn: direct::DirectConnection,
+    last_ip: Option<String>,
+) {
+    let peer_name = conn.peer_name.clone();
+    let peer_id = conn.peer_id.clone();
+    let peer_pk = conn.peer_public_key.clone();
+
+    {
+        let mut config = state.config.lock().await;
+        upsert_trusted_peer(
+            &mut config,
+            TrustedPeerData {
+                name: peer_name.clone(),
+                public_key: peer_pk,
+                peer_id: peer_id.clone(),
+                last_ip,
+                auto_accept: None,
+            },
+        );
+        storage_json::save_config(&config);
+    }
+
+    let session_generation = next_connection_generation(state);
+    let handle = ConnectionManager::connect_direct(
+        conn,
+        state.connected.clone(),
+        state.connection.clone(),
+        state.connected_peer.clone(),
+        state.connection_generation.clone(),
+        session_generation,
+        state.clip_tx.clone(),
+        app.clone(),
+    )
+    .await;
+    *state.connection.lock().await = Some(handle);
+    store_connected_peer(&state.connected_peer, peer_name.clone(), peer_id.clone()).await;
+
+    let _ = app.emit(
+        "connection-established",
+        serde_json::json!({
+            "peer_name": peer_name,
+            "peer_id": peer_id,
+            "is_reconnect": false,
+        }),
+    );
+}
+
 pub(crate) async fn store_pending_initiator_stream(
     pending_initiator: Arc<Mutex<Option<TcpStream>>>,
     app: &tauri::AppHandle,
+    state: AppState,
     stream: TcpStream,
 ) {
     *pending_initiator.lock().await = Some(stream);
     let pending = pending_initiator.clone();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        watch_pending_initiator_peer_abort(pending, app).await;
+        watch_pending_initiator_peer(pending, app, state).await;
     });
 }
 
@@ -754,7 +897,15 @@ async fn refresh_lan_devices(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<Vec<LanDevice>, String> {
-    reconcile_lan_devices(&state.lan_devices, &state.connected_peer, &app).await;
+    let tcp_port = state.config.lock().await.tcp_port.unwrap_or(app_profile::DEFAULT_TCP_PORT);
+    refresh_lan_presence(
+        &state.config,
+        &state.lan_devices,
+        &state.connected_peer,
+        tcp_port,
+        &app,
+    )
+    .await;
     let devices = state.lan_devices.lock().await.clone();
     Ok(devices)
 }
@@ -955,6 +1106,7 @@ async fn connect_lan(
             store_pending_initiator_stream(
                 state.pending_initiator.clone(),
                 &app,
+                state.inner().clone(),
                 stream,
             )
             .await;
@@ -992,60 +1144,42 @@ async fn submit_pairing_code(
 
     match direct::initiator_send_code(stream, code).await {
         Ok(conn) => {
-            let peer_name = conn.peer_name.clone();
-            let peer_id = conn.peer_id.clone();
-            let peer_pk = conn.peer_public_key.clone();
-
-            {
-                let mut config = state.config.lock().await;
-                upsert_trusted_peer(
-                    &mut config,
-                    TrustedPeerData {
-                        name: peer_name.clone(),
-                        public_key: peer_pk,
-                        peer_id: peer_id.clone(),
-                        last_ip: None,
-                        auto_accept: None,
-                    },
-                );
-                storage_json::save_config(&config);
-            }
-
-            let session_generation = next_connection_generation(state.inner());
-            let handle = ConnectionManager::connect_direct(
-                conn,
-                state.connected.clone(),
-                state.connection.clone(),
-                state.connected_peer.clone(),
-                state.connection_generation.clone(),
-                session_generation,
-                state.clip_tx.clone(),
-                app.clone(),
-            )
-            .await;
-            *state.connection.lock().await = Some(handle);
-            store_connected_peer(
-                &state.connected_peer,
-                peer_name.clone(),
-                peer_id.clone(),
-            )
-            .await;
-
-            let _ = app.emit(
-                "connection-established",
-                serde_json::json!({
-                    "peer_name": peer_name,
-                    "peer_id": peer_id,
-                    "is_reconnect": false,
-                }),
-            );
-
+            finalize_outbound_pairing(state.inner(), &app, conn, None).await;
             Ok("connected".into())
         }
         Err(e) => {
             emit_connection_failed(&app, &e);
             Err(e.user_message())
         }
+    }
+}
+
+#[tauri::command]
+async fn submit_responder_pairing_code(
+    state: tauri::State<'_, AppState>,
+    code: String,
+) -> Result<String, String> {
+    if code.len() != 6 || !code.chars().all(|c| c.is_ascii_digit()) {
+        return Err("配对码必须为 6 位数字".into());
+    }
+
+    let submit_tx = state
+        .pending_responder_submit_tx
+        .lock()
+        .await
+        .clone()
+        .ok_or("当前没有待处理的入站配对")?;
+
+    let (reply_tx, reply_rx) = oneshot::channel();
+    submit_tx
+        .send((code, reply_tx))
+        .await
+        .map_err(|_| "配对流程已结束，请重新发起连接".to_string())?;
+
+    match reply_rx.await {
+        Ok(Ok(())) => Ok("verified".into()),
+        Ok(Err(error)) => Err(error.user_message()),
+        Err(_) => Err("配对流程已结束，请重新发起连接".into()),
     }
 }
 
@@ -1363,6 +1497,7 @@ async fn handle_incoming_connection(
         let (accept_tx, accept_rx) = oneshot::channel();
         let (reject_tx, reject_rx) = mpsc::channel(2);
         let (timeout_tx, timeout_rx) = mpsc::channel(1);
+        let (submit_tx, submit_rx) = mpsc::channel(4);
         *pending_accept_tx.lock().await = Some(accept_tx);
         *pending_reject_tx.lock().await = Some(reject_tx);
         *app_handle
@@ -1370,6 +1505,11 @@ async fn handle_incoming_connection(
             .pending_incoming_timeout_tx
             .lock()
             .await = Some(timeout_tx);
+        *app_handle
+            .state::<AppState>()
+            .pending_responder_submit_tx
+            .lock()
+            .await = Some(submit_tx);
 
         window::present_connection_request(
             &app_handle,
@@ -1401,6 +1541,7 @@ async fn handle_incoming_connection(
             accept_rx,
             reject_rx,
             timeout_rx,
+            submit_rx,
         )
         .await
         {
@@ -1494,6 +1635,7 @@ pub fn run() {
         pending_connection_request: Arc::new(Mutex::new(None)),
         pairing_session_code: Arc::new(Mutex::new(None)),
         pairing_code_expires_at: Arc::new(Mutex::new(None)),
+        pending_responder_submit_tx: Arc::new(Mutex::new(None)),
     };
 
     tauri::Builder::default()
@@ -1683,13 +1825,16 @@ pub fn run() {
             {
                 let probe_lan_devices = lan_devices.clone();
                 let probe_connected_peer = connected_peer.clone();
+                let probe_config = config.clone();
                 let probe_app_handle = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(3)).await;
                     loop {
-                        reconcile_lan_devices(
+                        refresh_lan_presence(
+                            &probe_config,
                             &probe_lan_devices,
                             &probe_connected_peer,
+                            tcp_port,
                             &probe_app_handle,
                         )
                         .await;
@@ -1837,6 +1982,7 @@ pub fn run() {
             set_peer_auto_accept,
             connect_lan,
             submit_pairing_code,
+            submit_responder_pairing_code,
             accept_connection,
             reject_connection,
             timeout_incoming_connection,
