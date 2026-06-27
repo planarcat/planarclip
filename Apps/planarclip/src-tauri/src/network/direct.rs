@@ -78,6 +78,28 @@ pub async fn probe_tcp_reachable(ip: &str, port: u16, timeout: std::time::Durati
     }
 }
 
+pub async fn probe_tcp_reachable_on_any_port(
+    ip: &str,
+    ports: &[u16],
+    timeout: std::time::Duration,
+) -> Option<u16> {
+    for port in ports {
+        if probe_tcp_reachable(ip, *port, timeout).await {
+            return Some(*port);
+        }
+    }
+    None
+}
+
+pub fn is_likely_probe_disconnect(error: &HandshakeError) -> bool {
+    match error {
+        HandshakeError::Frame(FrameError::Io(io_error)) | HandshakeError::Io(io_error) => {
+            is_connection_closed(io_error)
+        }
+        _ => false,
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum FrameError {
     #[error("I/O 错误：{0}")]
@@ -298,23 +320,81 @@ pub async fn initiator_connect(
     initiator_read_connect_response(stream).await
 }
 
-pub async fn check_initiator_peer_abort(
-    stream: &mut TcpStream,
-) -> Result<Option<HandshakeError>, HandshakeError> {
+pub fn pairing_code_from_public_key_bytes(pk_bytes: &[u8]) -> String {
+    let fp = peer_id_from_public_key(pk_bytes);
+    let numeric: String = fp.chars().filter(|c| c.is_ascii_digit()).collect();
+    if numeric.len() >= 6 {
+        numeric[numeric.len() - 6..].to_string()
+    } else {
+        format!(
+            "{:06}",
+            u32::from_str_radix(&fp[..6.min(fp.len())], 16).unwrap_or(0) % 1_000_000
+        )
+    }
+}
+
+pub enum InitiatorPendingMessage {
+    None,
+    PeerFailed(HandshakeError),
+    PeerAccepted(DirectConnection),
+}
+
+pub async fn poll_initiator_peer_message(
+    mut stream: TcpStream,
+) -> Result<(InitiatorPendingMessage, Option<TcpStream>), HandshakeError> {
     match tokio::time::timeout(std::time::Duration::from_millis(50), stream.readable()).await {
-        Ok(Ok(())) => match read_frame(stream).await {
+        Ok(Ok(())) => match read_frame(&mut stream).await {
+            Ok(Frame::Handshake(HandshakeMessage::AuthResult {
+                success: true,
+                peer_name,
+                public_key,
+                ..
+            })) => {
+                let name = peer_name.unwrap_or_default();
+                let pk_bytes = public_key
+                    .as_deref()
+                    .and_then(|h| hex::decode(h).ok())
+                    .unwrap_or_default();
+                let pid = short_fingerprint(&pk_bytes);
+                Ok((
+                    InitiatorPendingMessage::PeerAccepted(spawn_data_bridge(
+                        stream,
+                        name,
+                        pid,
+                        pk_bytes,
+                    )),
+                    None,
+                ))
+            }
             Ok(Frame::Handshake(HandshakeMessage::AuthResult {
                 success: false,
                 reason,
                 ..
-            })) => Ok(Some(HandshakeError::from_reason_code(reason.as_deref()))),
-            Ok(_) => Err(HandshakeError::Protocol(
-                "等待配对码时收到异常握手消息",
-            )),
-            Err(e) => Err(frame_error_to_handshake(e)),
+            })) => {
+                let _ = stream.shutdown().await;
+                Ok((
+                    InitiatorPendingMessage::PeerFailed(HandshakeError::from_reason_code(
+                        reason.as_deref(),
+                    )),
+                    None,
+                ))
+            }
+            Ok(_) => {
+                let _ = stream.shutdown().await;
+                Err(HandshakeError::Protocol(
+                    "等待配对码时收到异常握手消息",
+                ))
+            }
+            Err(e) => {
+                let _ = stream.shutdown().await;
+                Err(frame_error_to_handshake(e))
+            }
         },
-        Ok(Err(error)) => Err(HandshakeError::Io(error)),
-        Err(_) => Ok(None),
+        Ok(Err(error)) => {
+            let _ = stream.shutdown().await;
+            Err(HandshakeError::Io(error))
+        }
+        Err(_) => Ok((InitiatorPendingMessage::None, Some(stream))),
     }
 }
 
@@ -413,6 +493,7 @@ pub async fn responder_verify_code(
     accept_rx: oneshot::Receiver<()>,
     mut reject_rx: mpsc::Receiver<()>,
     mut timeout_rx: mpsc::Receiver<()>,
+    mut submit_rx: mpsc::Receiver<(String, oneshot::Sender<Result<(), HandshakeError>>)>,
 ) -> Result<DirectConnection, HandshakeError> {
     // 陌生设备需先在本机确认，再通知对方进入配对码输入流程。
     wait_for_user_or_peer_abort(
@@ -426,14 +507,73 @@ pub async fn responder_verify_code(
 
     write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AwaitCode)).await?;
 
-    let received_code = loop {
-        let received_code = tokio::select! {
+    let expected_initiator_code = pairing_code_from_public_key_bytes(&initiator_public_key);
+
+    loop {
+        tokio::select! {
             frame = read_frame(&mut stream) => {
                 match frame {
-                    Ok(Frame::Handshake(HandshakeMessage::AuthCode { code })) => Some(code),
+                    Ok(Frame::Handshake(HandshakeMessage::AuthCode { code })) => {
+                        if !verify_and_complete_responder_pairing(
+                            &mut stream,
+                            device_name,
+                            key_pair,
+                            &initiator_name,
+                            &initiator_public_key,
+                            &pairing_code,
+                            code,
+                        )
+                        .await?
+                        {
+                            return Err(HandshakeError::InvalidCode);
+                        }
+                        let pid = short_fingerprint(&initiator_public_key);
+                        return Ok(spawn_data_bridge(
+                            stream,
+                            initiator_name,
+                            pid,
+                            initiator_public_key,
+                        ));
+                    }
+                    Ok(Frame::Handshake(HandshakeMessage::AuthResult { success: false, .. })) => {
+                        return Err(HandshakeError::PeerCancelled);
+                    }
                     Ok(_) => return Err(HandshakeError::Protocol("应收到配对码消息")),
                     Err(e) => return Err(frame_error_to_handshake(e)),
                 }
+            }
+            submit = submit_rx.recv() => {
+                let Some((code, reply)) = submit else {
+                    return Err(HandshakeError::Cancelled);
+                };
+                let local_code = pairing_code.lock().await.clone();
+                if code == local_code {
+                    let _ = reply.send(Err(HandshakeError::InvalidCode));
+                    continue;
+                }
+                if code != expected_initiator_code {
+                    let _ = reply.send(Err(HandshakeError::InvalidCode));
+                    continue;
+                }
+                let _ = reply.send(Ok(()));
+                let pk_hex = hex::encode(key_pair.public_bytes());
+                write_frame(
+                    &mut stream,
+                    &Frame::Handshake(HandshakeMessage::AuthResult {
+                        success: true,
+                        peer_name: Some(device_name.to_string()),
+                        public_key: Some(pk_hex),
+                        reason: None,
+                    }),
+                )
+                .await?;
+                let pid = short_fingerprint(&initiator_public_key);
+                return Ok(spawn_data_bridge(
+                    stream,
+                    initiator_name,
+                    pid,
+                    initiator_public_key,
+                ));
             }
             reject = reject_rx.recv() => {
                 if reject.is_none() {
@@ -443,7 +583,7 @@ pub async fn responder_verify_code(
                     success: false,
                     peer_name: None,
                     public_key: None,
-                    reason: Some("rejected".into()),
+                    reason: Some("peer_cancelled".into()),
                 })).await;
                 return Err(HandshakeError::Cancelled);
             }
@@ -454,21 +594,24 @@ pub async fn responder_verify_code(
                     *guard = new_code.clone();
                 }
                 on_code_rotated(new_code);
-                None
             }
-        };
-
-        if received_code.is_none() {
-            continue;
         }
+    }
+}
 
-        break received_code.unwrap();
-    };
-
+async fn verify_and_complete_responder_pairing(
+    stream: &mut TcpStream,
+    device_name: &str,
+    key_pair: &KeyPair,
+    initiator_name: &str,
+    initiator_public_key: &[u8],
+    pairing_code: &std::sync::Arc<tokio::sync::Mutex<String>>,
+    received_code: String,
+) -> Result<bool, HandshakeError> {
     let expected_code = pairing_code.lock().await.clone();
     if received_code != expected_code {
         write_frame(
-            &mut stream,
+            stream,
             &Frame::Handshake(HandshakeMessage::AuthResult {
                 success: false,
                 peer_name: None,
@@ -477,12 +620,12 @@ pub async fn responder_verify_code(
             }),
         )
         .await?;
-        return Err(HandshakeError::InvalidCode);
+        return Ok(false);
     }
 
     let pk_hex = hex::encode(key_pair.public_bytes());
     write_frame(
-        &mut stream,
+        stream,
         &Frame::Handshake(HandshakeMessage::AuthResult {
             success: true,
             peer_name: Some(device_name.to_string()),
@@ -492,8 +635,9 @@ pub async fn responder_verify_code(
     )
     .await?;
 
-    let pid = short_fingerprint(&initiator_public_key);
-    Ok(spawn_data_bridge(stream, initiator_name, pid, initiator_public_key))
+    let _ = initiator_name;
+    let _ = initiator_public_key;
+    Ok(true)
 }
 
 fn is_connection_closed(error: &std::io::Error) -> bool {
@@ -622,7 +766,15 @@ pub async fn run_listener(
                     let _ = tx.send(ListenerEvent::Incoming(req));
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to read ConnectRequest from {}: {}", addr, e);
+                    if is_likely_probe_disconnect(&e) {
+                        tracing::debug!(
+                            "Incomplete TCP handshake from {} (likely reachability probe): {}",
+                            addr,
+                            e
+                        );
+                    } else {
+                        tracing::warn!("Failed to read ConnectRequest from {}: {}", addr, e);
+                    }
                 }
             }
         });
@@ -648,6 +800,14 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         (listener, port)
+    }
+
+    fn idle_submit_channel(
+    ) -> (
+        mpsc::Sender<(String, oneshot::Sender<Result<(), HandshakeError>>)>,
+        mpsc::Receiver<(String, oneshot::Sender<Result<(), HandshakeError>>)>,
+    ) {
+        mpsc::channel(4)
     }
 
     #[tokio::test]
@@ -702,6 +862,7 @@ mod tests {
             let (_reject_tx, reject_rx) = mpsc::channel(2);
             let (_timeout_tx, timeout_rx) = mpsc::channel(1);
             let pairing_code = std::sync::Arc::new(tokio::sync::Mutex::new("123456".to_string()));
+            let (_submit_tx, submit_rx) = idle_submit_channel();
             let verify = tokio::spawn(async move {
                 responder_verify_code(
                     request.stream,
@@ -714,6 +875,7 @@ mod tests {
                     accept_rx,
                     reject_rx,
                     timeout_rx,
+                    submit_rx,
                 )
                 .await
             });
@@ -836,6 +998,7 @@ mod tests {
         let (_timeout_tx, timeout_rx) = mpsc::channel(1);
 
         let pairing_code = std::sync::Arc::new(tokio::sync::Mutex::new("123456".to_string()));
+        let (_submit_tx, submit_rx) = idle_submit_channel();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let request = read_connect_request(stream).await.unwrap();
@@ -850,6 +1013,7 @@ mod tests {
                 accept_rx,
                 reject_rx,
                 timeout_rx,
+                submit_rx,
             )
             .await
             .unwrap()
@@ -889,6 +1053,7 @@ mod tests {
             let (_reject_tx, reject_rx) = mpsc::channel(2);
             let (_timeout_tx, timeout_rx) = mpsc::channel(1);
             let pairing_code = std::sync::Arc::new(tokio::sync::Mutex::new("123456".to_string()));
+            let (_submit_tx, submit_rx) = idle_submit_channel();
             let verify = tokio::spawn(async move {
                 responder_verify_code(
                     request.stream,
@@ -901,6 +1066,7 @@ mod tests {
                     accept_rx,
                     reject_rx,
                     timeout_rx,
+                    submit_rx,
                 )
                 .await
             });

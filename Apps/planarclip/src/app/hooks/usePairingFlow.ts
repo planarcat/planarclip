@@ -20,6 +20,7 @@ import {
   MSG_INVALID_PAIRING_CODE,
   MSG_PAIRING_CODE_REFRESHED,
   MSG_ENTER_PEER_PAIRING_CODE,
+  MSG_WAIT_FOR_PEER_PAIRING_CODE,
   MSG_PEER_CANCELLED,
   MSG_PEER_REJECTED,
   MSG_PEER_RESPONSE_TIMEOUT,
@@ -420,13 +421,20 @@ export function usePairingFlow({
       return;
     }
 
+    const inboundPairing = pairingStageRef.current === "incoming_pairing";
     setPairingStage("submitting_code");
     setPairingError(null);
     setPairingRotationHint(null);
     setStatus("connecting");
 
     try {
-      await callCommand<string>("submit_pairing_code", { code: pairingInput });
+      const command = inboundPairing ? "submit_responder_pairing_code" : "submit_pairing_code";
+      const result = await callCommand<string>(command, { code: pairingInput });
+      if (inboundPairing && result === "verified") {
+        setPairingStage("incoming_pairing");
+        setPairingHelperText(MSG_WAIT_FOR_PEER_PAIRING_CODE);
+        setLastMessage("已验证对方配对码，正在完成连接…");
+      }
     } catch (error) {
       if (outboundCancelledRef.current) {
         return;
@@ -436,7 +444,7 @@ export function usePairingFlow({
         return;
       }
       if (isInvalidPairingCode(error)) {
-        setPairingStage("awaiting_code");
+        setPairingStage(inboundPairing ? "incoming_pairing" : "awaiting_code");
         setPairingError(MSG_INVALID_PAIRING_CODE);
         setPairingHelperText(MSG_INVALID_PAIRING_CODE);
         setStatus("connecting");

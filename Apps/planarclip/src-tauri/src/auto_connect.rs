@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, oneshot, Mutex};
 
@@ -228,7 +228,13 @@ async fn run_auto_outbound_handshake(
             let _ = establish_outbound_connection(&deps, &app, conn, &ip).await;
         }
         InitiatorResult::AwaitingCode { stream } => {
-            crate::store_pending_initiator_stream(deps.pending_initiator.clone(), &app, stream).await;
+            crate::store_pending_initiator_stream(
+                deps.pending_initiator.clone(),
+                &app,
+                app.state::<crate::AppState>().inner().clone(),
+                stream,
+            )
+            .await;
             let _ = app.emit(
                 "pairing-code-needed",
                 serde_json::json!({

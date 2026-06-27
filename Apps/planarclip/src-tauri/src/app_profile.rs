@@ -12,6 +12,20 @@ pub const DEFAULT_TCP_PORT: u16 = 19877;
 #[cfg(not(debug_assertions))]
 pub const DEFAULT_TCP_PORT: u16 = 19876;
 
+/// Ports to try when probing a familiar peer by last known IP (covers dev/release mismatch).
+pub fn tcp_probe_port_candidates(primary: u16) -> Vec<u16> {
+    let alternate = if cfg!(debug_assertions) {
+        19876_u16
+    } else {
+        19877_u16
+    };
+    if alternate == primary {
+        vec![primary]
+    } else {
+        vec![primary, alternate]
+    }
+}
+
 #[cfg(debug_assertions)]
 pub const MDNS_SERVICE_TYPE: &str = "_planarclip-dev._tcp.local.";
 
