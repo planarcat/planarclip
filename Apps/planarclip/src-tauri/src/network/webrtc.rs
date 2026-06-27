@@ -23,6 +23,15 @@ impl ConnectionHandle {
         self.connected.clone()
     }
 
+    pub fn notify_peer_left(&self, local_peer_id: &str) {
+        let msg = SignalMessage::PeerLeft {
+            peer_id: local_peer_id.to_string(),
+        };
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let _ = self.sig_tx.send(json);
+        }
+    }
+
     pub fn send_clipboard(&self, snapshot: &ClipboardSnapshot) {
         let is_connected = self
             .connected
@@ -202,24 +211,38 @@ impl ConnectionManager {
                 return;
             }
 
-            {
-                let state = app_handle.state::<crate::AppState>();
-                let mut devices = state.lan_devices.lock().await;
-                let before = devices.len();
-                devices.retain(|device| device.peer_id != peer_id);
-                if devices.len() != before {
-                    let snapshot = devices.clone();
-                    drop(devices);
-                    let _ = app_handle.emit("lan-devices-changed", &snapshot);
-                }
+            if connection_generation.load(Ordering::SeqCst) != session_generation {
+                return;
             }
 
-            let message = if peer_name.is_empty() {
-                "对方设备已下线。".to_string()
-            } else {
-                format!("{} 已下线。", peer_name)
+            {
+                let state = app_handle.state::<crate::AppState>();
+                crate::spawn_lan_presence_refresh(state.inner(), &app_handle);
+            }
+
+            let tcp_port = {
+                let state = app_handle.state::<crate::AppState>();
+                let port = state
+                    .config
+                    .lock()
+                    .await
+                    .tcp_port
+                    .unwrap_or(crate::app_profile::DEFAULT_TCP_PORT);
+                port
             };
-            let kind = if peer_left { "peer_disconnected" } else { "connection_lost" };
+
+            let (message, kind) = {
+                let state = app_handle.state::<crate::AppState>();
+                crate::resolve_connection_ended_message(
+                    state.inner(),
+                    &peer_id,
+                    &peer_name,
+                    peer_left,
+                    tcp_port,
+                )
+                .await
+            };
+
             let _ = app_handle.emit(
                 "connection-ended",
                 serde_json::json!({

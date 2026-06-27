@@ -132,6 +132,18 @@ export default function App() {
     setLastMessage,
   });
 
+  const refreshLanDevicesQuiet = useCallback(async () => {
+    if (!TAURI_AVAILABLE) {
+      return;
+    }
+
+    try {
+      const refreshedDevices = await callCommand<LanDevicePayload[]>("refresh_lan_devices");
+      setLanDevices(refreshedDevices);
+    } catch {
+    }
+  }, [setLanDevices]);
+
   const {
     openPairingModal,
     closePairingModal,
@@ -158,7 +170,6 @@ export default function App() {
     callCommand,
     status,
     connectedCount,
-    connectedPeer,
     pairingInput,
     pairingStage,
     pairingTarget,
@@ -175,7 +186,7 @@ export default function App() {
     setPairingRotationHint,
     setPairingCode,
     setIncomingRequest,
-    setLanDevices,
+    refreshLanDevices: refreshLanDevicesQuiet,
     showNotice: setNoticeMessage,
   });
 

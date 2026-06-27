@@ -56,10 +56,10 @@ export function isPeerCancelled(error: unknown) {
 export function isPeerOffline(error: unknown) {
   if (error && typeof error === "object" && "kind" in error) {
     const kind = (error as { kind?: unknown }).kind;
-    return kind === "connection_lost" || kind === "peer_disconnected";
+    return kind === "peer_offline";
   }
   const raw = rawMessage(error);
-  return raw.includes("已下线") || raw.includes("已断开连接");
+  return raw.includes("已下线");
 }
 
 /** 对方主动取消连接 */
@@ -105,6 +105,9 @@ export function connectionUnavailableMessage(targetName?: string) {
   return "连接失败，请确认本机与对方的网络状态。";
 }
 
+/** 连接已断开（对端仍可能在线） */
+export const MSG_PEER_DISCONNECTED = "与对方设备的连接已断开。";
+
 /** 对方下线 */
 export function peerOfflineMessage(peerName?: string) {
   if (peerName?.trim()) {
@@ -113,11 +116,44 @@ export function peerOfflineMessage(peerName?: string) {
   return "对方设备已下线。";
 }
 
+export function peerDisconnectedMessage(peerName?: string) {
+  if (peerName?.trim()) {
+    return `与 ${peerName.trim()} 的连接已断开。`;
+  }
+  return MSG_PEER_DISCONNECTED;
+}
+
+export function connectionEndedMessage(payload: {
+  kind?: string;
+  message?: string;
+  peer_name?: string;
+}) {
+  if (payload.kind === "peer_offline") {
+    return peerOfflineMessage(payload.peer_name);
+  }
+
+  if (payload.message?.trim()) {
+    return normalizeUserMessage(
+      payload,
+      peerDisconnectedMessage(payload.peer_name),
+      payload.peer_name,
+    );
+  }
+
+  return peerDisconnectedMessage(payload.peer_name);
+}
+
 export function normalizeUserMessage(error: unknown, fallback: string, targetName?: string) {
   if (error && typeof error === "object" && "kind" in error) {
     const { kind } = error as { kind?: unknown };
     if (kind === "timeout") {
       return MSG_PEER_RESPONSE_TIMEOUT;
+    }
+    if (kind === "peer_cancelled" || kind === "cancelled") {
+      return MSG_PEER_CANCELLED;
+    }
+    if (kind === "rejected") {
+      return MSG_PEER_REJECTED;
     }
   }
 
@@ -179,9 +215,8 @@ export function normalizeUserMessage(error: unknown, fallback: string, targetNam
     return peerOfflineMessage(targetName);
   }
 
-  if (raw.includes("已断开连接")) {
-    const nameFromRaw = raw.replace(/已断开连接.*/, "").trim();
-    return peerOfflineMessage(targetName ?? (nameFromRaw || undefined));
+  if (raw.includes("连接已断开") || raw.includes("连接已中断") || raw.includes("已断开连接")) {
+    return peerDisconnectedMessage(targetName);
   }
 
   if (

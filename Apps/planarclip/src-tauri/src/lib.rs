@@ -146,7 +146,8 @@ fn lan_device_matches_removal(device: &LanDevice, service_fullname: &str) -> boo
 }
 
 const LAN_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-const LAN_PROBE_INTERVAL: Duration = Duration::from_secs(15);
+const LAN_PROBE_INTERVAL: Duration = Duration::from_secs(8);
+const LAN_PRESENCE_REFRESH_DELAY: Duration = Duration::from_millis(350);
 
 async fn discover_trusted_peers_by_tcp_probe(
     config: &Arc<Mutex<AppConfig>>,
@@ -235,12 +236,100 @@ async fn refresh_lan_presence(
     app: &tauri::AppHandle,
 ) {
     discover_trusted_peers_by_tcp_probe(config, lan_devices, tcp_port, app).await;
-    reconcile_lan_devices(lan_devices, connected_peer, app).await;
+    reconcile_lan_devices(config, lan_devices, connected_peer, tcp_port, app).await;
+}
+
+pub(crate) fn spawn_lan_presence_refresh(state: &AppState, app: &tauri::AppHandle) {
+    let config = state.config.clone();
+    let lan_devices = state.lan_devices.clone();
+    let connected_peer = state.connected_peer.clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(LAN_PRESENCE_REFRESH_DELAY).await;
+        let tcp_port = config
+            .lock()
+            .await
+            .tcp_port
+            .unwrap_or(app_profile::DEFAULT_TCP_PORT);
+        refresh_lan_presence(&config, &lan_devices, &connected_peer, tcp_port, &app).await;
+    });
+}
+
+fn peer_disconnected_message(peer_name: &str) -> String {
+    if peer_name.trim().is_empty() {
+        "与对方设备的连接已断开。".into()
+    } else {
+        format!("与 {} 的连接已断开。", peer_name.trim())
+    }
+}
+
+fn peer_offline_message(peer_name: &str) -> String {
+    if peer_name.trim().is_empty() {
+        "对方设备已下线。".into()
+    } else {
+        format!("{} 已下线。", peer_name.trim())
+    }
+}
+
+async fn peer_still_reachable(state: &AppState, peer_id: &str, tcp_port: u16) -> bool {
+    let probe_ports = app_profile::tcp_probe_port_candidates(tcp_port);
+
+    let lan_target = {
+        let devices = state.lan_devices.lock().await;
+        devices
+            .iter()
+            .find(|device| device.peer_id == peer_id)
+            .map(|device| (device.ip.clone(), device.port))
+    };
+
+    if let Some((ip, port)) = lan_target {
+        return direct::probe_tcp_reachable_resilient(&ip, port, &probe_ports, LAN_PROBE_TIMEOUT)
+            .await
+            .is_some();
+    }
+
+    let trusted_ip = {
+        let config = state.config.lock().await;
+        config
+            .trusted_peers
+            .as_ref()
+            .and_then(|peers| peers.iter().find(|peer| peer.peer_id == peer_id))
+            .and_then(|peer| peer.last_ip.clone())
+            .filter(|ip| !ip.trim().is_empty())
+    };
+
+    if let Some(ip) = trusted_ip {
+        return direct::probe_tcp_reachable_on_any_port(&ip, &probe_ports, LAN_PROBE_TIMEOUT)
+            .await
+            .is_some();
+    }
+
+    false
+}
+
+pub(crate) async fn resolve_connection_ended_message(
+    state: &AppState,
+    peer_id: &str,
+    peer_name: &str,
+    peer_left: bool,
+    tcp_port: u16,
+) -> (String, &'static str) {
+    if peer_left {
+        return (peer_disconnected_message(peer_name), "peer_disconnected");
+    }
+
+    if peer_still_reachable(state, peer_id, tcp_port).await {
+        return (peer_disconnected_message(peer_name), "connection_lost");
+    }
+
+    (peer_offline_message(peer_name), "peer_offline")
 }
 
 async fn reconcile_lan_devices(
+    _config: &Arc<Mutex<AppConfig>>,
     lan_devices: &Arc<Mutex<Vec<LanDevice>>>,
     connected_peer: &Arc<Mutex<Option<ConnectedPeerPayload>>>,
+    tcp_port: u16,
     app: &tauri::AppHandle,
 ) {
     let snapshot = lan_devices.lock().await.clone();
@@ -248,6 +337,7 @@ async fn reconcile_lan_devices(
         return;
     }
 
+    let probe_ports = app_profile::tcp_probe_port_candidates(tcp_port);
     let connected_peer_id = connected_peer
         .lock()
         .await
@@ -258,39 +348,75 @@ async fn reconcile_lan_devices(
         let peer_id = device.peer_id.clone();
         let ip = device.ip.clone();
         let port = device.port;
+        let mdns_backed = !device.service_fullname.is_empty();
         let skip_probe = connected_peer_id.as_deref() == Some(peer_id.as_str());
+        let probe_ports = probe_ports.clone();
         async move {
             if skip_probe {
-                return (peer_id, true);
+                return (peer_id, true, None);
             }
-            let reachable =
-                direct::probe_tcp_reachable(&ip, port, LAN_PROBE_TIMEOUT).await;
-            (peer_id, reachable)
+            match direct::probe_tcp_reachable_resilient(&ip, port, &probe_ports, LAN_PROBE_TIMEOUT)
+                .await
+            {
+                Some(found_port) => (peer_id, true, Some(found_port)),
+                None if mdns_backed => (peer_id, true, None),
+                None => (peer_id, false, None),
+            }
         }
     }))
     .await;
 
     let unreachable: std::collections::HashSet<_> = probe_results
-        .into_iter()
-        .filter(|(_, reachable)| !reachable)
-        .map(|(peer_id, _)| peer_id)
+        .iter()
+        .filter(|(_, reachable, _)| !reachable)
+        .map(|(peer_id, _, _)| peer_id.clone())
         .collect();
 
-    if unreachable.is_empty() {
-        return;
-    }
+    let port_updates: std::collections::HashMap<_, _> = probe_results
+        .into_iter()
+        .filter_map(|(peer_id, reachable, found_port)| {
+            if reachable {
+                found_port.map(|port| (peer_id, port))
+            } else {
+                None
+            }
+        })
+        .collect();
 
     let mut devices = lan_devices.lock().await;
-    let before = devices.len();
-    devices.retain(|device| !unreachable.contains(&device.peer_id));
-    if devices.len() == before {
+    let mut changed = false;
+
+    for device in devices.iter_mut() {
+        if let Some(found_port) = port_updates.get(&device.peer_id) {
+            if device.port != *found_port {
+                tracing::info!(
+                    "LAN device {} reachable on updated port {} (was {})",
+                    device.name,
+                    found_port,
+                    device.port
+                );
+                device.port = *found_port;
+                changed = true;
+            }
+        }
+    }
+
+    if !unreachable.is_empty() {
+        let before = devices.len();
+        devices.retain(|device| !unreachable.contains(&device.peer_id));
+        if devices.len() != before {
+            tracing::info!(
+                "Pruned {} unreachable LAN device(s) after TCP probe",
+                before - devices.len()
+            );
+            changed = true;
+        }
+    }
+
+    if !changed {
         return;
     }
 
-    tracing::info!(
-        "Pruned {} unreachable LAN device(s) after TCP probe",
-        before - devices.len()
-    );
     let updated = devices.clone();
     drop(devices);
     let _ = app.emit("lan-devices-changed", &updated);
@@ -615,6 +741,14 @@ async fn watch_pending_initiator_peer(
                 *pending_initiator.lock().await = Some(stream);
             }
             Ok((direct::InitiatorPendingMessage::PeerFailed(error), _)) => {
+                let error = if matches!(
+                    error.reason_code(),
+                    "connection_lost" | "connection_unavailable" | "rejected"
+                ) {
+                    direct::HandshakeError::PeerCancelled
+                } else {
+                    error
+                };
                 emit_connection_failed(&app, &error);
                 return;
             }
@@ -624,6 +758,14 @@ async fn watch_pending_initiator_peer(
             }
             Ok((_, None)) => return,
             Err(error) => {
+                let error = if matches!(
+                    error.reason_code(),
+                    "connection_lost" | "connection_unavailable"
+                ) {
+                    direct::HandshakeError::PeerCancelled
+                } else {
+                    error
+                };
                 emit_connection_failed(&app, &error);
                 return;
             }
@@ -1197,13 +1339,17 @@ async fn accept_connection(state: tauri::State<'_, AppState>) -> Result<(), Stri
 }
 
 #[tauri::command]
-async fn reject_connection(state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn reject_connection(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     let _ = state.pending_accept_tx.lock().await.take();
     let _ = state.pending_incoming_timeout_tx.lock().await.take();
     if let Some(tx) = state.pending_reject_tx.lock().await.take() {
         let _ = tx.send(()).await;
     }
     clear_pending_connection_request(state.inner()).await;
+    spawn_lan_presence_refresh(state.inner(), &app);
     Ok(())
 }
 
@@ -1219,12 +1365,24 @@ async fn timeout_incoming_connection(state: tauri::State<'_, AppState>) -> Resul
 }
 
 #[tauri::command]
-async fn disconnect(state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn disconnect(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
     next_connection_generation(state.inner());
     abort_outbound_handshake(state.inner()).await;
 
+    let local_peer_id = {
+        let key_pair = state.key_pair.lock().await;
+        key_pair
+            .as_ref()
+            .map(|pair| peer_id_from_public_key(pair.public.as_bytes()))
+            .unwrap_or_default()
+    };
+
+    if let Some(handle) = state.connection.lock().await.take() {
+        handle.notify_peer_left(&local_peer_id);
+        tokio::time::sleep(Duration::from_millis(120)).await;
+    }
+
     *state.connected.lock().await = false;
-    *state.connection.lock().await = None;
     clear_connected_peer(&state.connected_peer).await;
 
     if let Some(stream) = state.pending_initiator.lock().await.take() {
@@ -1239,6 +1397,7 @@ async fn disconnect(state: tauri::State<'_, AppState>) -> Result<(), String> {
 
     clear_pairing_session(&state).await;
 
+    spawn_lan_presence_refresh(state.inner(), &app);
     Ok(())
 }
 

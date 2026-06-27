@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { MAX_CONNECTIONS } from "../constants/connection";
 import type {
   AppConnectionStatus,
@@ -9,7 +9,6 @@ import type {
   ConnectionFailedPayload,
   ConnectionRequestPayload,
   Device,
-  LanDevicePayload,
   OutboundConnectionPendingPayload,
   PairingCodeNeededPayload,
   PairingStage,
@@ -31,9 +30,10 @@ import {
   isConnectionRejected,
   isConnectionTimeout,
   isInvalidPairingCode,
+  isPeerCancelled,
   isPeerOffline,
   normalizeUserMessage,
-  peerOfflineMessage,
+  connectionEndedMessage,
 } from "../utils/message";
 import { formatTime } from "../utils/time";
 
@@ -62,7 +62,6 @@ type UsePairingFlowOptions = {
   callCommand: CommandExecutor;
   status: AppConnectionStatus;
   connectedCount: number;
-  connectedPeer: ConnectedPeer | null;
   pairingInput: string;
   pairingStage: PairingStage;
   pairingTarget: Device | null;
@@ -79,7 +78,7 @@ type UsePairingFlowOptions = {
   setPairingRotationHint: (message: string | null) => void;
   setPairingCode: (code: string) => void;
   setIncomingRequest: (payload: ConnectionRequestPayload | null) => void;
-  setLanDevices: Dispatch<SetStateAction<LanDevicePayload[]>>;
+  refreshLanDevices: () => Promise<void>;
   showNotice: (message: string) => void;
 };
 
@@ -108,7 +107,6 @@ function resolveAppStatus(connectedCount: number, connecting: boolean): AppConne
 export function usePairingFlow({
   callCommand,
   connectedCount,
-  connectedPeer,
   pairingInput,
   pairingStage,
   pairingTarget,
@@ -125,7 +123,7 @@ export function usePairingFlow({
   setPairingRotationHint,
   setPairingCode,
   setIncomingRequest,
-  setLanDevices,
+  refreshLanDevices,
   showNotice,
 }: UsePairingFlowOptions) {
   const pairingStageRef = useRef(pairingStage);
@@ -185,8 +183,9 @@ export function usePairingFlow({
       showTerminalNotice(message);
       setStatus(resolveAppStatus(connectedCount, false));
       resetPairingFlow(true);
+      void refreshLanDevices();
     },
-    [connectedCount, resetPairingFlow, setStatus, showTerminalNotice],
+    [connectedCount, refreshLanDevices, resetPairingFlow, setStatus, showTerminalNotice],
   );
 
   const abortOutboundConnection = useCallback(async () => {
@@ -544,10 +543,11 @@ export function usePairingFlow({
       setStatus("offline");
       setLastMessage("已断开当前连接。");
       resetPairingFlow(true);
+      void refreshLanDevices();
     } catch (error) {
       setLastMessage(normalizeUserMessage(error, "断开连接时出了点问题，请稍后再试。"));
     }
-  }, [callCommand, resetPairingFlow, setConnectedPeer, setLastMessage, setStatus]);
+  }, [callCommand, refreshLanDevices, resetPairingFlow, setConnectedPeer, setLastMessage, setStatus]);
 
   const handleConnectionRequest = useCallback(
     (payload: ConnectionRequestPayload) => {
@@ -606,6 +606,29 @@ export function usePairingFlow({
         pairingStageRef.current === "incoming_request" ||
         pairingStageRef.current === "incoming_accepting";
 
+      const inboundPairingStage =
+        pairingStageRef.current === "incoming_pairing" ||
+        pairingStageRef.current === "incoming_accepting";
+
+      const outboundPairingStage =
+        pairingStageRef.current === "requesting_device" ||
+        pairingStageRef.current === "awaiting_code" ||
+        pairingStageRef.current === "submitting_code";
+
+      const pairingInProgress = inboundPairingStage || outboundPairingStage;
+
+      if (pairingInProgress && (isPeerCancelled(payload) || isConnectionRejected(payload))) {
+        handleTerminalConnectionFailure(
+          normalizeUserMessage(payload, MSG_PEER_CANCELLED, pairingTargetRef.current?.name ?? incomingRequest?.device_name),
+        );
+        return;
+      }
+
+      if (pairingInProgress && isPeerOffline(payload)) {
+        handleTerminalConnectionFailure(MSG_PEER_CANCELLED);
+        return;
+      }
+
       const message = normalizeUserMessage(
         payload,
         inboundWaitStage ? MSG_PEER_CANCELLED : connectionUnavailableMessage(pairingTargetRef.current?.name),
@@ -654,13 +677,11 @@ export function usePairingFlow({
 
   const handleConnectionEnded = useCallback(
     async (payload: ConnectionEndedPayload) => {
-      const message = isPeerOffline(payload)
-        ? peerOfflineMessage(payload.peer_name)
-        : peerOfflineMessage(payload.peer_name);
-      const offlinePeerId = payload.peer_id?.trim() || connectedPeer?.peerId?.trim();
-      if (offlinePeerId) {
-        setLanDevices((previous) => previous.filter((device) => device.peer_id !== offlinePeerId));
+      if (connectedCount === 0) {
+        return;
       }
+
+      const message = connectionEndedMessage(payload);
       try {
         await callCommand("disconnect");
       } catch {
@@ -669,8 +690,9 @@ export function usePairingFlow({
       setStatus(resolveAppStatus(Math.max(0, connectedCount - 1), false));
       showTerminalNotice(message);
       resetPairingFlow(true);
+      void refreshLanDevices();
     },
-    [callCommand, connectedCount, connectedPeer, resetPairingFlow, setConnectedPeer, setLanDevices, setStatus, showTerminalNotice],
+    [callCommand, connectedCount, refreshLanDevices, resetPairingFlow, setConnectedPeer, setStatus, showTerminalNotice],
   );
 
   const beginOutboundWaitingUi = useCallback(

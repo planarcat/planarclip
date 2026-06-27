@@ -91,6 +91,34 @@ pub async fn probe_tcp_reachable_on_any_port(
     None
 }
 
+/// Probe primary port with one retry, then fall back to alternate ports.
+pub async fn probe_tcp_reachable_resilient(
+    ip: &str,
+    port: u16,
+    alternate_ports: &[u16],
+    timeout: std::time::Duration,
+) -> Option<u16> {
+    for attempt in 0..2 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        }
+        if probe_tcp_reachable(ip, port, timeout).await {
+            return Some(port);
+        }
+    }
+
+    for &alt in alternate_ports {
+        if alt == port {
+            continue;
+        }
+        if probe_tcp_reachable(ip, alt, timeout).await {
+            return Some(alt);
+        }
+    }
+
+    None
+}
+
 pub fn is_likely_probe_disconnect(error: &HandshakeError) -> bool {
     match error {
         HandshakeError::Frame(FrameError::Io(io_error)) | HandshakeError::Io(io_error) => {
@@ -158,7 +186,7 @@ impl HandshakeError {
             "timeout" => "对方未及时回应，这次连接已超时。".into(),
             "cancelled" => "你已取消这次连接。".into(),
             "peer_cancelled" => "对方已取消这次连接。".into(),
-            "connection_lost" => "对方设备已下线。".into(),
+            "connection_lost" => "与对方设备的连接已中断。".into(),
             "protocol_error" => "连接过程中出了点问题，请重新发起连接。".into(),
             _ => "暂时无法连接对方设备，请确认对方应用已打开，而且你们在同一局域网内。".into(),
         }
