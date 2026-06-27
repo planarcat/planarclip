@@ -764,6 +764,7 @@ fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHist
                 direction,
                 timestamp_ms: event.timestamp_ms,
                 size_label: None,
+                image_data_url: None,
             })
         }
         clipboard::types::ClipboardSnapshot::Image {
@@ -778,6 +779,7 @@ fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHist
             direction,
             timestamp_ms: event.timestamp_ms,
             size_label: Some(clipboard::image::format_byte_size(png_bytes.len())),
+            image_data_url: Some(clipboard::image::png_data_url(png_bytes)),
         }),
         clipboard::types::ClipboardSnapshot::Empty => None,
     }

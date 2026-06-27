@@ -80,6 +80,8 @@ pub struct ClipboardHistoryEntry {
     pub timestamp_ms: u64,
     #[serde(default)]
     pub size_label: Option<String>,
+    #[serde(default)]
+    pub image_data_url: Option<String>,
 }
 
 fn now_ms() -> u64 {

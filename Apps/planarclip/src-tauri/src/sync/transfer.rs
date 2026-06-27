@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use tokio::sync::mpsc;
 
@@ -8,6 +9,7 @@ use crate::network::protocol::SignalMessage;
 
 pub const CHUNK_SIZE: usize = 256 * 1024;
 pub const SEND_WINDOW: u32 = 8;
+const ACK_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct CompletedImage {
     pub png_bytes: Vec<u8>,
@@ -156,24 +158,23 @@ pub struct AckWaiter {
 }
 
 impl AckWaiter {
-    pub fn register(
+    pub async fn register(
         registry: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, mpsc::UnboundedSender<u32>>>>,
         transfer_id: &str,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        if let Ok(mut waiters) = registry.try_lock() {
-            waiters.insert(transfer_id.to_string(), tx);
-        }
+        registry
+            .lock()
+            .await
+            .insert(transfer_id.to_string(), tx);
         Self { rx }
     }
 
-    pub fn unregister(
+    pub async fn unregister(
         registry: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, mpsc::UnboundedSender<u32>>>>,
         transfer_id: &str,
     ) {
-        if let Ok(mut waiters) = registry.try_lock() {
-            waiters.remove(transfer_id);
-        }
+        registry.lock().await.remove(transfer_id);
     }
 
     pub async fn wait_any(&mut self) -> Option<u32> {
@@ -223,52 +224,64 @@ pub async fn send_image_with_flow_control(
         chunk_size: CHUNK_SIZE as u32,
     });
 
-    let mut ack_waiter = AckWaiter::register(ack_registry, &transfer_id);
+    let mut ack_waiter = AckWaiter::register(ack_registry, &transfer_id).await;
     let mut next_index = 0u32;
     let mut in_flight = 0u32;
     let mut acked = HashSet::new();
 
-    while next_index < chunk_total || in_flight > 0 {
-        while in_flight < SEND_WINDOW && next_index < chunk_total {
-            let chunk = build_binary_chunk(&transfer_id, next_index, chunk_total, png_bytes)
-                .ok_or("chunk build failed")?;
-            send_binary(chunk);
-            next_index += 1;
-            in_flight += 1;
-        }
-
-        if in_flight == 0 {
-            break;
-        }
-
-        if let Some(chunk_index) = ack_waiter.wait_any().await {
-            if !acked.insert(chunk_index) {
-                continue;
+    let transfer_result = async {
+        while next_index < chunk_total || in_flight > 0 {
+            while in_flight < SEND_WINDOW && next_index < chunk_total {
+                let chunk = build_binary_chunk(&transfer_id, next_index, chunk_total, png_bytes)
+                    .ok_or("chunk build failed")?;
+                send_binary(chunk);
+                next_index += 1;
+                in_flight += 1;
             }
-            in_flight = in_flight.saturating_sub(1);
-        } else {
-            AckWaiter::unregister(ack_registry, &transfer_id);
-            return Err("ack channel closed");
+
+            if in_flight == 0 {
+                break;
+            }
+
+            match tokio::time::timeout(ACK_TIMEOUT, ack_waiter.wait_any()).await {
+                Ok(Some(chunk_index)) => {
+                    if !acked.insert(chunk_index) {
+                        continue;
+                    }
+                    in_flight = in_flight.saturating_sub(1);
+                }
+                Ok(None) => return Err("ack channel closed"),
+                Err(_) => return Err("ack timeout"),
+            }
         }
+
+        send_signal(SignalMessage::ClipboardImageEnd {
+            transfer_id: transfer_id.clone(),
+            hash: hash_hex,
+        });
+
+        Ok(())
+    }
+    .await;
+
+    AckWaiter::unregister(ack_registry, &transfer_id).await;
+
+    if transfer_result.is_err() {
+        send_signal(SignalMessage::TransferCancel {
+            transfer_id,
+            reason: Some("send_failed".into()),
+        });
     }
 
-    send_signal(SignalMessage::ClipboardImageEnd {
-        transfer_id: transfer_id.clone(),
-        hash: hash_hex,
-    });
-
-    AckWaiter::unregister(ack_registry, &transfer_id);
-    Ok(())
+    transfer_result
 }
 
-pub fn route_transfer_ack(
+pub async fn route_transfer_ack(
     registry: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, mpsc::UnboundedSender<u32>>>>,
     transfer_id: &str,
     chunk_index: u32,
 ) {
-    if let Ok(waiters) = registry.try_lock() {
-        if let Some(tx) = waiters.get(transfer_id) {
-            let _ = tx.send(chunk_index);
-        }
+    if let Some(tx) = registry.lock().await.get(transfer_id) {
+        let _ = tx.send(chunk_index);
     }
 }

@@ -109,6 +109,7 @@ impl ConnectionHandle {
                             "图片较大，当前连接方式暂不支持同步超过 512 KB 的图片。",
                         );
                     }
+                    // Chunked sends are handled by send_image_async from SyncEngine.
                     return;
                 }
 
@@ -163,11 +164,10 @@ impl ConnectionHandle {
 
         let hash = *blake3::hash(&png_bytes).as_bytes();
         {
-            let mut dedup = self.dedup.lock().await;
+            let dedup = self.dedup.lock().await;
             if dedup.has_seen(&hash) {
                 return;
             }
-            dedup.mark_seen(hash);
         }
 
         emit_sync_activity(app_handle.as_ref(), true, "image", "正在同步图片…");
@@ -186,10 +186,21 @@ impl ConnectionHandle {
         .await;
 
         match result {
-            Ok(()) => emit_sync_activity(app_handle.as_ref(), false, "image", "图片已同步"),
+            Ok(()) => {
+                let mut dedup = self.dedup.lock().await;
+                dedup.mark_seen(hash);
+                emit_sync_activity(app_handle.as_ref(), false, "image", "图片已同步");
+            }
             Err(error) => {
                 tracing::warn!("Chunked image send failed: {error}");
-                emit_sync_notice(app_handle.as_ref(), "图片同步失败，请稍后再试。");
+                let message = match error {
+                    "ack timeout" => {
+                        "图片同步超时，请确认对方设备已更新到最新版本，然后重新复制图片。"
+                    }
+                    "ack channel closed" => "图片同步失败，与对方设备的连接已中断。",
+                    _ => "图片同步失败，请稍后再试。",
+                };
+                emit_sync_notice(app_handle.as_ref(), message);
             }
         }
     }
@@ -333,7 +344,7 @@ async fn handle_incoming_signal(
             transfer_id,
             chunk_index,
         } => {
-            route_transfer_ack(&handle.ack_waiters, &transfer_id, chunk_index);
+            route_transfer_ack(&handle.ack_waiters, &transfer_id, chunk_index).await;
             true
         }
         SignalMessage::TransferCancel { transfer_id, .. } => {

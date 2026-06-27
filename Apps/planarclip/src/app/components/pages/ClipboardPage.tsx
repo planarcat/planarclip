@@ -5,6 +5,48 @@ import { relativeTime } from "../../utils/time";
 import { ClipTypeIcon } from "../common/ClipTypeIcon";
 import { CopyButton } from "../common/CopyButton";
 
+function ClipPreview({ clip }: { clip: ClipEntry }) {
+  if (clip.type === "image" && clip.imagePreviewUrl) {
+    return (
+      <div className="overflow-hidden rounded-lg border border-border bg-secondary/30">
+        <img
+          src={clip.imagePreviewUrl}
+          alt={clip.content}
+          className="max-h-56 w-full object-contain"
+          loading="lazy"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <p className="line-clamp-3 whitespace-pre-wrap break-all text-sm leading-relaxed text-foreground/90">
+      {clip.content}
+    </p>
+  );
+}
+
+function ClipPreviewGrid({ clip }: { clip: ClipEntry }) {
+  if (clip.type === "image" && clip.imagePreviewUrl) {
+    return (
+      <div className="flex flex-1 overflow-hidden rounded-lg border border-border bg-secondary/30">
+        <img
+          src={clip.imagePreviewUrl}
+          alt={clip.content}
+          className="max-h-48 w-full object-contain"
+          loading="lazy"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <p className="line-clamp-4 flex-1 whitespace-pre-wrap break-all text-sm leading-relaxed text-foreground/90">
+      {clip.content}
+    </p>
+  );
+}
+
 type ClipboardPageProps = {
   clips: ClipEntry[];
   viewMode: ViewMode;
@@ -74,7 +116,7 @@ export function ClipboardPage({ clips, viewMode, setViewMode, status }: Clipboar
                         {clip.type === "text" ? <CopyButton text={clip.content} /> : null}
                       </div>
                     </div>
-                    <p className="line-clamp-3 whitespace-pre-wrap break-all text-sm leading-relaxed text-foreground/90">{clip.content}</p>
+                    <ClipPreview clip={clip} />
                   </div>
                 </div>
               </div>
@@ -96,9 +138,7 @@ export function ClipboardPage({ clips, viewMode, setViewMode, status }: Clipboar
                       {clip.type === "text" ? <CopyButton text={clip.content} /> : null}
                     </div>
                   </div>
-                  <p className="line-clamp-4 flex-1 whitespace-pre-wrap break-all text-sm leading-relaxed text-foreground/90">
-                    {clip.content}
-                  </p>
+                  <ClipPreviewGrid clip={clip} />
                   <div className="mt-auto flex items-center justify-between border-t border-border pt-2">
                     <span className="text-[13px] font-medium text-muted-foreground">{relativeTime(clip.timestamp)}</span>
                     <span className="font-mono text-[13px] font-medium text-secondary-foreground">{clip.size}</span>

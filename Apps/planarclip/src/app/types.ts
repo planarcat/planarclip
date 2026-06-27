@@ -51,6 +51,7 @@ export type ClipEntry = {
   direction: "sent" | "received";
   size: string;
   timestamp: Date;
+  imagePreviewUrl?: string;
 };
 
 export type ThemeColor = {
@@ -95,6 +96,7 @@ export type ClipboardHistoryPayload = {
   direction: "sent" | "received";
   timestamp_ms: number;
   size_label?: string | null;
+  image_data_url?: string | null;
 };
 
 export type LanDevicePayload = {

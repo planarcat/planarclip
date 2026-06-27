@@ -26,9 +26,10 @@ hostname = "0.4"
 local-ip-address = "0.6"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+clipboard-win = { version = "5", features = ["std"] }
 tauri-winrt-notification = "0.7"
 winreg = "0.55"
 windows-sys = { version = "0.59", features = [

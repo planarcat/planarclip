@@ -5,6 +5,8 @@ use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
 use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
 
+pub mod clipboard;
+
 /// Registers this process with Windows so Toast notifications use the app identity
 /// and the app appears under Settings → System → Notifications.
 pub fn register_app_user_model_id(app_id: &str, display_name: &str) {

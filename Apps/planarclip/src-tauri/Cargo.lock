@@ -2914,6 +2914,7 @@ dependencies = [
  "arboard",
  "base64 0.22.1",
  "blake3",
+ "clipboard-win",
  "futures-util",
  "hex",
  "hostname",

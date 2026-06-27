@@ -24,5 +24,6 @@ export function mapClipboardHistory(payload: ClipboardHistoryPayload[]): ClipEnt
     direction: item.direction,
     size: item.size_label ?? formatClipSize(item.content),
     timestamp: new Date(item.timestamp_ms),
+    imagePreviewUrl: item.image_data_url ?? undefined,
   }));
 }

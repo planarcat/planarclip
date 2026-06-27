@@ -6,7 +6,9 @@ use std::sync::{
 use arboard::ImageData;
 use tokio::sync::broadcast;
 
-use crate::clipboard::image::{decode_png_to_rgba, encode_rgba_to_png, MAX_IMAGE_BYTES};
+use crate::clipboard::image::{encode_rgba_to_png, snapshot_from_png_bytes};
+#[cfg(not(windows))]
+use crate::clipboard::image::decode_png_to_rgba;
 use crate::clipboard::types::{ClipboardEvent, ClipboardSnapshot};
 
 static SELF_WRITING: AtomicBool = AtomicBool::new(false);
@@ -87,12 +89,23 @@ impl ClipboardMonitor {
     }
 
     fn read_clipboard() -> Result<ClipboardSnapshot, String> {
+        #[cfg(windows)]
+        if let Some(snapshot) = crate::platform::windows::clipboard::read_snapshot() {
+            return Ok(snapshot);
+        }
+
         let mut clipboard =
             arboard::Clipboard::new().map_err(|error| format!("clipboard init failed: {error}"))?;
 
-        if let Ok(image) = clipboard.get_image() {
-            if let Some(snapshot) = Self::snapshot_from_image(&image) {
-                return Ok(snapshot);
+        match clipboard.get_image() {
+            Ok(image) => {
+                if let Some(snapshot) = Self::snapshot_from_image(&image) {
+                    return Ok(snapshot);
+                }
+                tracing::info!("arboard image present but could not be normalized for sync");
+            }
+            Err(error) => {
+                tracing::debug!("arboard get_image unavailable: {error}");
             }
         }
 
@@ -105,19 +118,7 @@ impl ClipboardMonitor {
 
     fn snapshot_from_image(image: &ImageData<'_>) -> Option<ClipboardSnapshot> {
         let png_bytes = encode_rgba_to_png(image).ok()?;
-        if png_bytes.len() > MAX_IMAGE_BYTES {
-            tracing::info!(
-                "clipboard image skipped locally: {} bytes exceeds limit",
-                png_bytes.len()
-            );
-            return None;
-        }
-
-        Some(ClipboardSnapshot::Image {
-            png_bytes,
-            width: u32::try_from(image.width).unwrap_or(u32::MAX),
-            height: u32::try_from(image.height).unwrap_or(u32::MAX),
-        })
+        snapshot_from_png_bytes(png_bytes)
     }
 
     fn should_suppress_local_emit(hash: [u8; 32]) -> bool {
@@ -151,18 +152,40 @@ impl ClipboardMonitor {
         Self::register_suppressed_write(hash);
         Self::set_self_writing(true);
 
-        if let Ok((decoded_width, decoded_height, rgba)) = decode_png_to_rgba(png_bytes) {
-            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                let image = ImageData {
-                    width: decoded_width.max(width) as usize,
-                    height: decoded_height.max(height) as usize,
-                    bytes: rgba.into(),
-                };
-                let _ = clipboard.set_image(image);
-            }
+        if let Err(error) = Self::write_clipboard_image_inner(png_bytes, width, height) {
+            tracing::warn!("failed to write clipboard image: {error}");
         }
 
         Self::set_self_writing(false);
+    }
+
+    fn write_clipboard_image_inner(png_bytes: &[u8], width: u32, height: u32) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            let png_bytes = png_bytes.to_vec();
+            let handle = std::thread::Builder::new()
+                .name("planarclip-clip-write".into())
+                .spawn(move || crate::platform::windows::clipboard::write_image(&png_bytes, width, height))
+                .map_err(|error| format!("spawn clipboard thread failed: {error}"))?;
+            handle
+                .join()
+                .map_err(|_| "clipboard write thread panicked".to_string())?
+        }
+
+        #[cfg(not(windows))]
+        {
+            let (decoded_width, decoded_height, rgba) = decode_png_to_rgba(png_bytes)?;
+            let mut clipboard = arboard::Clipboard::new()
+                .map_err(|error| format!("clipboard init failed: {error}"))?;
+            let image = ImageData {
+                width: decoded_width as usize,
+                height: decoded_height as usize,
+                bytes: rgba.into(),
+            };
+            clipboard
+                .set_image(image)
+                .map_err(|error| format!("set_image failed: {error}"))
+        }
     }
 
     fn register_suppressed_write(hash: [u8; 32]) {
