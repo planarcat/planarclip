@@ -1,11 +1,11 @@
 {
-  "productName": "PlanarClip Dev",
+  "productName": "二向贴（开发）",
   "identifier": "com.planarclip.desktop.dev",
   "mainBinaryName": "planarclip-dev",
   "app": {
     "windows": [
       {
-        "title": "PlanarClip (Dev)"
+        "title": "二向贴（开发）"
       }
     ]
   }

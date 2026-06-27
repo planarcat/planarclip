@@ -2926,12 +2926,14 @@ dependencies = [
  "tauri-plugin-autostart",
  "tauri-plugin-notification",
  "tauri-plugin-shell",
+ "tauri-winrt-notification",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
  "windows-sys 0.59.0",
+ "winreg 0.55.0",
  "x25519-dalek",
 ]
 

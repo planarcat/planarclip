@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicehash/tauri/dev/crates/tauri-cli/schema.json",
-  "productName": "PlanarClip",
+  "productName": "二向贴",
   "version": "0.1.0",
   "identifier": "com.planarclip.desktop",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "PlanarClip",
+        "title": "二向贴",
         "width": 1280,
         "height": 820,
         "minWidth": 1040,

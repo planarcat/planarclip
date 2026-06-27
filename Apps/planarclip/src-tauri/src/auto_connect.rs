@@ -85,6 +85,14 @@ async fn establish_outbound_connection(
     let peer_id = conn.peer_id.clone();
     let peer_pk = conn.peer_public_key.clone();
 
+    if crate::is_duplicate_active_session(&deps.connected, &deps.connected_peer, &peer_id).await {
+        tracing::info!(
+            "Auto-connect outbound finished but {} is already connected; discarding duplicate session",
+            peer_name
+        );
+        return true;
+    }
+
     {
         let mut config = deps.config.lock().await;
         upsert_trusted_peer(
@@ -126,6 +134,7 @@ async fn establish_outbound_connection(
             "is_reconnect": true,
         }),
     );
+    crate::window::send_session_established_notification(app, &peer_name, true);
     true
 }
 

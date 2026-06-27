@@ -1,5 +1,7 @@
+use crate::app_profile::APP_DISPLAY_NAME;
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{AppHandle, Emitter, Manager, UserAttentionType, WindowEvent};
+#[cfg(not(windows))]
 use tauri_plugin_notification::NotificationExt;
 
 pub const MAIN_WINDOW_LABEL: &str = "main";
@@ -78,15 +80,61 @@ pub fn attach_main_window_close_handler(app: AppHandle, window: tauri::WebviewWi
 }
 
 pub fn send_connection_notification(app: &AppHandle, device_name: &str) {
-    let body = format!("{device_name} 请求连接，请点击任务栏中的 PlanarClip 确认");
+    let body = format!("{device_name} 请求连接，请点击任务栏中的 {APP_DISPLAY_NAME} 确认");
+    show_planarclip_notification(app, &body, false);
+}
+
+pub fn send_session_established_notification(
+    app: &AppHandle,
+    device_name: &str,
+    is_reconnect: bool,
+) {
+    let trimmed = device_name.trim();
+    let body = if trimmed.is_empty() {
+        if is_reconnect {
+            "已恢复与熟悉设备的连接。".to_string()
+        } else {
+            "已建立连接，剪贴板同步已开启。".to_string()
+        }
+    } else if is_reconnect {
+        format!("已恢复与 {trimmed} 的连接。")
+    } else {
+        format!("已与 {trimmed} 建立连接，剪贴板同步已开启。")
+    };
+    show_planarclip_notification(app, &body, false);
+}
+
+pub fn send_session_ended_notification(app: &AppHandle, message: &str) {
+    let body = message.trim();
+    if body.is_empty() {
+        show_planarclip_notification(app, "与设备的连接已断开。", true);
+    } else {
+        show_planarclip_notification(app, body, true);
+    }
+}
+
+fn show_planarclip_notification(app: &AppHandle, body: &str, important: bool) {
+    #[cfg(windows)]
+    {
+        let title = app
+            .config()
+            .product_name
+            .clone()
+            .unwrap_or_else(|| APP_DISPLAY_NAME.to_string());
+        let app_id = app.config().identifier.clone();
+        crate::platform::windows::show_toast(&app_id, &title, body, important);
+        return;
+    }
+
+    #[cfg(not(windows))]
     if let Err(error) = app
         .notification()
         .builder()
-        .title("PlanarClip")
+        .title(APP_DISPLAY_NAME)
         .body(body)
         .show()
     {
-        tracing::warn!("Failed to show connection notification: {}", error);
+        tracing::warn!("Failed to show system notification: {}", error);
     }
 }
 

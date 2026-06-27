@@ -1,4 +1,5 @@
 import { Moon, Save, Sun, SunMoon } from "lucide-react";
+import { APP_DISPLAY_NAME } from "../../constants/app";
 import { THEME_COLORS } from "../../constants/theme";
 import type { ColorScheme, SettingAvailability, ThemeColor } from "../../types";
 import { SettingBadge } from "../common/SettingBadge";
@@ -184,7 +185,7 @@ export function SettingsPage({
           <div>
             <p className="text-sm font-medium text-primary">登录时自动启动</p>
             <p className="mt-0.5 text-[13px] font-medium leading-6 text-muted-foreground">
-              开启后，系统登录时会自动启动 PlanarClip，并在后台继续监听剪贴板同步。
+              开启后，系统登录时会自动启动{APP_DISPLAY_NAME}，并在后台继续监听剪贴板同步。
             </p>
           </div>
           <SettingToggle

@@ -165,7 +165,7 @@ function TrustShieldButton({
         className="inline-flex shrink-0 items-center justify-center rounded-md p-0.5 transition-colors hover:bg-secondary/60"
       >
         {autoAccept ? (
-          <Shield size={13} className="text-primary" aria-hidden="true" />
+          <Shield size={13} className="text-primary" fill="currentColor" aria-hidden="true" />
         ) : (
           <ShieldOff size={13} className="text-primary/40" aria-hidden="true" />
         )}

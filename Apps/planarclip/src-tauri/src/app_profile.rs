@@ -1,5 +1,12 @@
 //! Build-profile constants that keep dev and release instances isolated.
 
+/// User-facing application name shown in window title, tray, notifications, etc.
+#[cfg(debug_assertions)]
+pub const APP_DISPLAY_NAME: &str = "二向贴（开发）";
+
+#[cfg(not(debug_assertions))]
+pub const APP_DISPLAY_NAME: &str = "二向贴";
+
 #[cfg(debug_assertions)]
 pub const CONFIG_FILE_NAME: &str = "planarclip_config.dev.json";
 

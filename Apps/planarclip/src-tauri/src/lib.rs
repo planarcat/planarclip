@@ -12,12 +12,14 @@ mod auto_connect;
 mod clipboard;
 mod crypto;
 mod network;
+mod platform;
 mod storage;
 mod sync;
 mod tray;
 mod window;
 
 use clipboard::monitor::ClipboardMonitor;
+use crate::app_profile::APP_DISPLAY_NAME;
 use tauri_plugin_autostart::ManagerExt;
 use clipboard::types::{ClipboardEvent, ClipboardHistoryEntry, ClipboardOrigin};
 use crypto::keys::{peer_id_from_public_key, KeyPair};
@@ -98,6 +100,16 @@ struct ConnectionSettingsPayload {
 pub struct ConnectedPeerPayload {
     peer_name: String,
     peer_id: String,
+}
+
+impl ConnectedPeerPayload {
+    pub(crate) fn peer_id(&self) -> &str {
+        &self.peer_id
+    }
+
+    pub(crate) fn peer_name(&self) -> &str {
+        &self.peer_name
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -500,6 +512,22 @@ fn next_connection_generation(state: &AppState) -> u64 {
     state.connection_generation.fetch_add(1, Ordering::SeqCst) + 1
 }
 
+async fn is_duplicate_active_session(
+    connected: &Arc<Mutex<bool>>,
+    connected_peer: &Arc<Mutex<Option<ConnectedPeerPayload>>>,
+    peer_id: &str,
+) -> bool {
+    if !*connected.lock().await {
+        return false;
+    }
+
+    connected_peer
+        .lock()
+        .await
+        .as_ref()
+        .is_some_and(|peer| peer.peer_id() == peer_id)
+}
+
 async fn persist_clipboard_history(
     config: &Arc<Mutex<AppConfig>>,
     history: &[ClipboardHistoryEntry],
@@ -783,6 +811,14 @@ async fn finalize_outbound_pairing(
     let peer_id = conn.peer_id.clone();
     let peer_pk = conn.peer_public_key.clone();
 
+    if is_duplicate_active_session(&state.connected, &state.connected_peer, &peer_id).await {
+        tracing::info!(
+            "Skipping duplicate outbound pairing session with already-connected peer {}",
+            peer_name
+        );
+        return;
+    }
+
     {
         let mut config = state.config.lock().await;
         upsert_trusted_peer(
@@ -821,6 +857,7 @@ async fn finalize_outbound_pairing(
             "is_reconnect": false,
         }),
     );
+    window::send_session_established_notification(app, &peer_name, false);
 }
 
 pub(crate) async fn store_pending_initiator_stream(
@@ -1241,6 +1278,7 @@ async fn connect_lan(
                     "is_reconnect": true,
                 }),
             );
+            window::send_session_established_notification(&app, &peer_name, true);
 
             Ok("connected".into())
         }
@@ -1366,6 +1404,13 @@ async fn timeout_incoming_connection(state: tauri::State<'_, AppState>) -> Resul
 
 #[tauri::command]
 async fn disconnect(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
+    let disconnected_peer_name = state
+        .connected_peer
+        .lock()
+        .await
+        .as_ref()
+        .map(|peer| peer.peer_name().to_string());
+
     next_connection_generation(state.inner());
     abort_outbound_handshake(state.inner()).await;
 
@@ -1398,6 +1443,17 @@ async fn disconnect(state: tauri::State<'_, AppState>, app: tauri::AppHandle) ->
     clear_pairing_session(&state).await;
 
     spawn_lan_presence_refresh(state.inner(), &app);
+
+    if let Some(peer_name) = disconnected_peer_name {
+        let trimmed = peer_name.trim();
+        let message = if trimmed.is_empty() {
+            "已断开当前连接。".to_string()
+        } else {
+            format!("已断开与 {trimmed} 的连接。")
+        };
+        window::send_session_ended_notification(&app, &message);
+    }
+
     Ok(())
 }
 
@@ -1437,6 +1493,14 @@ async fn finalize_incoming_connection(
     clip_tx: broadcast::Sender<ClipboardEvent>,
     app_handle: &tauri::AppHandle,
 ) {
+    if is_duplicate_active_session(&connected, &connected_peer, &initiator_peer_id).await {
+        tracing::info!(
+            "Skipping duplicate incoming connection from already-connected peer {}",
+            initiator_name
+        );
+        return;
+    }
+
     {
         let mut cfg = config.lock().await;
         upsert_trusted_peer(
@@ -1482,6 +1546,7 @@ async fn finalize_incoming_connection(
             "is_reconnect": is_reconnect,
         }),
     );
+    window::send_session_established_notification(app_handle, &initiator_name, is_reconnect);
 }
 
 async fn handle_incoming_connection(
@@ -1802,12 +1867,24 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_autostart::Builder::new()
-                .app_name("PlanarClip")
+                .app_name(APP_DISPLAY_NAME)
                 .build(),
         )
         .manage(app_state)
         .setup(move |app| {
             use tauri_plugin_notification::NotificationExt;
+
+            #[cfg(windows)]
+            {
+                let config = app.config();
+                platform::windows::register_app_user_model_id(
+                    &config.identifier,
+                    config
+                        .product_name
+                        .as_deref()
+                        .unwrap_or(APP_DISPLAY_NAME),
+                );
+            }
 
             let _ = app.handle().notification().request_permission();
 
@@ -1827,7 +1904,7 @@ pub fn run() {
                 window::destroy_main_window(app.handle());
             }
 
-            let toggle = MenuItemBuilder::with_id("toggle", "打开 PlanarClip").build(app)?;
+            let toggle = MenuItemBuilder::with_id("toggle", format!("打开 {APP_DISPLAY_NAME}")).build(app)?;
             let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
             let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
 
@@ -1837,7 +1914,7 @@ pub fn run() {
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("PlanarClip 剪贴板同步")
+                .tooltip(format!("{APP_DISPLAY_NAME} 剪贴板同步"))
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_tray_icon_event(|tray, event| {

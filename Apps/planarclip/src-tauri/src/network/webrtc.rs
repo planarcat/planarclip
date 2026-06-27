@@ -200,18 +200,17 @@ impl ConnectionManager {
             }
 
             tracing::warn!("Direct connection lost");
-            let was_connected = *connected.lock().await;
-            *connected.lock().await = false;
-            if connection_generation.load(Ordering::SeqCst) == session_generation {
-                *connection.lock().await = None;
-                *connected_peer.lock().await = None;
-            }
 
-            if !was_connected {
+            if connection_generation.load(Ordering::SeqCst) != session_generation {
                 return;
             }
 
-            if connection_generation.load(Ordering::SeqCst) != session_generation {
+            let was_connected = *connected.lock().await;
+            *connected.lock().await = false;
+            *connection.lock().await = None;
+            *connected_peer.lock().await = None;
+
+            if !was_connected {
                 return;
             }
 
@@ -252,6 +251,7 @@ impl ConnectionManager {
                     "peer_id": peer_id,
                 }),
             );
+            crate::window::send_session_ended_notification(&app_handle, &message);
         });
 
         handle
