@@ -228,7 +228,7 @@ async fn run_auto_outbound_handshake(
             let _ = establish_outbound_connection(&deps, &app, conn, &ip).await;
         }
         InitiatorResult::AwaitingCode { stream } => {
-            *deps.pending_initiator.lock().await = Some(stream);
+            crate::store_pending_initiator_stream(deps.pending_initiator.clone(), &app, stream).await;
             let _ = app.emit(
                 "pairing-code-needed",
                 serde_json::json!({

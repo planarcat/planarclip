@@ -234,9 +234,9 @@ export function PairingModal({
   const listDevices = allDiscoverable.filter((device) => device.id !== activeTarget?.id);
 
   const inMutualPairing = stage === "awaiting_code" || stage === "incoming_pairing";
+  const inboundPairing = stage === "incoming_pairing";
   const showLocalPairingCode = inMutualPairing;
   const showPairingInput = inMutualPairing || stage === "submitting_code";
-  const inboundPairing = stage === "incoming_pairing";
 
   const pairingCodeCountdownActive = stage === "awaiting_code" || stage === "incoming_pairing";
   const { progress, isUrgent } = usePairingCountdown({

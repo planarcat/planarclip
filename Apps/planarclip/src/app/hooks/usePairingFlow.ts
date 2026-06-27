@@ -19,6 +19,7 @@ import {
   MSG_CONNECTION_LIMIT,
   MSG_INVALID_PAIRING_CODE,
   MSG_PAIRING_CODE_REFRESHED,
+  MSG_ENTER_PEER_PAIRING_CODE,
   MSG_PEER_CANCELLED,
   MSG_PEER_REJECTED,
   MSG_PEER_RESPONSE_TIMEOUT,
@@ -302,8 +303,8 @@ export function usePairingFlow({
         if (result === "awaiting_code") {
           setShowPairing(true);
           setPairingStage("awaiting_code");
-          setPairingHelperText("请输入对方设备上显示的 6 位配对码。");
-          setLastMessage("请输入对方设备上显示的 6 位配对码。");
+          setPairingHelperText(MSG_ENTER_PEER_PAIRING_CODE);
+          setLastMessage(MSG_ENTER_PEER_PAIRING_CODE);
           setPairingInput("");
           try {
             const code = await callCommand<string>("get_pairing_code");
@@ -493,8 +494,8 @@ export function usePairingFlow({
       if (incomingRequest.requires_pairing) {
         setShowPairing(true);
         setPairingStage("incoming_pairing");
-        setPairingHelperText("请输入对方设备上显示的 6 位配对码。");
-        setLastMessage("请输入对方设备上显示的 6 位配对码。");
+        setPairingHelperText(MSG_ENTER_PEER_PAIRING_CODE);
+        setLastMessage(MSG_ENTER_PEER_PAIRING_CODE);
         try {
           const code = await callCommand<string>("get_pairing_code");
           setPairingCode(code);
@@ -726,10 +727,10 @@ export function usePairingFlow({
       setPairingStage("awaiting_code");
       setPairingError(null);
       setPairingRotationHint(null);
-      setPairingHelperText("请输入对方设备上显示的 6 位配对码。");
+      setPairingHelperText(MSG_ENTER_PEER_PAIRING_CODE);
       setPairingInput("");
       setStatus("connecting");
-      setLastMessage("请输入对方设备上显示的 6 位配对码。");
+      setLastMessage(MSG_ENTER_PEER_PAIRING_CODE);
 
       try {
         const code = await callCommand<string>("get_pairing_code");

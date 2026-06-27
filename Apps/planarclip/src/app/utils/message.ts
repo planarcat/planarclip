@@ -86,6 +86,13 @@ export const MSG_INVALID_PAIRING_CODE = "配对码错误，请重新输入。";
 /** 配对码输入阶段超时后轮换 */
 export const MSG_PAIRING_CODE_REFRESHED = "配对码已更新，请重新输入。";
 
+/** 发起方：等待输入对方屏幕上的配对码 */
+export const MSG_ENTER_PEER_PAIRING_CODE = "请输入对方设备上显示的 6 位配对码。";
+
+/** 接收方：等待对方输入本机配对码 */
+export const MSG_WAIT_FOR_PEER_PAIRING_CODE =
+  "请让对方在他的设备上输入你屏幕上的配对码。";
+
 /** 连接数已达上限 */
 export const MSG_CONNECTION_LIMIT =
   "已超出连接上限，请先断开其中一个设备后再连接。";

@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 
@@ -504,6 +505,53 @@ pub(crate) fn emit_connection_failed(app: &tauri::AppHandle, error: &direct::Han
     );
 }
 
+async fn watch_pending_initiator_peer_abort(
+    pending_initiator: Arc<Mutex<Option<TcpStream>>>,
+    app: tauri::AppHandle,
+) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        let mut stream = {
+            let mut guard = pending_initiator.lock().await;
+            guard.take()
+        };
+
+        let Some(mut stream) = stream else {
+            return;
+        };
+
+        match direct::check_initiator_peer_abort(&mut stream).await {
+            Ok(Some(error)) => {
+                emit_connection_failed(&app, &error);
+                let _ = stream.shutdown().await;
+                return;
+            }
+            Ok(None) => {
+                *pending_initiator.lock().await = Some(stream);
+            }
+            Err(error) => {
+                emit_connection_failed(&app, &error);
+                let _ = stream.shutdown().await;
+                return;
+            }
+        }
+    }
+}
+
+pub(crate) async fn store_pending_initiator_stream(
+    pending_initiator: Arc<Mutex<Option<TcpStream>>>,
+    app: &tauri::AppHandle,
+    stream: TcpStream,
+) {
+    *pending_initiator.lock().await = Some(stream);
+    let pending = pending_initiator.clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        watch_pending_initiator_peer_abort(pending, app).await;
+    });
+}
+
 #[tauri::command]
 async fn get_pending_connection_request(
     state: tauri::State<'_, AppState>,
@@ -904,7 +952,12 @@ async fn connect_lan(
             Ok("connected".into())
         }
         Ok(InitiatorResult::AwaitingCode { stream }) => {
-            *state.pending_initiator.lock().await = Some(stream);
+            store_pending_initiator_stream(
+                state.pending_initiator.clone(),
+                &app,
+                stream,
+            )
+            .await;
             let _ = app.emit(
                 "pairing-code-needed",
                 serde_json::json!({

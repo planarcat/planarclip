@@ -298,6 +298,26 @@ pub async fn initiator_connect(
     initiator_read_connect_response(stream).await
 }
 
+pub async fn check_initiator_peer_abort(
+    stream: &mut TcpStream,
+) -> Result<Option<HandshakeError>, HandshakeError> {
+    match tokio::time::timeout(std::time::Duration::from_millis(50), stream.readable()).await {
+        Ok(Ok(())) => match read_frame(stream).await {
+            Ok(Frame::Handshake(HandshakeMessage::AuthResult {
+                success: false,
+                reason,
+                ..
+            })) => Ok(Some(HandshakeError::from_reason_code(reason.as_deref()))),
+            Ok(_) => Err(HandshakeError::Protocol(
+                "等待配对码时收到异常握手消息",
+            )),
+            Err(e) => Err(frame_error_to_handshake(e)),
+        },
+        Ok(Err(error)) => Err(HandshakeError::Io(error)),
+        Err(_) => Ok(None),
+    }
+}
+
 pub async fn initiator_send_code(
     mut stream: TcpStream,
     code: String,
