@@ -309,6 +309,8 @@ pub async fn attempt_connect_trusted_peer(
         port
     );
 
+    crate::emit_outbound_connection_started(app, peer_id, &peer_name, ip, port, "auto_connect");
+
     let stream = match direct::initiator_send_connect_request(
         ip,
         port,

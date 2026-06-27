@@ -6,7 +6,6 @@ import {
   ShieldCheck,
   ShieldOff,
   Smartphone,
-  Unplug,
   UserX,
   Zap,
 } from "lucide-react";
@@ -15,6 +14,7 @@ import type { AppConnectionStatus, Device } from "../../types";
 import { MAX_CONNECTIONS } from "../../constants/connection";
 import { categorizeDevices } from "../../utils/device";
 import { relativeTime } from "../../utils/time";
+import { DisconnectIconButton } from "../common/DisconnectIconButton";
 import { OsIcon } from "../common/OsIcon";
 
 type DevicesPageProps = {
@@ -274,10 +274,8 @@ function KnownDeviceCard({
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {device.isTrusted && <RemoveDeviceIconButton device={device} onRemoveTrustedPeer={onRemoveTrustedPeer} />}
-          <DeviceIconButton
+          <DisconnectIconButton
             ariaLabel={disconnectTitle}
-            hoverDestructive
-            icon={Unplug}
             onClick={onDisconnect}
             title={disconnectTitle}
           />

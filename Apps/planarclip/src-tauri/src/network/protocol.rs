@@ -1,12 +1,49 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum SignalMessage {
     #[serde(rename = "clipboard")]
     Clipboard {
         payload: String,
         hash: String,
+    },
+
+    #[serde(rename = "clipboard_image_inline")]
+    ClipboardImageInline {
+        hash: String,
+        width: u32,
+        height: u32,
+        mime: String,
+        data_base64: String,
+    },
+
+    #[serde(rename = "clipboard_image_begin")]
+    ClipboardImageBegin {
+        transfer_id: String,
+        hash: String,
+        width: u32,
+        height: u32,
+        total_bytes: u64,
+        chunk_size: u32,
+    },
+
+    #[serde(rename = "clipboard_image_end")]
+    ClipboardImageEnd {
+        transfer_id: String,
+        hash: String,
+    },
+
+    #[serde(rename = "transfer_ack")]
+    TransferAck {
+        transfer_id: String,
+        chunk_index: u32,
+    },
+
+    #[serde(rename = "transfer_cancel")]
+    TransferCancel {
+        transfer_id: String,
+        reason: Option<String>,
     },
 
     #[serde(rename = "peer_joined")]
@@ -39,6 +76,11 @@ pub enum HandshakeMessage {
 
     #[serde(rename = "auth_code")]
     AuthCode {
+        code: String,
+    },
+
+    #[serde(rename = "local_pairing_code")]
+    LocalPairingCode {
         code: String,
     },
 

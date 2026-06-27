@@ -1,6 +1,11 @@
 #[derive(Debug, Clone)]
 pub enum ClipboardSnapshot {
     Text(String),
+    Image {
+        png_bytes: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
     Empty,
 }
 
@@ -8,6 +13,7 @@ impl ClipboardSnapshot {
     pub fn content_hash(&self) -> [u8; 32] {
         match self {
             ClipboardSnapshot::Text(s) => *blake3::hash(s.as_bytes()).as_bytes(),
+            ClipboardSnapshot::Image { png_bytes, .. } => *blake3::hash(png_bytes).as_bytes(),
             ClipboardSnapshot::Empty => [0u8; 32],
         }
     }
@@ -15,8 +21,12 @@ impl ClipboardSnapshot {
     pub fn text(&self) -> Option<&str> {
         match self {
             ClipboardSnapshot::Text(text) => Some(text),
-            ClipboardSnapshot::Empty => None,
+            _ => None,
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        matches!(self, ClipboardSnapshot::Empty)
     }
 }
 
@@ -55,13 +65,21 @@ impl ClipboardEvent {
     }
 }
 
+fn default_clip_type() -> String {
+    "text".to_string()
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClipboardHistoryEntry {
     pub id: String,
     pub content: String,
+    #[serde(default = "default_clip_type")]
+    pub clip_type: String,
     pub source_label: String,
     pub direction: String,
     pub timestamp_ms: u64,
+    #[serde(default)]
+    pub size_label: Option<String>,
 }
 
 fn now_ms() -> u64 {

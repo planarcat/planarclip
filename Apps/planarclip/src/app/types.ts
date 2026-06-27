@@ -75,6 +75,11 @@ export type ConnectionSettingsPayload = {
   auto_connect_trusted: boolean;
 };
 
+export type SyncSettingsPayload = {
+  sync_images: boolean;
+  sync_files: boolean;
+};
+
 export type ConnectedPeerPayload = {
   peer_name: string;
   peer_id: string;
@@ -85,9 +90,11 @@ export type SettingAvailability = "editable" | "managed" | "planned";
 export type ClipboardHistoryPayload = {
   id: string;
   content: string;
+  clip_type?: ClipType;
   source_label: string;
   direction: "sent" | "received";
   timestamp_ms: number;
+  size_label?: string | null;
 };
 
 export type LanDevicePayload = {

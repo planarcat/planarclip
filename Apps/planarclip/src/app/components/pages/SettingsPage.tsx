@@ -26,6 +26,10 @@ type SettingsPageProps = {
   onLaunchAtStartupChange: (enabled: boolean) => void;
   onSilentStartChange: (enabled: boolean) => void;
   onAutoConnectTrustedChange: (enabled: boolean) => void;
+  syncImages: boolean;
+  isSavingSyncSettings: boolean;
+  syncSettingsLoaded: boolean;
+  onSyncImagesChange: (enabled: boolean) => void;
 };
 
 export function SettingsPage({
@@ -48,6 +52,10 @@ export function SettingsPage({
   onLaunchAtStartupChange,
   onSilentStartChange,
   onAutoConnectTrustedChange,
+  syncImages,
+  isSavingSyncSettings,
+  syncSettingsLoaded,
+  onSyncImagesChange,
 }: SettingsPageProps) {
   const settingRows: Array<{
     label: string;
@@ -60,13 +68,8 @@ export function SettingsPage({
       availability: "managed",
     },
     {
-      label: "同步图片",
-      desc: "当前版本只支持文本同步，图片能力会在后续阶段补齐。",
-      availability: "planned",
-    },
-    {
       label: "同步文件",
-      desc: "当前版本只支持文本同步，文件能力会在后续阶段补齐。",
+      desc: "文件同步会在图片能力稳定后补齐，单文件默认上限 100 MB。",
       availability: "planned",
     },
     {
@@ -231,6 +234,20 @@ export function SettingsPage({
 
       <p className="mb-3 text-[13px] font-medium text-primary">同步与安全</p>
       <div className="rounded-xl border border-border bg-card px-4">
+        <div className="flex items-start justify-between gap-4 border-b border-border py-3.5">
+          <div>
+            <p className="text-sm font-medium text-primary">同步图片</p>
+            <p className="mt-0.5 text-[13px] font-medium leading-6 text-muted-foreground">
+            开启后，复制截图或图片会自动同步到已连接设备；单张图片最大 5 MB。
+            </p>
+          </div>
+          <SettingToggle
+            checked={syncImages}
+            disabled={!syncSettingsLoaded || isSavingSyncSettings}
+            label="同步图片"
+            onChange={onSyncImagesChange}
+          />
+        </div>
         {settingRows.map((item) => (
           <div key={item.label} className="flex items-start justify-between gap-4 border-b border-border py-3.5 last:border-0">
             <div>

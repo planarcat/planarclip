@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useMemo, useState } from "react";
 import { DevicesPanel } from "./components/layout/DevicesPanel";
 import { Sidebar } from "./components/layout/Sidebar";
+import { ConnectionAttemptCard } from "./components/overlays/ConnectionAttemptCard";
 import { IncomingConnectionPrompt } from "./components/overlays/IncomingConnectionPrompt";
 import { PairingModal } from "./components/overlays/PairingModal";
 import { SwitchConnectionPrompt } from "./components/overlays/SwitchConnectionPrompt";
@@ -12,6 +13,7 @@ import { SettingsPage } from "./components/pages/SettingsPage";
 import { getThemeById, normalizeColorScheme } from "./constants/theme";
 import { useConnectionBridge } from "./hooks/useConnectionBridge";
 import { useConnectionSettings } from "./hooks/useConnectionSettings";
+import { useSyncSettings } from "./hooks/useSyncSettings";
 import { usePairingFlow } from "./hooks/usePairingFlow";
 import { useStartupSettings } from "./hooks/useStartupSettings";
 import { useUiTheme } from "./hooks/useUiTheme";
@@ -81,11 +83,14 @@ export default function App() {
 
   const devices = useMemo(() => buildDevices(lanDevices, connectedPeer, trustedPeers), [lanDevices, connectedPeer, trustedPeers]);
   const connectedCount = useMemo(() => devices.filter((device) => device.status === "connected").length, [devices]);
+  const onlineDeviceCount = useMemo(() => devices.filter((device) => device.status !== "offline").length, [devices]);
   const discoveredDevices = useMemo(
     () => devices.filter((device) => device.source === "discovery" && device.status !== "connected"),
     [devices],
   );
   const identityLabel = deviceName;
+  const showConnectionAttemptCard = pairingStage === "requesting_device" && pairingTarget != null;
+  const showPairingModal = showPairing && pairingStage !== "requesting_device";
 
   const {
     handleColorSchemeChange,
@@ -132,6 +137,17 @@ export default function App() {
     setLastMessage,
   });
 
+  const {
+    syncImages,
+    isSavingSyncSettings,
+    syncSettingsLoaded,
+    handleSyncImagesChange,
+  } = useSyncSettings({
+    tauriAvailable: TAURI_AVAILABLE,
+    callCommand,
+    setLastMessage,
+  });
+
   const refreshLanDevicesQuiet = useCallback(async () => {
     if (!TAURI_AVAILABLE) {
       return;
@@ -159,6 +175,7 @@ export default function App() {
     handleConnectionEstablished,
     handleConnectionFailed,
     handleConnectionEnded,
+    handleOutboundConnectionStarted,
     handleOutboundConnectionPending,
     handlePairingCodeNeeded,
     switchConnectionTarget,
@@ -318,6 +335,7 @@ export default function App() {
     onConnectionEstablished: handleTrustedConnectionEstablished,
     onConnectionFailed: handleConnectionFailed,
     onConnectionEnded: handleConnectionEnded,
+    onOutboundConnectionStarted: handleOutboundConnectionStarted,
     onOutboundConnectionPending: handleOutboundConnectionPending,
     onPairingCodeNeeded: handlePairingCodeNeeded,
     onPairingCodeRotated: handlePairingCodeRotated,
@@ -327,8 +345,9 @@ export default function App() {
     <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
       <Sidebar
         activeNav={activeNav}
-        status={status}
         identityLabel={identityLabel}
+        connectedDeviceCount={connectedCount}
+        onlineDeviceCount={onlineDeviceCount}
         colorScheme={colorScheme}
         setColorScheme={handleColorSchemeChange}
         theme={theme}
@@ -338,7 +357,6 @@ export default function App() {
         onNavigate={setActiveNav}
         onDeviceNameChange={handleDeviceNameChange}
         onDeviceNameSave={handleDeviceNameSave}
-        tauriAvailable={TAURI_AVAILABLE}
       />
 
       <main className="flex h-full min-w-0 flex-1 overflow-hidden">
@@ -346,13 +364,23 @@ export default function App() {
           <>
             <ClipboardPage
               clips={clips}
-              devices={devices}
               viewMode={viewMode}
               setViewMode={setViewMode}
               status={status}
               statusMessage={lastMessage}
             />
-            <DevicesPanel devices={devices} status={status} />
+            <DevicesPanel
+              devices={devices}
+              connectionStatus={status}
+              connectionLocked={connectionLocked}
+              connectedCount={connectedCount}
+              onConnectDevice={(device) => {
+                void handleConnectLan(device);
+              }}
+              onDisconnect={() => {
+                void handleDisconnect();
+              }}
+            />
           </>
         )}
         {activeNav === "devices" && (
@@ -399,6 +427,10 @@ export default function App() {
             isSavingConnectionSettings={isSavingConnectionSettings}
             connectionSettingsLoaded={connectionSettingsLoaded}
             onAutoConnectTrustedChange={handleAutoConnectTrustedChange}
+            syncImages={syncImages}
+            isSavingSyncSettings={isSavingSyncSettings}
+            syncSettingsLoaded={syncSettingsLoaded}
+            onSyncImagesChange={handleSyncImagesChange}
           />
         )}
       </main>
@@ -420,7 +452,7 @@ export default function App() {
         />
       )}
 
-      {showPairing && (
+      {showPairingModal && (
         <PairingModal
           initialTarget={pairingTarget}
           allDiscoverable={discoveredDevices}
@@ -456,6 +488,10 @@ export default function App() {
           }}
           onCancel={cancelSwitchConnection}
         />
+      )}
+
+      {showConnectionAttemptCard && pairingTarget && (
+        <ConnectionAttemptCard deviceName={pairingTarget.name} />
       )}
 
       {noticeMessage && (

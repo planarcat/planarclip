@@ -34,6 +34,7 @@ const DEFAULT_UI_COLOR_SCHEME: &str = "dark";
 const DEFAULT_UI_THEME_COLOR: &str = "cyan";
 const MAX_CLIPBOARD_HISTORY: usize = 12;
 const MAX_CONNECTIONS: usize = 5;
+const DEFAULT_MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 
 fn default_device_name() -> String {
     let host_name = hostname::get()
@@ -94,6 +95,12 @@ struct StartupSettingsPayload {
 #[derive(Clone, Debug, serde::Serialize)]
 struct ConnectionSettingsPayload {
     auto_connect_trusted: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct SyncSettingsPayload {
+    sync_images: bool,
+    sync_files: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -269,17 +276,17 @@ pub(crate) fn spawn_lan_presence_refresh(state: &AppState, app: &tauri::AppHandl
 
 fn peer_disconnected_message(peer_name: &str) -> String {
     if peer_name.trim().is_empty() {
-        "与对方设备的连接已断开。".into()
+        "设备 已断开连接".into()
     } else {
-        format!("与 {} 的连接已断开。", peer_name.trim())
+        format!("{} 已断开连接", peer_name.trim())
     }
 }
 
 fn peer_offline_message(peer_name: &str) -> String {
     if peer_name.trim().is_empty() {
-        "对方设备已下线。".into()
+        "对方设备 已下线".into()
     } else {
-        format!("{} 已下线。", peer_name.trim())
+        format!("{} 已下线", peer_name.trim())
     }
 }
 
@@ -483,6 +490,13 @@ fn connection_settings_from_config(config: &AppConfig) -> ConnectionSettingsPayl
     }
 }
 
+fn sync_settings_from_config(config: &AppConfig) -> SyncSettingsPayload {
+    SyncSettingsPayload {
+        sync_images: config.sync_images.unwrap_or(true),
+        sync_files: config.sync_files.unwrap_or(false),
+    }
+}
+
 fn load_clipboard_history_from_config(config: &AppConfig) -> Vec<ClipboardHistoryEntry> {
     config
         .clipboard_history
@@ -590,6 +604,64 @@ async fn clear_pairing_session(state: &AppState) {
     clear_pending_responder_submit(state).await;
 }
 
+async fn publish_initiator_local_pairing_code(
+    state: &AppState,
+    code: String,
+) -> Result<(), direct::HandshakeError> {
+    let mut stream = state
+        .pending_initiator
+        .lock()
+        .await
+        .take()
+        .ok_or(direct::HandshakeError::Cancelled)?;
+
+    let publish_result = direct::initiator_publish_local_code(&mut stream, code).await;
+    *state.pending_initiator.lock().await = Some(stream);
+    publish_result
+}
+
+async fn rotate_active_pairing_code(
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Result<String, String> {
+    let code_arc = state
+        .pairing_session_code
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "当前没有进行中的配对验证。".to_string())?;
+
+    let new_code = direct::generate_pairing_code();
+    *code_arc.lock().await = new_code.clone();
+    let expires_at_ms = pairing_code_expires_at_ms();
+    *state.pairing_code_expires_at.lock().await = Some(expires_at_ms);
+
+    if state.pending_initiator.lock().await.is_some() {
+        publish_initiator_local_pairing_code(state, new_code.clone())
+            .await
+            .map_err(|error| error.user_message())?;
+    }
+
+    emit_pairing_code_rotated(app, &new_code, expires_at_ms);
+    Ok(new_code)
+}
+
+async fn refresh_active_pairing_code(
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Result<String, String> {
+    if state.pairing_session_code.lock().await.is_some() {
+        return rotate_active_pairing_code(state, app).await;
+    }
+
+    let new_code = direct::generate_pairing_code();
+    let pairing_code = Arc::new(Mutex::new(new_code.clone()));
+    start_pairing_session(state, pairing_code).await;
+    let expires_at_ms = pairing_code_expires_at_ms();
+    emit_pairing_code_rotated(app, &new_code, expires_at_ms);
+    Ok(new_code)
+}
+
 fn emit_pairing_code_rotated(app: &tauri::AppHandle, code: &str, expires_at_ms: i64) {
     let _ = app.emit(
         "pairing-code-rotated",
@@ -664,11 +736,6 @@ fn normalize_trusted_peers(config: &mut AppConfig) -> bool {
 }
 
 fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHistoryEntry> {
-    let content = event.snapshot.text()?.trim().to_string();
-    if content.is_empty() {
-        return None;
-    }
-
     let hash = hex::encode(event.content_hash());
     let (source_label, direction) = match &event.origin {
         ClipboardOrigin::Local => ("这台设备".to_string(), "sent".to_string()),
@@ -682,13 +749,38 @@ fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHist
         }
     };
 
-    Some(ClipboardHistoryEntry {
-        id: format!("{}-{}", event.timestamp_ms, &hash[..8]),
-        content,
-        source_label,
-        direction,
-        timestamp_ms: event.timestamp_ms,
-    })
+    match &event.snapshot {
+        clipboard::types::ClipboardSnapshot::Text(text) => {
+            let content = text.trim().to_string();
+            if content.is_empty() {
+                return None;
+            }
+
+            Some(ClipboardHistoryEntry {
+                id: format!("{}-{}", event.timestamp_ms, &hash[..8]),
+                content,
+                clip_type: "text".to_string(),
+                source_label,
+                direction,
+                timestamp_ms: event.timestamp_ms,
+                size_label: None,
+            })
+        }
+        clipboard::types::ClipboardSnapshot::Image {
+            png_bytes,
+            width,
+            height,
+        } => Some(ClipboardHistoryEntry {
+            id: format!("{}-{}", event.timestamp_ms, &hash[..8]),
+            content: format!("[图片] {width}×{height}"),
+            clip_type: "image".to_string(),
+            source_label,
+            direction,
+            timestamp_ms: event.timestamp_ms,
+            size_label: Some(clipboard::image::format_byte_size(png_bytes.len())),
+        }),
+        clipboard::types::ClipboardSnapshot::Empty => None,
+    }
 }
 
 fn merge_clipboard_history(history: &mut Vec<ClipboardHistoryEntry>, entry: ClipboardHistoryEntry) {
@@ -735,6 +827,26 @@ async fn abort_outbound_handshake(state: &AppState) {
 
 async fn clear_pending_connection_request(state: &AppState) {
     *state.pending_connection_request.lock().await = None;
+}
+
+pub(crate) fn emit_outbound_connection_started(
+    app: &tauri::AppHandle,
+    peer_id: &str,
+    peer_name: &str,
+    ip: &str,
+    port: u16,
+    source: &str,
+) {
+    let _ = app.emit(
+        "outbound-connection-started",
+        serde_json::json!({
+            "peer_id": peer_id,
+            "peer_name": peer_name,
+            "peer_ip": ip,
+            "peer_port": port,
+            "source": source,
+        }),
+    );
 }
 
 pub(crate) fn emit_connection_failed(app: &tauri::AppHandle, error: &direct::HandshakeError) {
@@ -858,6 +970,7 @@ async fn finalize_outbound_pairing(
         }),
     );
     window::send_session_established_notification(app, &peer_name, false);
+    clear_pairing_session(state).await;
 }
 
 pub(crate) async fn store_pending_initiator_stream(
@@ -946,6 +1059,30 @@ async fn save_connection_settings(
 }
 
 #[tauri::command]
+async fn get_sync_settings(state: tauri::State<'_, AppState>) -> Result<SyncSettingsPayload, String> {
+    let config = state.config.lock().await;
+    Ok(sync_settings_from_config(&config))
+}
+
+#[tauri::command]
+async fn save_sync_settings(
+    state: tauri::State<'_, AppState>,
+    sync_images: bool,
+) -> Result<SyncSettingsPayload, String> {
+    {
+        let mut config = state.config.lock().await;
+        config.sync_images = Some(sync_images);
+        if config.max_file_bytes.is_none() {
+            config.max_file_bytes = Some(DEFAULT_MAX_FILE_BYTES);
+        }
+        storage_json::save_config(&config);
+    }
+
+    let config = state.config.lock().await;
+    Ok(sync_settings_from_config(&config))
+}
+
+#[tauri::command]
 async fn get_status(state: tauri::State<'_, AppState>) -> Result<String, String> {
     let connected = *state.connected.lock().await;
     if connected {
@@ -974,19 +1111,13 @@ async fn rotate_pairing_code(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let code_arc = state
-        .pairing_session_code
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| "当前没有进行中的配对验证。".to_string())?;
+    refresh_active_pairing_code(state.inner(), &app).await
+}
 
-    let new_code = direct::generate_pairing_code();
-    *code_arc.lock().await = new_code.clone();
-    let expires_at_ms = pairing_code_expires_at_ms();
-    *state.pairing_code_expires_at.lock().await = Some(expires_at_ms);
-    emit_pairing_code_rotated(&app, &new_code, expires_at_ms);
-    Ok(new_code)
+#[tauri::command]
+async fn end_pairing_session(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    clear_pairing_session(state.inner()).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1282,7 +1413,20 @@ async fn connect_lan(
 
             Ok("connected".into())
         }
-        Ok(InitiatorResult::AwaitingCode { stream }) => {
+        Ok(InitiatorResult::AwaitingCode { mut stream }) => {
+            let session_code = direct::generate_pairing_code();
+            let pairing_code = Arc::new(Mutex::new(session_code.clone()));
+            start_pairing_session(state.inner(), pairing_code).await;
+            let expires_at_ms = pairing_code_expires_at_ms();
+            emit_pairing_code_rotated(&app, &session_code, expires_at_ms);
+
+            if let Err(error) = direct::initiator_publish_local_code(&mut stream, session_code).await
+            {
+                clear_pairing_session(state.inner()).await;
+                emit_connection_failed(&app, &error);
+                return Err(error.user_message());
+            }
+
             store_pending_initiator_stream(
                 state.pending_initiator.clone(),
                 &app,
@@ -1447,9 +1591,9 @@ async fn disconnect(state: tauri::State<'_, AppState>, app: tauri::AppHandle) ->
     if let Some(peer_name) = disconnected_peer_name {
         let trimmed = peer_name.trim();
         let message = if trimmed.is_empty() {
-            "已断开当前连接。".to_string()
+            "设备 已断开连接".to_string()
         } else {
-            format!("已断开与 {trimmed} 的连接。")
+            format!("{trimmed} 已断开连接")
         };
         window::send_session_ended_notification(&app, &message);
     }
@@ -2176,6 +2320,8 @@ pub fn run() {
             let clip_tx_monitor = clip_tx.clone();
             let clip_rx = clip_tx.subscribe();
             let connection_bg = connection.clone();
+            let config_bg = config.clone();
+            let app_handle_bg = app_handle.clone();
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -2188,7 +2334,12 @@ pub fn run() {
                             monitor.run().await;
                         },
                         async {
-                            let engine = sync::engine::SyncEngine::new(clip_rx, connection_bg);
+                            let engine = sync::engine::SyncEngine::new(
+                                clip_rx,
+                                connection_bg,
+                                config_bg,
+                                app_handle_bg,
+                            );
                             engine.run().await;
                         },
                     )
@@ -2202,11 +2353,14 @@ pub fn run() {
             get_connected_peer,
             get_pairing_code,
             rotate_pairing_code,
+            end_pairing_session,
             get_ui_settings,
             get_startup_settings,
             save_startup_settings,
             get_connection_settings,
             save_connection_settings,
+            get_sync_settings,
+            save_sync_settings,
             get_clipboard_history,
             get_pending_connection_request,
             save_ui_settings,

@@ -2912,10 +2912,12 @@ name = "planarclip"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "base64 0.22.1",
  "blake3",
  "futures-util",
  "hex",
  "hostname",
+ "image",
  "local-ip-address",
  "mdns-sd",
  "rand 0.8.6",
@@ -2932,6 +2934,7 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "windows-sys 0.59.0",
  "winreg 0.55.0",
  "x25519-dalek",

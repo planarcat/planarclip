@@ -1,29 +1,27 @@
-import { Clipboard, LayoutGrid, LayoutList, Shield } from "lucide-react";
+import { Clipboard, LayoutGrid, LayoutList } from "lucide-react";
 import { useRelativeTicker } from "../../hooks/useRelativeTicker";
-import type { AppConnectionStatus, ClipEntry, Device, ViewMode } from "../../types";
+import type { AppConnectionStatus, ClipEntry, ViewMode } from "../../types";
 import { relativeTime } from "../../utils/time";
 import { ClipTypeIcon } from "../common/ClipTypeIcon";
 import { CopyButton } from "../common/CopyButton";
 
 type ClipboardPageProps = {
   clips: ClipEntry[];
-  devices: Device[];
   viewMode: ViewMode;
   setViewMode: (mode: ViewMode) => void;
   status: AppConnectionStatus;
   statusMessage: string;
 };
 
-export function ClipboardPage({ clips, devices, viewMode, setViewMode, status }: ClipboardPageProps) {
+export function ClipboardPage({ clips, viewMode, setViewMode, status }: ClipboardPageProps) {
   useRelativeTicker();
-  const connectedCount = devices.filter((device) => device.status === "connected").length;
 
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
       <div className="flex shrink-0 items-center justify-between border-b border-border px-4 pb-3 pt-5 md:px-6">
         <div>
           <h1 className="text-base font-semibold text-primary">剪贴板历史</h1>
-          <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">最近 {clips.length} 条文本同步摘要</p>
+          <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">最近 {clips.length} 条同步摘要</p>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center rounded-md bg-secondary p-0.5">
@@ -44,10 +42,6 @@ export function ClipboardPage({ clips, devices, viewMode, setViewMode, status }:
               <LayoutGrid size={14} />
             </button>
           </div>
-          <div className="flex items-center gap-1.5 rounded bg-secondary px-2.5 py-1.5 text-[13px] font-medium text-primary">
-            <Shield size={11} className="text-primary" />
-            已连接 {connectedCount} 台
-          </div>
         </div>
       </div>
 
@@ -58,7 +52,7 @@ export function ClipboardPage({ clips, devices, viewMode, setViewMode, status }:
               <Clipboard size={24} />
             </div>
             <p className="text-sm font-medium text-primary">
-              {status === "online" ? "等待新的文本同步" : "连接建立后，这里会显示最近的文本同步摘要"}
+              {status === "online" ? "等待新的同步内容" : "连接建立后，这里会显示最近的同步摘要"}
             </p>
           </div>
         </div>
@@ -77,7 +71,7 @@ export function ClipboardPage({ clips, devices, viewMode, setViewMode, status }:
                       <span className="ml-auto shrink-0 text-[13px] font-medium text-muted-foreground">{relativeTime(clip.timestamp)}</span>
                       <span className="shrink-0 font-mono text-[13px] font-medium text-secondary-foreground">{clip.size}</span>
                       <div className="opacity-0 transition-opacity group-hover:opacity-100">
-                        <CopyButton text={clip.content} />
+                        {clip.type === "text" ? <CopyButton text={clip.content} /> : null}
                       </div>
                     </div>
                     <p className="line-clamp-3 whitespace-pre-wrap break-all text-sm leading-relaxed text-foreground/90">{clip.content}</p>
@@ -99,7 +93,7 @@ export function ClipboardPage({ clips, devices, viewMode, setViewMode, status }:
                     <ClipTypeIcon type={clip.type} />
                     <span className="truncate text-[13px] font-medium text-primary">{sourceLine}</span>
                     <div className="ml-auto opacity-0 transition-opacity group-hover:opacity-100">
-                      <CopyButton text={clip.content} />
+                      {clip.type === "text" ? <CopyButton text={clip.content} /> : null}
                     </div>
                   </div>
                   <p className="line-clamp-4 flex-1 whitespace-pre-wrap break-all text-sm leading-relaxed text-foreground/90">

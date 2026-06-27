@@ -1,13 +1,14 @@
-import { Clipboard, Moon, Palette, Radio, Settings, Sun, SunMoon } from "lucide-react";
+import { Clipboard, Moon, Radio, Settings, Sun, SunMoon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { THEME_COLORS } from "../../constants/theme";
-import type { AppConnectionStatus, ColorScheme, NavId, ThemeColor } from "../../types";
+import type { ColorScheme, NavId, ThemeColor } from "../../types";
 import { ThemeSwatch } from "../common/ThemeSwatch";
 
 type SidebarProps = {
   activeNav: NavId;
-  status: AppConnectionStatus;
   identityLabel: string;
+  connectedDeviceCount: number;
+  onlineDeviceCount: number;
   colorScheme: ColorScheme;
   setColorScheme: (scheme: ColorScheme) => void;
   theme: ThemeColor;
@@ -17,13 +18,13 @@ type SidebarProps = {
   onNavigate: (nav: NavId) => void;
   onDeviceNameChange: (deviceName: string) => void;
   onDeviceNameSave: (deviceName?: string) => void;
-  tauriAvailable: boolean;
 };
 
 export function Sidebar({
   activeNav,
-  status,
   identityLabel,
+  connectedDeviceCount,
+  onlineDeviceCount,
   colorScheme,
   setColorScheme,
   theme,
@@ -33,7 +34,6 @@ export function Sidebar({
   onNavigate,
   onDeviceNameChange,
   onDeviceNameSave,
-  tauriAvailable,
 }: SidebarProps) {
   const [isEditingDeviceName, setIsEditingDeviceName] = useState(false);
   const [draftDeviceName, setDraftDeviceName] = useState(identityLabel);
@@ -46,21 +46,10 @@ export function Sidebar({
 
   const navItems = [
     { id: "clipboard" as const, label: "剪贴板", icon: <Clipboard size={15} /> },
-    { id: "devices" as const, label: "设备", icon: <Radio size={15} /> },
+    { id: "devices" as const, icon: <Radio size={15} /> },
     { id: "settings" as const, label: "设置", icon: <Settings size={15} /> },
   ];
-
-  const statusLabel =
-    status === "connecting" ? "连接中…" : status === "online" ? "已连接" : tauriAvailable ? "监听中" : "预览模式";
-
-  const statusClassName =
-    status === "connecting"
-      ? "bg-primary animate-pulse"
-      : status === "online"
-        ? "bg-emerald-400"
-        : tauriAvailable
-          ? "bg-amber-400"
-          : "bg-zinc-500";
+  const hasConnectedDevices = connectedDeviceCount > 0;
 
   const commitDeviceName = () => {
     setIsEditingDeviceName(false);
@@ -136,7 +125,41 @@ export function Sidebar({
             type="button"
           >
             {item.icon}
-            {item.label}
+            {item.id === "devices" ? (
+              <span className="flex min-w-0 items-center gap-2">
+                <span>设备</span>
+                <span className="flex items-center gap-1">
+                  <span
+                    className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[11px] font-medium tabular-nums ${
+                      activeNav === "devices"
+                        ? hasConnectedDevices
+                          ? "bg-white/15 text-white"
+                          : "bg-white/10 text-white/65"
+                        : hasConnectedDevices
+                          ? "bg-secondary text-primary"
+                          : "bg-secondary text-muted-foreground"
+                    }`}
+                  >
+                    {connectedDeviceCount}
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    className={`text-[10px] ${activeNav === "devices" ? "text-white/35" : "text-muted-foreground/45"}`}
+                  >
+                    /
+                  </span>
+                  <span
+                    className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[11px] font-medium tabular-nums ${
+                      activeNav === "devices" ? "bg-white/10 text-white/70" : "bg-secondary text-muted-foreground"
+                    }`}
+                  >
+                    {onlineDeviceCount}
+                  </span>
+                </span>
+              </span>
+            ) : (
+              item.label
+            )}
           </button>
         ))}
       </nav>
@@ -146,15 +169,15 @@ export function Sidebar({
           <span className="text-[13px] font-medium text-primary">背景</span>
           <div className="flex items-center rounded-md bg-secondary p-0.5">
             {[
-              { id: "light" as const, label: "浅色", icon: <Sun size={13} /> },
-              { id: "dark" as const, label: "深色", icon: <Moon size={13} /> },
-              { id: "system" as const, label: "跟随系统", icon: <SunMoon size={13} /> },
+              { id: "light" as const, label: "浅色", icon: <Sun size={14} /> },
+              { id: "dark" as const, label: "深色", icon: <Moon size={14} /> },
+              { id: "system" as const, label: "跟随系统", icon: <SunMoon size={14} /> },
             ].map((option) => (
               <button
                 key={option.id}
                 onClick={() => setColorScheme(option.id)}
                 title={option.label}
-                className={`rounded p-1.5 transition-colors ${colorScheme === option.id ? "bg-card text-foreground shadow-sm" : "text-secondary-foreground hover:text-foreground"}`}
+                className={`flex h-6 w-6 items-center justify-center rounded transition-colors ${colorScheme === option.id ? "bg-card text-foreground shadow-sm" : "text-secondary-foreground hover:text-foreground"}`}
                 type="button"
               >
                 {option.icon}
@@ -162,22 +185,18 @@ export function Sidebar({
             ))}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusClassName}`} />
-          <span className="text-[13px] font-medium text-primary/80">{statusLabel}</span>
-          <div className="ml-auto flex items-center gap-2">
-            <Palette size={12} className="text-secondary-foreground" />
-            <div className="flex items-center gap-2">
-              {THEME_COLORS.map((currentTheme) => (
-                <ThemeSwatch
-                  key={currentTheme.id}
-                  currentTheme={currentTheme}
-                  selectedTheme={theme}
-                  isDark={isDark}
-                  onChange={onThemeChange}
-                />
-              ))}
-            </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[13px] font-medium text-primary">主题</span>
+          <div className="flex items-center gap-1">
+            {THEME_COLORS.map((currentTheme) => (
+              <ThemeSwatch
+                key={currentTheme.id}
+                currentTheme={currentTheme}
+                selectedTheme={theme}
+                isDark={isDark}
+                onChange={onThemeChange}
+              />
+            ))}
           </div>
         </div>
       </div>

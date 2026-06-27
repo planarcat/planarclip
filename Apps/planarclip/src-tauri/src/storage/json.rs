@@ -17,6 +17,9 @@ pub struct AppConfig {
     pub launch_at_startup: Option<bool>,
     pub silent_start: Option<bool>,
     pub auto_connect_trusted: Option<bool>,
+    pub sync_images: Option<bool>,
+    pub sync_files: Option<bool>,
+    pub max_file_bytes: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

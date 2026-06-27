@@ -196,6 +196,48 @@ export function usePairingFlow({
     }
   }, [callCommand]);
 
+  const endPairingSession = useCallback(async () => {
+    try {
+      await callCommand("end_pairing_session");
+    } catch {
+    }
+  }, [callCommand]);
+
+  const refreshPairingCode = useCallback(
+    async (options?: { showHint?: boolean; clearInput?: boolean }) => {
+      const showHint = options?.showHint ?? false;
+      const clearInput = options?.clearInput ?? false;
+
+      if (clearInput) {
+        setPairingInput("");
+      }
+      if (showHint) {
+        setPairingError(null);
+      }
+
+      try {
+        const code = await callCommand<string>("rotate_pairing_code");
+        setPairingCode(code);
+        if (showHint) {
+          setPairingRotationHint(MSG_PAIRING_CODE_REFRESHED);
+        }
+        return code;
+      } catch {
+        try {
+          const code = await callCommand<string>("get_pairing_code");
+          setPairingCode(code);
+          if (showHint) {
+            setPairingRotationHint(MSG_PAIRING_CODE_REFRESHED);
+          }
+          return code;
+        } catch {
+          return null;
+        }
+      }
+    },
+    [callCommand, setPairingCode, setPairingError, setPairingInput, setPairingRotationHint],
+  );
+
   const openPairingModal = useCallback(() => {
     if (connectedCount >= MAX_CONNECTIONS) {
       showTerminalNotice(MSG_CONNECTION_LIMIT);
@@ -207,7 +249,18 @@ export function usePairingFlow({
     setPairingRotationHint(null);
     setPairingHelperText("请先从列表中选择要连接的设备。");
     setShowPairing(true);
-  }, [connectedCount, setPairingError, setPairingHelperText, setPairingRotationHint, setPairingStage, setPairingTarget, setShowPairing, showTerminalNotice]);
+    void refreshPairingCode();
+  }, [
+    connectedCount,
+    refreshPairingCode,
+    setPairingError,
+    setPairingHelperText,
+    setPairingRotationHint,
+    setPairingStage,
+    setPairingTarget,
+    setShowPairing,
+    showTerminalNotice,
+  ]);
 
   const cancelInboundConnection = useCallback(async () => {
     try {
@@ -231,36 +284,24 @@ export function usePairingFlow({
       return;
     }
 
+    void endPairingSession();
     resetPairingFlow(true);
   }, [
     abortOutboundConnection,
     cancelInboundConnection,
+    endPairingSession,
     handleTerminalConnectionFailure,
     resetPairingFlow,
   ]);
 
   const handleRotatePairingCode = useCallback(async () => {
-    if (pairingStageRef.current === "awaiting_code") {
-      setPairingRotationHint(MSG_PAIRING_CODE_REFRESHED);
-      setPairingError(null);
-      setPairingInput("");
+    const stage = pairingStageRef.current;
+    if (stage !== "awaiting_code" && stage !== "incoming_pairing") {
       return;
     }
 
-    try {
-      const code = await callCommand<string>("rotate_pairing_code");
-      setPairingCode(code);
-      setPairingRotationHint(MSG_PAIRING_CODE_REFRESHED);
-      setPairingError(null);
-    } catch {
-      try {
-        const code = await callCommand<string>("get_pairing_code");
-        setPairingCode(code);
-        setPairingRotationHint(MSG_PAIRING_CODE_REFRESHED);
-      } catch {
-      }
-    }
-  }, [callCommand, setPairingCode, setPairingError, setPairingInput, setPairingRotationHint]);
+    await refreshPairingCode({ showHint: true, clearInput: true });
+  }, [refreshPairingCode]);
 
   const executeConnectLan = useCallback(
     async (device: Device) => {
@@ -279,12 +320,12 @@ export function usePairingFlow({
       }
 
       outboundCancelledRef.current = false;
-      setShowPairing(true);
+      setShowPairing(false);
       setPairingTarget(device);
       setPairingStage("requesting_device");
       setPairingError(null);
       setPairingRotationHint(null);
-      const helperMessage = `正在等待 ${device.name} 回应…`;
+      const helperMessage = `正在尝试连接 ${device.name}…`;
       setPairingHelperText(helperMessage);
       setStatus("connecting");
       setLastMessage(helperMessage);
@@ -306,11 +347,7 @@ export function usePairingFlow({
           setPairingHelperText(MSG_ENTER_PEER_PAIRING_CODE);
           setLastMessage(MSG_ENTER_PEER_PAIRING_CODE);
           setPairingInput("");
-          try {
-            const code = await callCommand<string>("get_pairing_code");
-            setPairingCode(code);
-          } catch {
-          }
+          await refreshPairingCode();
           return;
         }
 
@@ -346,6 +383,7 @@ export function usePairingFlow({
       connectedCount,
       handleTerminalConnectionFailure,
       resetPairingFlow,
+      refreshPairingCode,
       setConnectedPeer,
       setLastMessage,
       setPairingError,
@@ -401,9 +439,27 @@ export function usePairingFlow({
 
   const switchPairingTarget = useCallback(
     async (device: Device) => {
-      if (isOutboundLockedStage(pairingStageRef.current)) {
+      if (pairingTargetRef.current?.id === device.id) {
         return;
       }
+
+      const stage = pairingStageRef.current;
+      if (stage === "submitting_code") {
+        return;
+      }
+
+      if (stage === "incoming_pairing") {
+        return;
+      }
+
+      if (isOutboundLockedStage(stage)) {
+        outboundCancelledRef.current = true;
+        await abortOutboundConnection();
+        outboundCancelledRef.current = false;
+      } else if (stage === "idle") {
+        await refreshPairingCode();
+      }
+
       setPairingInput("");
       setPairingStage("idle");
       setPairingError(null);
@@ -411,7 +467,16 @@ export function usePairingFlow({
       setPairingTarget(device);
       await handleConnectLan(device);
     },
-    [handleConnectLan, setPairingError, setPairingInput, setPairingRotationHint, setPairingStage, setPairingTarget],
+    [
+      abortOutboundConnection,
+      handleConnectLan,
+      refreshPairingCode,
+      setPairingError,
+      setPairingInput,
+      setPairingRotationHint,
+      setPairingStage,
+      setPairingTarget,
+    ],
   );
 
   const handleSubmitPairingCode = useCallback(async () => {
@@ -503,11 +568,7 @@ export function usePairingFlow({
         setPairingStage("incoming_pairing");
         setPairingHelperText(MSG_ENTER_PEER_PAIRING_CODE);
         setLastMessage(MSG_ENTER_PEER_PAIRING_CODE);
-        try {
-          const code = await callCommand<string>("get_pairing_code");
-          setPairingCode(code);
-        } catch {
-        }
+        await refreshPairingCode();
       }
     } catch (error) {
       const message = normalizeUserMessage(error, MSG_PEER_CANCELLED, peerName);
@@ -526,6 +587,7 @@ export function usePairingFlow({
     connectedCount,
     handleTerminalConnectionFailure,
     incomingRequest,
+    refreshPairingCode,
     setLastMessage,
     setPairingCode,
     setPairingError,
@@ -588,7 +650,7 @@ export function usePairingFlow({
       setStatus("online");
       setLastMessage(
         payload.is_reconnect
-          ? `已恢复与 ${payload.peer_name} 的连接。`
+          ? `${payload.peer_name} 已连接`
           : `已与 ${payload.peer_name} 建立连接，现在可以开始同步剪贴板了 — ${formatTime()}`,
       );
       resetPairingFlow(true);
@@ -695,19 +757,19 @@ export function usePairingFlow({
     [callCommand, connectedCount, refreshLanDevices, resetPairingFlow, setConnectedPeer, setStatus, showTerminalNotice],
   );
 
-  const beginOutboundWaitingUi = useCallback(
+  const beginOutboundAttemptUi = useCallback(
     (device: Device) => {
       if (outboundCancelledRef.current || isOutboundLockedStage(pairingStageRef.current)) {
         return;
       }
 
       outboundCancelledRef.current = false;
-      setShowPairing(true);
+      setShowPairing(false);
       setPairingTarget(device);
       setPairingStage("requesting_device");
       setPairingError(null);
       setPairingRotationHint(null);
-      const helperMessage = `正在等待 ${device.name} 回应…`;
+      const helperMessage = `正在尝试连接 ${device.name}…`;
       setPairingHelperText(helperMessage);
       setStatus("connecting");
       setLastMessage(helperMessage);
@@ -724,11 +786,18 @@ export function usePairingFlow({
     ],
   );
 
+  const handleOutboundConnectionStarted = useCallback(
+    (payload: OutboundConnectionPendingPayload) => {
+      beginOutboundAttemptUi(deviceFromOutboundPeer(payload));
+    },
+    [beginOutboundAttemptUi],
+  );
+
   const handleOutboundConnectionPending = useCallback(
     (payload: OutboundConnectionPendingPayload) => {
-      beginOutboundWaitingUi(deviceFromOutboundPeer(payload));
+      beginOutboundAttemptUi(deviceFromOutboundPeer(payload));
     },
-    [beginOutboundWaitingUi],
+    [beginOutboundAttemptUi],
   );
 
   const handlePairingCodeNeeded = useCallback(
@@ -762,16 +831,11 @@ export function usePairingFlow({
       setStatus("connecting");
       setLastMessage(MSG_ENTER_PEER_PAIRING_CODE);
 
-      try {
-        const code = await callCommand<string>("get_pairing_code");
-        setPairingCode(code);
-      } catch {
-      }
+      await refreshPairingCode();
     },
     [
-      callCommand,
+      refreshPairingCode,
       setLastMessage,
-      setPairingCode,
       setPairingError,
       setPairingHelperText,
       setPairingInput,
@@ -800,6 +864,7 @@ export function usePairingFlow({
     handleConnectionEstablished,
     handleConnectionFailed,
     handleConnectionEnded,
+    handleOutboundConnectionStarted,
     handleOutboundConnectionPending,
     handlePairingCodeNeeded,
     switchConnectionTarget,

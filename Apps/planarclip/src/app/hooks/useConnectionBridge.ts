@@ -59,6 +59,7 @@ type UseConnectionBridgeOptions = {
   onConnectionEstablished: (payload: ConnectionEstablishedPayload) => void;
   onConnectionFailed: (payload: ConnectionFailedPayload) => void;
   onConnectionEnded: (payload: ConnectionEndedPayload) => void;
+  onOutboundConnectionStarted: (payload: OutboundConnectionPendingPayload) => void;
   onOutboundConnectionPending: (payload: OutboundConnectionPendingPayload) => void;
   onPairingCodeNeeded: (payload: PairingCodeNeededPayload) => void;
 };
@@ -89,6 +90,7 @@ export function useConnectionBridge({
   onConnectionEstablished,
   onConnectionFailed,
   onConnectionEnded,
+  onOutboundConnectionStarted,
   onOutboundConnectionPending,
   onPairingCodeNeeded,
 }: UseConnectionBridgeOptions) {
@@ -110,6 +112,7 @@ export function useConnectionBridge({
   const onConnectionEstablishedRef = useLatestRef(onConnectionEstablished);
   const onConnectionFailedRef = useLatestRef(onConnectionFailed);
   const onConnectionEndedRef = useLatestRef(onConnectionEnded);
+  const onOutboundConnectionStartedRef = useLatestRef(onOutboundConnectionStarted);
   const onOutboundConnectionPendingRef = useLatestRef(onOutboundConnectionPending);
   const onPairingCodeNeededRef = useLatestRef(onPairingCodeNeeded);
 
@@ -188,6 +191,9 @@ export function useConnectionBridge({
         listen<ConnectionEndedPayload>("connection-ended", (event) => {
           onConnectionEndedRef.current(event.payload);
         }),
+        listen<OutboundConnectionPendingPayload>("outbound-connection-started", (event) => {
+          onOutboundConnectionStartedRef.current(event.payload);
+        }),
         listen<OutboundConnectionPendingPayload>("outbound-connection-pending", (event) => {
           onOutboundConnectionPendingRef.current(event.payload);
         }),
@@ -197,6 +203,11 @@ export function useConnectionBridge({
         listen<PairingCodeRotatedPayload>("pairing-code-rotated", (event) => {
           setPairingCodeRef.current(event.payload.code);
           onPairingCodeRotatedRef.current?.(event.payload);
+        }),
+        listen<{ active: boolean; kind: string; message: string }>("clipboard-sync-activity", (event) => {
+          if (event.payload.message) {
+            setLastMessageRef.current(event.payload.message);
+          }
         }),
       ]);
 

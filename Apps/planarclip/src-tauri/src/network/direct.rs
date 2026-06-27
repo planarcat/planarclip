@@ -5,14 +5,23 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::crypto::keys::{peer_id_from_public_key, KeyPair};
+use crate::network::binary_chunk::{decode_binary_body, encode_binary_body, BinaryChunk};
 use crate::network::protocol::{HandshakeMessage, SignalMessage};
 
 const FRAME_HANDSHAKE: u8 = 0x00;
 const FRAME_DATA: u8 = 0x01;
+const FRAME_BINARY: u8 = 0x02;
+
+#[derive(Debug, Clone)]
+pub enum ConnectionEvent {
+    Signal(SignalMessage),
+    Binary(BinaryChunk),
+}
 
 pub enum Frame {
     Handshake(HandshakeMessage),
     Data(SignalMessage),
+    Binary(BinaryChunk),
 }
 
 pub async fn read_frame(reader: &mut (impl AsyncRead + Unpin)) -> Result<Frame, FrameError> {
@@ -32,21 +41,26 @@ pub async fn read_frame(reader: &mut (impl AsyncRead + Unpin)) -> Result<Frame, 
     match frame_type {
         FRAME_HANDSHAKE => Ok(Frame::Handshake(serde_json::from_slice(&payload)?)),
         FRAME_DATA => Ok(Frame::Data(serde_json::from_slice(&payload)?)),
+        FRAME_BINARY => {
+            let chunk = decode_binary_body(&payload).map_err(|_| FrameError::InvalidBinaryChunk)?;
+            Ok(Frame::Binary(chunk))
+        }
         other => Err(FrameError::UnknownFrameType(other)),
     }
 }
 
 pub async fn write_frame(writer: &mut (impl AsyncWrite + Unpin), frame: &Frame) -> Result<(), FrameError> {
-    let (frame_type, json) = match frame {
+    let (frame_type, body) = match frame {
         Frame::Handshake(msg) => (FRAME_HANDSHAKE, serde_json::to_vec(msg)?),
         Frame::Data(msg) => (FRAME_DATA, serde_json::to_vec(msg)?),
+        Frame::Binary(chunk) => (FRAME_BINARY, encode_binary_body(chunk)),
     };
 
-    let len = json.len() as u32;
-    let mut buf = Vec::with_capacity(5 + json.len());
+    let len = body.len() as u32;
+    let mut buf = Vec::with_capacity(5 + body.len());
     buf.push(frame_type);
     buf.extend_from_slice(&len.to_be_bytes());
-    buf.extend_from_slice(&json);
+    buf.extend_from_slice(&body);
 
     writer.write_all(&buf).await?;
     Ok(())
@@ -138,6 +152,8 @@ pub enum FrameError {
     PayloadTooLarge(usize),
     #[error("未知帧类型：0x{0:02x}")]
     UnknownFrameType(u8),
+    #[error("无效二进制分块")]
+    InvalidBinaryChunk,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -206,8 +222,8 @@ impl HandshakeError {
 }
 
 pub struct DirectConnection {
-    pub rx: mpsc::UnboundedReceiver<SignalMessage>,
-    pub tx: mpsc::UnboundedSender<String>,
+    pub rx: mpsc::UnboundedReceiver<ConnectionEvent>,
+    pub tx: mpsc::UnboundedSender<ConnectionEvent>,
     pub peer_name: String,
     pub peer_id: String,
     pub peer_public_key: Vec<u8>,
@@ -219,8 +235,8 @@ fn spawn_data_bridge(
     peer_id: String,
     peer_public_key: Vec<u8>,
 ) -> DirectConnection {
-    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel::<SignalMessage>();
-    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<String>();
+    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel::<ConnectionEvent>();
+    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<ConnectionEvent>();
 
     let (mut read_half, mut write_half) = stream.into_split();
 
@@ -228,7 +244,12 @@ fn spawn_data_bridge(
         loop {
             match read_frame(&mut read_half).await {
                 Ok(Frame::Data(msg)) => {
-                    if incoming_tx.send(msg).is_err() {
+                    if incoming_tx.send(ConnectionEvent::Signal(msg)).is_err() {
+                        break;
+                    }
+                }
+                Ok(Frame::Binary(chunk)) => {
+                    if incoming_tx.send(ConnectionEvent::Binary(chunk)).is_err() {
                         break;
                     }
                 }
@@ -244,17 +265,15 @@ fn spawn_data_bridge(
     });
 
     tokio::spawn(async move {
-        while let Some(json) = outgoing_rx.recv().await {
-            match serde_json::from_str::<SignalMessage>(&json) {
-                Ok(msg) => {
-                    if write_frame(&mut write_half, &Frame::Data(msg)).await.is_err() {
-                        tracing::warn!("TCP write closed");
-                        break;
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Invalid outgoing message: {}", e);
-                }
+        while let Some(event) = outgoing_rx.recv().await {
+            let frame = match event {
+                ConnectionEvent::Signal(msg) => Frame::Data(msg),
+                ConnectionEvent::Binary(chunk) => Frame::Binary(chunk),
+            };
+
+            if write_frame(&mut write_half, &frame).await.is_err() {
+                tracing::warn!("TCP write closed");
+                break;
             }
         }
     });
@@ -456,6 +475,22 @@ pub async fn initiator_send_code(
     }
 }
 
+pub async fn initiator_publish_local_code(
+    stream: &mut TcpStream,
+    code: String,
+) -> Result<(), HandshakeError> {
+    if code.len() != 6 || !code.chars().all(|c| c.is_ascii_digit()) {
+        return Err(HandshakeError::Protocol("本机配对码格式无效"));
+    }
+
+    write_frame(
+        stream,
+        &Frame::Handshake(HandshakeMessage::LocalPairingCode { code }),
+    )
+    .await
+    .map_err(frame_error_to_handshake)
+}
+
 pub struct IncomingRequest {
     pub stream: TcpStream,
     pub initiator_name: String,
@@ -535,12 +570,19 @@ pub async fn responder_verify_code(
 
     write_frame(&mut stream, &Frame::Handshake(HandshakeMessage::AwaitCode)).await?;
 
-    let expected_initiator_code = pairing_code_from_public_key_bytes(&initiator_public_key);
+    let expected_initiator_code = std::sync::Arc::new(tokio::sync::Mutex::new(
+        pairing_code_from_public_key_bytes(&initiator_public_key),
+    ));
 
     loop {
         tokio::select! {
             frame = read_frame(&mut stream) => {
                 match frame {
+                    Ok(Frame::Handshake(HandshakeMessage::LocalPairingCode { code })) => {
+                        if code.len() == 6 && code.chars().all(|c| c.is_ascii_digit()) {
+                            *expected_initiator_code.lock().await = code;
+                        }
+                    }
                     Ok(Frame::Handshake(HandshakeMessage::AuthCode { code })) => {
                         if !verify_and_complete_responder_pairing(
                             &mut stream,
@@ -579,7 +621,7 @@ pub async fn responder_verify_code(
                     let _ = reply.send(Err(HandshakeError::InvalidCode));
                     continue;
                 }
-                if code != expected_initiator_code {
+                if code != *expected_initiator_code.lock().await {
                     let _ = reply.send(Err(HandshakeError::InvalidCode));
                     continue;
                 }

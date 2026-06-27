@@ -80,26 +80,20 @@ pub fn attach_main_window_close_handler(app: AppHandle, window: tauri::WebviewWi
 }
 
 pub fn send_connection_notification(app: &AppHandle, device_name: &str) {
-    let body = format!("{device_name} 请求连接，请点击任务栏中的 {APP_DISPLAY_NAME} 确认");
+    let body = format!("{device_name} 已请求连接，请在任务栏中确认");
     show_planarclip_notification(app, &body, false);
 }
 
 pub fn send_session_established_notification(
     app: &AppHandle,
     device_name: &str,
-    is_reconnect: bool,
+    _is_reconnect: bool,
 ) {
     let trimmed = device_name.trim();
     let body = if trimmed.is_empty() {
-        if is_reconnect {
-            "已恢复与熟悉设备的连接。".to_string()
-        } else {
-            "已建立连接，剪贴板同步已开启。".to_string()
-        }
-    } else if is_reconnect {
-        format!("已恢复与 {trimmed} 的连接。")
+        "设备 已连接".to_string()
     } else {
-        format!("已与 {trimmed} 建立连接，剪贴板同步已开启。")
+        format!("{trimmed} 已连接")
     };
     show_planarclip_notification(app, &body, false);
 }
@@ -107,7 +101,7 @@ pub fn send_session_established_notification(
 pub fn send_session_ended_notification(app: &AppHandle, message: &str) {
     let body = message.trim();
     if body.is_empty() {
-        show_planarclip_notification(app, "与设备的连接已断开。", true);
+        show_planarclip_notification(app, "设备 已断开连接", true);
     } else {
         show_planarclip_notification(app, body, true);
     }

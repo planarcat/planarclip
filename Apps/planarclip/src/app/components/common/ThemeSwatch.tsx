@@ -11,7 +11,8 @@ type ThemeSwatchProps = {
 export function ThemeSwatch({ currentTheme, selectedTheme, isDark, size = "md", onChange }: ThemeSwatchProps) {
   const color = isDark ? currentTheme.dark.primary : currentTheme.light.primary;
   const buttonSizeClassName = size === "lg" ? "h-9 w-9" : "h-6 w-6";
-  const dotSizeClassName = size === "lg" ? "h-6 w-6" : "h-[18px] w-[18px]";
+  const dotSizeClassName = size === "lg" ? "h-5 w-5" : "h-4 w-4";
+  const isSelected = selectedTheme.id === currentTheme.id;
 
   return (
     <button
@@ -22,8 +23,10 @@ export function ThemeSwatch({ currentTheme, selectedTheme, isDark, size = "md", 
       type="button"
     >
       <span
-        className={`${dotSizeClassName} rounded-full border-2 transition-transform group-hover:scale-105 ${selectedTheme.id === currentTheme.id ? "scale-105 border-foreground" : "border-transparent"}`}
-        style={{ background: color, boxShadow: selectedTheme.id === currentTheme.id ? `0 0 8px ${color}` : "none" }}
+        className={`${dotSizeClassName} box-border shrink-0 rounded-full border-2 transition-transform group-hover:scale-105 ${
+          isSelected ? "border-foreground" : "border-transparent"
+        }`}
+        style={{ background: color, boxShadow: isSelected ? `0 0 8px ${color}` : "none" }}
       />
     </button>
   );
