@@ -163,12 +163,6 @@ impl ConnectionHandle {
         }
 
         let hash = *blake3::hash(&png_bytes).as_bytes();
-        {
-            let dedup = self.dedup.lock().await;
-            if dedup.has_seen(&hash) {
-                return;
-            }
-        }
 
         emit_sync_activity(app_handle.as_ref(), true, "image", "正在同步图片…");
 
@@ -187,8 +181,6 @@ impl ConnectionHandle {
 
         match result {
             Ok(()) => {
-                let mut dedup = self.dedup.lock().await;
-                dedup.mark_seen(hash);
                 emit_sync_activity(app_handle.as_ref(), false, "image", "图片已同步");
             }
             Err(error) => {
@@ -209,13 +201,6 @@ impl ConnectionHandle {
         let hash = *blake3::hash(text.as_bytes()).as_bytes();
         let hash_hex = hex::encode(hash);
 
-        if let Ok(mut dedup) = self.dedup.try_lock() {
-            if dedup.has_seen(&hash) {
-                return;
-            }
-            dedup.mark_seen(hash);
-        }
-
         self.send_signal(SignalMessage::Clipboard {
             payload: text.to_string(),
             hash: hash_hex,
@@ -229,15 +214,8 @@ impl ConnectionHandle {
         height: u32,
         app_handle: Option<&AppHandle>,
     ) {
-        let hash = *blake3::hash(png_bytes).as_bytes();
+        let hash = *blake3::hash(&png_bytes).as_bytes();
         let hash_hex = hex::encode(hash);
-
-        if let Ok(mut dedup) = self.dedup.try_lock() {
-            if dedup.has_seen(&hash) {
-                return;
-            }
-            dedup.mark_seen(hash);
-        }
 
         emit_sync_activity(app_handle, true, "image", "正在同步图片…");
 
@@ -656,6 +634,16 @@ impl ConnectionManager {
                 )
                 .await
             };
+
+            if kind == "peer_offline" {
+                let state = app_handle.state::<crate::AppState>();
+                crate::remove_lan_device_by_peer_id(
+                    &state.lan_devices,
+                    &peer_id,
+                    &app_handle,
+                )
+                .await;
+            }
 
             let _ = app_handle.emit(
                 "connection-ended",

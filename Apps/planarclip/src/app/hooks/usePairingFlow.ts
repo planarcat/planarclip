@@ -739,22 +739,18 @@ export function usePairingFlow({
 
   const handleConnectionEnded = useCallback(
     async (payload: ConnectionEndedPayload) => {
-      if (connectedCount === 0) {
-        return;
-      }
-
       const message = connectionEndedMessage(payload);
       try {
         await callCommand("disconnect");
       } catch {
       }
       setConnectedPeer(null);
-      setStatus(resolveAppStatus(Math.max(0, connectedCount - 1), false));
+      setStatus(resolveAppStatus(0, false));
       showTerminalNotice(message);
       resetPairingFlow(true);
       void refreshLanDevices();
     },
-    [callCommand, connectedCount, refreshLanDevices, resetPairingFlow, setConnectedPeer, setStatus, showTerminalNotice],
+    [callCommand, refreshLanDevices, resetPairingFlow, setConnectedPeer, setStatus, showTerminalNotice],
   );
 
   const beginOutboundAttemptUi = useCallback(

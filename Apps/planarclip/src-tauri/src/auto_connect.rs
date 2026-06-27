@@ -1,3 +1,4 @@
+use crate::app_profile;
 use crate::crypto::keys::KeyPair;
 use crate::network::direct::{self, HandshakeError, InitiatorResult};
 use crate::network::discovery::LanDevice;
@@ -17,6 +18,7 @@ use crate::network::webrtc::ConnectionHandle;
 
 /// Delay before surfacing auto-connect wait UI. Fast auto-accept paths finish silently.
 const AUTO_CONNECT_UI_DELAY_MS: u64 = 400;
+const AUTO_CONNECT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct AutoConnectDeps {
     pub config: Arc<Mutex<AppConfig>>,
@@ -309,11 +311,39 @@ pub async fn attempt_connect_trusted_peer(
         port
     );
 
-    crate::emit_outbound_connection_started(app, peer_id, &peer_name, ip, port, "auto_connect");
+    let probe_ports = app_profile::tcp_probe_port_candidates(deps.tcp_port);
+    let resolved_port = match direct::probe_tcp_reachable_resilient(
+        ip,
+        port,
+        &probe_ports,
+        AUTO_CONNECT_PROBE_TIMEOUT,
+    )
+    .await
+    {
+        Some(found_port) => found_port,
+        None => {
+            tracing::debug!(
+                "Auto-connect skipped: trusted peer {} not reachable at {}:{}",
+                peer_id,
+                ip,
+                port
+            );
+            return false;
+        }
+    };
+
+    crate::emit_outbound_connection_started(
+        app,
+        peer_id,
+        &peer_name,
+        ip,
+        resolved_port,
+        "auto_connect",
+    );
 
     let stream = match direct::initiator_send_connect_request(
         ip,
-        port,
+        resolved_port,
         &device_name,
         &key_pair,
         false,
@@ -360,7 +390,7 @@ pub async fn attempt_connect_trusted_peer(
             app,
             stream,
             ip,
-            port,
+            resolved_port,
             peer_id,
             peer_name,
             emit_failures,
@@ -374,7 +404,6 @@ pub async fn attempt_connect_trusted_peer(
 fn collect_startup_targets(
     trusted_peers: &[TrustedPeerData],
     lan_devices: &[LanDevice],
-    fallback_port: u16,
 ) -> Vec<(String, u16, String)> {
     let mut lan_by_peer = HashMap::<String, (&str, u16)>::new();
     for device in lan_devices {
@@ -387,15 +416,6 @@ fn collect_startup_targets(
     for peer in trusted_peers {
         if let Some((ip, port)) = lan_by_peer.get(&peer.peer_id).copied() {
             targets.push((ip.to_string(), port, peer.peer_id.clone()));
-            continue;
-        }
-        if let Some(last_ip) = peer
-            .last_ip
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            targets.push((last_ip.to_string(), fallback_port, peer.peer_id.clone()));
         }
     }
     targets
@@ -412,6 +432,15 @@ pub async fn auto_connect_trusted_on_startup(
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
+    crate::refresh_lan_presence(
+        &deps.config,
+        &lan_devices,
+        &deps.connected_peer,
+        deps.tcp_port,
+        &app,
+    )
+    .await;
+
     let trusted_peers = {
         let config = deps.config.lock().await;
         if !auto_connect_trusted_enabled(&config) {
@@ -425,7 +454,7 @@ pub async fn auto_connect_trusted_on_startup(
     }
 
     let lan_snapshot = lan_devices.lock().await.clone();
-    let targets = collect_startup_targets(&trusted_peers, &lan_snapshot, deps.tcp_port);
+    let targets = collect_startup_targets(&trusted_peers, &lan_snapshot);
     if targets.is_empty() {
         tracing::info!("Auto-connect on startup: no reachable trusted peers yet");
         return;

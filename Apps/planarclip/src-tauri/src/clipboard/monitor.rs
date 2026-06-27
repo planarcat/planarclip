@@ -25,6 +25,8 @@ pub struct ClipboardMonitor {
     tx: broadcast::Sender<ClipboardEvent>,
     last_hash: [u8; 32],
     last_read_error: Option<String>,
+    #[cfg(windows)]
+    last_clipboard_seq: Option<u32>,
 }
 
 impl ClipboardMonitor {
@@ -33,6 +35,8 @@ impl ClipboardMonitor {
             tx,
             last_hash: [0u8; 32],
             last_read_error: None,
+            #[cfg(windows)]
+            last_clipboard_seq: None,
         }
     }
 
@@ -61,26 +65,50 @@ impl ClipboardMonitor {
             return;
         }
 
+        #[cfg(windows)]
+        if !Self::clipboard_sequence_changed(self.last_clipboard_seq) {
+            return;
+        }
+
         match Self::read_clipboard() {
             Ok(snapshot) => {
                 self.last_read_error.take();
 
                 if snapshot.is_empty() {
+                    #[cfg(windows)]
+                    if Self::image_read_pending() {
+                        tracing::debug!(
+                            "clipboard image format present but read not ready, will retry"
+                        );
+                        return;
+                    }
+                    self.note_observed_clipboard_sequence();
+                    self.last_hash = [0u8; 32];
                     return;
                 }
 
                 let hash = snapshot.content_hash();
                 if Self::should_suppress_local_emit(hash) {
-                    self.last_hash = hash;
+                    self.track_clipboard_state(hash);
                     return;
                 }
 
-                if hash != self.last_hash {
-                    self.last_hash = hash;
+                if self.should_emit_clipboard_change(hash) {
+                    self.track_clipboard_state(hash);
                     let _ = self.tx.send(ClipboardEvent::local(snapshot));
+                } else {
+                    self.note_observed_clipboard_sequence();
                 }
             }
             Err(error) => {
+                #[cfg(windows)]
+                if Self::image_read_pending() {
+                    tracing::debug!(
+                        "clipboard read failed while image format present, will retry: {error}"
+                    );
+                    return;
+                }
+                self.note_observed_clipboard_sequence();
                 if self.last_read_error.as_deref() != Some(error.as_str()) {
                     self.last_read_error = Some(error.clone());
                 }
@@ -119,6 +147,53 @@ impl ClipboardMonitor {
     fn snapshot_from_image(image: &ImageData<'_>) -> Option<ClipboardSnapshot> {
         let png_bytes = encode_rgba_to_png(image).ok()?;
         snapshot_from_png_bytes(png_bytes)
+    }
+
+    fn should_emit_clipboard_change(&self, hash: [u8; 32]) -> bool {
+        if hash != self.last_hash {
+            return true;
+        }
+
+        #[cfg(windows)]
+        {
+            let Some(seq) = Self::current_clipboard_seq() else {
+                return false;
+            };
+            return self.last_clipboard_seq != Some(seq);
+        }
+
+        #[cfg(not(windows))]
+        false
+    }
+
+    fn track_clipboard_state(&mut self, hash: [u8; 32]) {
+        self.last_hash = hash;
+        self.note_observed_clipboard_sequence();
+    }
+
+    fn note_observed_clipboard_sequence(&mut self) {
+        #[cfg(windows)]
+        if let Some(seq) = Self::current_clipboard_seq() {
+            self.last_clipboard_seq = Some(seq);
+        }
+    }
+
+    #[cfg(windows)]
+    fn clipboard_sequence_changed(last_seq: Option<u32>) -> bool {
+        let Some(seq) = Self::current_clipboard_seq() else {
+            return true;
+        };
+        last_seq != Some(seq)
+    }
+
+    #[cfg(windows)]
+    fn current_clipboard_seq() -> Option<u32> {
+        crate::platform::windows::clipboard::current_sequence()
+    }
+
+    #[cfg(windows)]
+    fn image_read_pending() -> bool {
+        crate::platform::windows::clipboard::has_image_format()
     }
 
     fn should_suppress_local_emit(hash: [u8; 32]) -> bool {

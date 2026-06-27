@@ -247,7 +247,7 @@ async fn discover_trusted_peers_by_tcp_probe(
     let _ = app.emit("lan-devices-changed", &updated);
 }
 
-async fn refresh_lan_presence(
+pub(crate) async fn refresh_lan_presence(
     config: &Arc<Mutex<AppConfig>>,
     lan_devices: &Arc<Mutex<Vec<LanDevice>>>,
     connected_peer: &Arc<Mutex<Option<ConnectedPeerPayload>>>,
@@ -367,7 +367,6 @@ async fn reconcile_lan_devices(
         let peer_id = device.peer_id.clone();
         let ip = device.ip.clone();
         let port = device.port;
-        let mdns_backed = !device.service_fullname.is_empty();
         let skip_probe = connected_peer_id.as_deref() == Some(peer_id.as_str());
         let probe_ports = probe_ports.clone();
         async move {
@@ -378,7 +377,6 @@ async fn reconcile_lan_devices(
                 .await
             {
                 Some(found_port) => (peer_id, true, Some(found_port)),
-                None if mdns_backed => (peer_id, true, None),
                 None => (peer_id, false, None),
             }
         }
@@ -436,6 +434,28 @@ async fn reconcile_lan_devices(
         return;
     }
 
+    let updated = devices.clone();
+    drop(devices);
+    let _ = app.emit("lan-devices-changed", &updated);
+}
+
+pub(crate) async fn remove_lan_device_by_peer_id(
+    lan_devices: &Arc<Mutex<Vec<LanDevice>>>,
+    peer_id: &str,
+    app: &tauri::AppHandle,
+) {
+    if peer_id.trim().is_empty() {
+        return;
+    }
+
+    let mut devices = lan_devices.lock().await;
+    let before = devices.len();
+    devices.retain(|device| device.peer_id != peer_id);
+    if devices.len() == before {
+        return;
+    }
+
+    tracing::info!("Removed LAN device entry for offline peer {}", peer_id);
     let updated = devices.clone();
     drop(devices);
     let _ = app.emit("lan-devices-changed", &updated);
@@ -786,7 +806,12 @@ fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHist
 }
 
 fn merge_clipboard_history(history: &mut Vec<ClipboardHistoryEntry>, entry: ClipboardHistoryEntry) {
-    if history.first().map(|item| item.content.as_str()) == Some(entry.content.as_str())
+    if history.first().map(|item| item.id.as_str()) == Some(entry.id.as_str()) {
+        return;
+    }
+
+    if entry.clip_type == "text"
+        && history.first().map(|item| item.content.as_str()) == Some(entry.content.as_str())
         && history.first().map(|item| item.direction.as_str()) == Some(entry.direction.as_str())
         && history.first().map(|item| item.source_label.as_str()) == Some(entry.source_label.as_str())
     {
