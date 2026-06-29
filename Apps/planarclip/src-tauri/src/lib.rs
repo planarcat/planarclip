@@ -63,6 +63,7 @@ pub struct AppState {
     pub connected_peer: Arc<Mutex<Option<ConnectedPeerPayload>>>,
     pub connection: Arc<Mutex<Option<ConnectionHandle>>>,
     pub connection_generation: Arc<AtomicU64>,
+    pub clipboard_monitor_generation: Arc<AtomicU64>,
     pub clip_tx: broadcast::Sender<ClipboardEvent>,
     pub clipboard_history: Arc<Mutex<Vec<ClipboardHistoryEntry>>>,
     pub lan_devices: Arc<Mutex<Vec<LanDevice>>>,
@@ -102,6 +103,7 @@ struct ConnectionSettingsPayload {
 struct SyncSettingsPayload {
     sync_images: bool,
     sync_files: bool,
+    max_file_mb: u32,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -516,10 +518,31 @@ fn connection_settings_from_config(config: &AppConfig) -> ConnectionSettingsPayl
     }
 }
 
+fn max_file_bytes_to_mb(bytes: u64) -> u32 {
+    ((bytes + 1024 * 1024 - 1) / (1024 * 1024)).max(1) as u32
+}
+
+fn max_file_mb_to_bytes(mb: u32) -> u64 {
+    mb as u64 * 1024 * 1024
+}
+
+fn validate_max_file_mb(mb: u32) -> Result<u32, String> {
+    if (1..=500).contains(&mb) {
+        Ok(mb)
+    } else {
+        Err("文件大小上限无效，请输入 1 到 500 之间的整数。".to_string())
+    }
+}
+
 fn sync_settings_from_config(config: &AppConfig) -> SyncSettingsPayload {
     SyncSettingsPayload {
         sync_images: config.sync_images.unwrap_or(true),
-        sync_files: config.sync_files.unwrap_or(false),
+        sync_files: config.sync_files.unwrap_or(true),
+        max_file_mb: max_file_bytes_to_mb(
+            config
+                .max_file_bytes
+                .unwrap_or(DEFAULT_MAX_FILE_BYTES),
+        ),
     }
 }
 
@@ -1146,6 +1169,7 @@ async fn save_sync_settings(
     state: tauri::State<'_, AppState>,
     sync_images: bool,
     sync_files: Option<bool>,
+    max_file_mb: Option<u32>,
 ) -> Result<SyncSettingsPayload, String> {
     {
         let mut config = state.config.lock().await;
@@ -1153,7 +1177,9 @@ async fn save_sync_settings(
         if let Some(sync_files) = sync_files {
             config.sync_files = Some(sync_files);
         }
-        if config.max_file_bytes.is_none() {
+        if let Some(max_file_mb) = max_file_mb {
+            config.max_file_bytes = Some(max_file_mb_to_bytes(validate_max_file_mb(max_file_mb)?));
+        } else if config.max_file_bytes.is_none() {
             config.max_file_bytes = Some(DEFAULT_MAX_FILE_BYTES);
         }
         storage_json::save_config(&config);
@@ -1244,6 +1270,10 @@ async fn clear_clipboard_history(
         let mut history = state.clipboard_history.lock().await;
         history.clear();
     }
+
+    state
+        .clipboard_monitor_generation
+        .fetch_add(1, Ordering::SeqCst);
 
     let updated_history = Vec::new();
     persist_clipboard_history(&state.config, &updated_history).await;
@@ -2145,6 +2175,7 @@ pub fn run() {
         connected_peer: Arc::new(Mutex::new(None)),
         connection: Arc::new(Mutex::new(None)),
         connection_generation: Arc::new(AtomicU64::new(0)),
+        clipboard_monitor_generation: Arc::new(AtomicU64::new(0)),
         clip_tx: clip_tx.clone(),
         clipboard_history: Arc::new(Mutex::new(initial_clipboard_history)),
         lan_devices: Arc::new(Mutex::new(Vec::new())),
@@ -2481,18 +2512,27 @@ pub fn run() {
             let connection_bg = connection.clone();
             let config_bg = config.clone();
             let app_handle_bg = app_handle.clone();
+            let clipboard_monitor_generation = app
+                .state::<AppState>()
+                .clipboard_monitor_generation
+                .clone();
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
                     .expect("Failed to create background runtime");
                 rt.block_on(async move {
+                    let config_monitor = config_bg.clone();
                     tokio::join!(
-                        async {
-                            let mut monitor = ClipboardMonitor::new(clip_tx_monitor);
+                        async move {
+                            let mut monitor = ClipboardMonitor::new(
+                                clip_tx_monitor,
+                                config_monitor,
+                                clipboard_monitor_generation,
+                            );
                             monitor.run().await;
                         },
-                        async {
+                        async move {
                             let engine = sync::engine::SyncEngine::new(
                                 clip_rx,
                                 connection_bg,

@@ -141,10 +141,12 @@ export default function App() {
   const {
     syncImages,
     syncFiles,
+    maxFileMb,
     isSavingSyncSettings,
     syncSettingsLoaded,
     handleSyncImagesChange,
     handleSyncFilesChange,
+    handleMaxFileMbChange,
   } = useSyncSettings({
     tauriAvailable: TAURI_AVAILABLE,
     callCommand,
@@ -450,10 +452,14 @@ export default function App() {
             onAutoConnectTrustedChange={handleAutoConnectTrustedChange}
             syncImages={syncImages}
             syncFiles={syncFiles}
+            maxFileMb={maxFileMb}
             isSavingSyncSettings={isSavingSyncSettings}
             syncSettingsLoaded={syncSettingsLoaded}
             onSyncImagesChange={handleSyncImagesChange}
             onSyncFilesChange={handleSyncFilesChange}
+            onMaxFileMbChange={(mb) => {
+              void handleMaxFileMbChange(mb);
+            }}
             clipboardHistoryLimit={historyLimit}
             isSavingClipboardSettings={isSavingClipboardSettings}
             clipboardSettingsLoaded={clipboardSettingsLoaded}

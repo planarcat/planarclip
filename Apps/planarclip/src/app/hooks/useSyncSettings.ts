@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
+import { DEFAULT_MAX_FILE_MB, MAX_MAX_FILE_MB, MIN_MAX_FILE_MB } from "../constants/sync";
 import type { CommandExecutor, SyncSettingsPayload } from "../types";
 import { normalizeUserMessage } from "../utils/message";
 
 const DEFAULT_SYNC_SETTINGS: SyncSettingsPayload = {
   sync_images: true,
-  sync_files: false,
+  sync_files: true,
+  max_file_mb: DEFAULT_MAX_FILE_MB,
 };
+
+function isValidMaxFileMb(value: number): boolean {
+  return Number.isInteger(value) && value >= MIN_MAX_FILE_MB && value <= MAX_MAX_FILE_MB;
+}
 
 type UseSyncSettingsOptions = {
   tauriAvailable: boolean;
@@ -20,8 +26,15 @@ export function useSyncSettings({
 }: UseSyncSettingsOptions) {
   const [syncImages, setSyncImages] = useState(DEFAULT_SYNC_SETTINGS.sync_images);
   const [syncFiles, setSyncFiles] = useState(DEFAULT_SYNC_SETTINGS.sync_files);
+  const [maxFileMb, setMaxFileMb] = useState(DEFAULT_SYNC_SETTINGS.max_file_mb);
   const [isSaving, setIsSaving] = useState(false);
   const [loaded, setLoaded] = useState(!tauriAvailable);
+
+  const applySavedSettings = useCallback((settings: SyncSettingsPayload) => {
+    setSyncImages(settings.sync_images);
+    setSyncFiles(settings.sync_files);
+    setMaxFileMb(settings.max_file_mb);
+  }, []);
 
   useEffect(() => {
     if (!tauriAvailable) {
@@ -36,12 +49,10 @@ export function useSyncSettings({
         if (disposed) {
           return;
         }
-        setSyncImages(settings.sync_images);
-        setSyncFiles(settings.sync_files);
+        applySavedSettings(settings);
       } catch {
         if (!disposed) {
-          setSyncImages(DEFAULT_SYNC_SETTINGS.sync_images);
-          setSyncFiles(DEFAULT_SYNC_SETTINGS.sync_files);
+          applySavedSettings(DEFAULT_SYNC_SETTINGS);
         }
       } finally {
         if (!disposed) {
@@ -55,7 +66,7 @@ export function useSyncSettings({
     return () => {
       disposed = true;
     };
-  }, [callCommand, tauriAvailable]);
+  }, [applySavedSettings, callCommand, tauriAvailable]);
 
   const handleSyncImagesChange = useCallback(
     async (enabled: boolean) => {
@@ -69,9 +80,10 @@ export function useSyncSettings({
       try {
         const saved = await callCommand<SyncSettingsPayload>("save_sync_settings", {
           syncImages: enabled,
+          syncFiles,
+          maxFileMb,
         });
-        setSyncImages(saved.sync_images);
-        setSyncFiles(saved.sync_files);
+        applySavedSettings(saved);
         setLastMessage(
           enabled ? "已开启图片同步，复制图片后会自动同步到已连接设备。" : "已关闭图片同步。",
         );
@@ -81,7 +93,7 @@ export function useSyncSettings({
         setIsSaving(false);
       }
     },
-    [callCommand, setLastMessage, tauriAvailable],
+    [applySavedSettings, callCommand, maxFileMb, setLastMessage, syncFiles, tauriAvailable],
   );
 
   const handleSyncFilesChange = useCallback(
@@ -97,9 +109,9 @@ export function useSyncSettings({
         const saved = await callCommand<SyncSettingsPayload>("save_sync_settings", {
           syncImages,
           syncFiles: enabled,
+          maxFileMb,
         });
-        setSyncImages(saved.sync_images);
-        setSyncFiles(saved.sync_files);
+        applySavedSettings(saved);
         setLastMessage(
           enabled
             ? "已开启文件同步，复制文件后会自动同步到已连接设备。"
@@ -111,15 +123,52 @@ export function useSyncSettings({
         setIsSaving(false);
       }
     },
-    [callCommand, setLastMessage, syncImages, tauriAvailable],
+    [applySavedSettings, callCommand, maxFileMb, setLastMessage, syncImages, tauriAvailable],
+  );
+
+  const handleMaxFileMbChange = useCallback(
+    async (mb: number) => {
+      if (!isValidMaxFileMb(mb)) {
+        setLastMessage("文件大小上限无效，请输入 1 到 500 之间的整数。");
+        return;
+      }
+
+      if (!tauriAvailable) {
+        setMaxFileMb(mb);
+        setLastMessage("当前是浏览器预览模式，同步设置仅用于界面预览。");
+        return;
+      }
+
+      if (mb === maxFileMb) {
+        return;
+      }
+
+      setIsSaving(true);
+      try {
+        const saved = await callCommand<SyncSettingsPayload>("save_sync_settings", {
+          syncImages,
+          syncFiles,
+          maxFileMb: mb,
+        });
+        applySavedSettings(saved);
+        setLastMessage(`已更新文件大小上限为 ${saved.max_file_mb} MB。`);
+      } catch (error) {
+        setLastMessage(normalizeUserMessage(error, "这次没有保存成功，请稍后再试。"));
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [applySavedSettings, callCommand, maxFileMb, setLastMessage, syncFiles, syncImages, tauriAvailable],
   );
 
   return {
     syncImages,
     syncFiles,
+    maxFileMb,
     isSavingSyncSettings: isSaving,
     syncSettingsLoaded: loaded,
     handleSyncImagesChange,
     handleSyncFilesChange,
+    handleMaxFileMbChange,
   };
 }

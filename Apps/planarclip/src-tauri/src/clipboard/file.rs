@@ -56,6 +56,55 @@ pub fn file_list_hash(files: &[ClipboardFileItem]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
+pub fn file_meta_hash(file_name: &str, size_bytes: u64) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(file_name.as_bytes());
+    hasher.update(&size_bytes.to_le_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+pub fn snapshot_from_file_paths_meta(
+    paths: Vec<PathBuf>,
+) -> Result<ClipboardSnapshot, String> {
+    if paths.is_empty() {
+        return Ok(ClipboardSnapshot::Empty);
+    }
+
+    let mut files = Vec::new();
+
+    for path in paths {
+        if staging::is_under_staging(&path) {
+            continue;
+        }
+
+        let metadata = std::fs::metadata(&path)
+            .map_err(|error| format!("read file metadata failed: {error}"))?;
+        if !metadata.is_file() {
+            continue;
+        }
+
+        let size_bytes = metadata.len();
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("file")
+            .to_string();
+
+        files.push(ClipboardFileItem {
+            file_name: file_name.clone(),
+            size_bytes,
+            content_hash: file_meta_hash(&file_name, size_bytes),
+            source_path: Some(path),
+        });
+    }
+
+    if files.is_empty() {
+        return Ok(ClipboardSnapshot::Empty);
+    }
+
+    Ok(ClipboardSnapshot::FileList { files })
+}
+
 pub fn snapshot_from_file_paths(
     paths: Vec<PathBuf>,
     max_file_bytes: u64,
@@ -128,6 +177,16 @@ pub fn file_list_summary(files: &[ClipboardFileItem]) -> String {
         return files[0].file_name.clone();
     }
     format!("{} 等 {} 个文件", files[0].file_name, files.len())
+}
+
+/// Filename text used when file sync is disabled (sync + remote clipboard write).
+pub fn file_list_as_sync_text(files: &[ClipboardFileItem]) -> Option<String> {
+    let summary = file_list_summary(files);
+    if summary.is_empty() || summary == "[文件]" {
+        None
+    } else {
+        Some(summary)
+    }
 }
 
 pub fn file_list_size_label(files: &[ClipboardFileItem]) -> String {

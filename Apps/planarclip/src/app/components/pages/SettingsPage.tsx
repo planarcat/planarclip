@@ -1,6 +1,8 @@
 import { Moon, Save, Sun, SunMoon } from "lucide-react";
+import { useEffect, useState } from "react";
 import { APP_DISPLAY_NAME } from "../../constants/app";
 import { CLIPBOARD_HISTORY_LIMIT_OPTIONS } from "../../constants/clipboard";
+import { MAX_MAX_FILE_MB, MIN_MAX_FILE_MB } from "../../constants/sync";
 import { THEME_COLORS } from "../../constants/theme";
 import type { ColorScheme, SettingAvailability, ThemeColor } from "../../types";
 import { SettingBadge } from "../common/SettingBadge";
@@ -29,10 +31,12 @@ type SettingsPageProps = {
   onAutoConnectTrustedChange: (enabled: boolean) => void;
   syncImages: boolean;
   syncFiles: boolean;
+  maxFileMb: number;
   isSavingSyncSettings: boolean;
   syncSettingsLoaded: boolean;
   onSyncImagesChange: (enabled: boolean) => void;
   onSyncFilesChange: (enabled: boolean) => void;
+  onMaxFileMbChange: (mb: number) => void;
   clipboardHistoryLimit: number;
   isSavingClipboardSettings: boolean;
   clipboardSettingsLoaded: boolean;
@@ -61,15 +65,40 @@ export function SettingsPage({
   onAutoConnectTrustedChange,
   syncImages,
   syncFiles,
+  maxFileMb,
   isSavingSyncSettings,
   syncSettingsLoaded,
   onSyncImagesChange,
   onSyncFilesChange,
+  onMaxFileMbChange,
   clipboardHistoryLimit,
   isSavingClipboardSettings,
   clipboardSettingsLoaded,
   onClipboardHistoryLimitChange,
 }: SettingsPageProps) {
+  const [maxFileMbDraft, setMaxFileMbDraft] = useState(String(maxFileMb));
+
+  useEffect(() => {
+    setMaxFileMbDraft(String(maxFileMb));
+  }, [maxFileMb]);
+
+  const commitMaxFileMbDraft = () => {
+    const nextValue = Number(maxFileMbDraft);
+    if (
+      !Number.isFinite(nextValue) ||
+      !Number.isInteger(nextValue) ||
+      nextValue < MIN_MAX_FILE_MB ||
+      nextValue > MAX_MAX_FILE_MB
+    ) {
+      setMaxFileMbDraft(String(maxFileMb));
+      return;
+    }
+    if (nextValue === maxFileMb) {
+      return;
+    }
+    onMaxFileMbChange(nextValue);
+  };
+
   const settingRows: Array<{
     label: string;
     desc: string;
@@ -287,7 +316,7 @@ export function SettingsPage({
           <div>
             <p className="text-sm font-medium text-primary">同步文件</p>
             <p className="mt-0.5 text-[13px] font-medium leading-6 text-muted-foreground">
-              开启后，在资源管理器中复制文件会自动同步到已连接设备；单文件默认上限 100 MB。
+              开启后，在资源管理器中复制文件会自动同步到已连接设备。
             </p>
           </div>
           <SettingToggle
@@ -297,6 +326,39 @@ export function SettingsPage({
             onChange={onSyncFilesChange}
           />
         </div>
+        {syncFiles && (
+          <div className="flex items-start justify-between gap-4 border-b border-border py-3.5">
+            <div>
+              <p className="text-sm font-medium text-primary">文件大小上限</p>
+              <p className="mt-0.5 text-[13px] font-medium leading-6 text-muted-foreground">
+                单个文件超过此上限时不会同步。
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <input
+                type="number"
+                min={MIN_MAX_FILE_MB}
+                max={MAX_MAX_FILE_MB}
+                step={1}
+                value={maxFileMbDraft}
+                disabled={!syncSettingsLoaded || isSavingSyncSettings}
+                aria-label="文件大小上限"
+                onChange={(event) => {
+                  setMaxFileMbDraft(event.target.value);
+                }}
+                onBlur={commitMaxFileMbDraft}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    commitMaxFileMbDraft();
+                  }
+                }}
+                className="w-24 rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-foreground transition-colors focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              />
+              <span className="text-sm font-medium text-muted-foreground">MB</span>
+            </div>
+          </div>
+        )}
         {settingRows.map((item) => (
           <div key={item.label} className="flex items-start justify-between gap-4 border-b border-border py-3.5 last:border-0">
             <div>

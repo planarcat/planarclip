@@ -79,6 +79,7 @@ export type ConnectionSettingsPayload = {
 export type SyncSettingsPayload = {
   sync_images: boolean;
   sync_files: boolean;
+  max_file_mb: number;
 };
 
 export type ClipboardSettingsPayload = {

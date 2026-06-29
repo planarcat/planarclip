@@ -1,16 +1,20 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Mutex,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex,
 };
 
 use arboard::ImageData;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex as AsyncMutex};
 
-use crate::clipboard::file::{file_list_hash, snapshot_from_file_paths, DEFAULT_MAX_FILE_BYTES, MAX_BATCH_BYTES};
+use crate::clipboard::file::{
+    file_list_as_sync_text, file_list_hash, snapshot_from_file_paths,
+    snapshot_from_file_paths_meta, DEFAULT_MAX_FILE_BYTES, MAX_BATCH_BYTES,
+};
 use crate::clipboard::image::{encode_rgba_to_png, snapshot_from_png_bytes};
 #[cfg(not(windows))]
 use crate::clipboard::image::decode_png_to_rgba;
 use crate::clipboard::types::{ClipboardEvent, ClipboardSnapshot};
+use crate::storage::json::AppConfig;
 
 static SELF_WRITING: AtomicBool = AtomicBool::new(false);
 static SUPPRESSED_REMOTE_WRITE: Mutex<Option<SuppressedRemoteWrite>> = Mutex::new(None);
@@ -24,6 +28,9 @@ struct SuppressedRemoteWrite {
 
 pub struct ClipboardMonitor {
     tx: broadcast::Sender<ClipboardEvent>,
+    config: Arc<AsyncMutex<AppConfig>>,
+    reset_generation: Arc<AtomicU64>,
+    last_reset_generation: u64,
     last_hash: [u8; 32],
     last_read_error: Option<String>,
     #[cfg(windows)]
@@ -31,9 +38,17 @@ pub struct ClipboardMonitor {
 }
 
 impl ClipboardMonitor {
-    pub fn new(tx: broadcast::Sender<ClipboardEvent>) -> Self {
+    pub fn new(
+        tx: broadcast::Sender<ClipboardEvent>,
+        config: Arc<AsyncMutex<AppConfig>>,
+        reset_generation: Arc<AtomicU64>,
+    ) -> Self {
+        let initial_generation = reset_generation.load(Ordering::SeqCst);
         Self {
             tx,
+            config,
+            reset_generation,
+            last_reset_generation: initial_generation,
             last_hash: [0u8; 32],
             last_read_error: None,
             #[cfg(windows)]
@@ -57,13 +72,24 @@ impl ClipboardMonitor {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(CLIPBOARD_POLL_INTERVAL_MS));
         loop {
             interval.tick().await;
-            self.capture_clipboard_change();
+            self.capture_clipboard_change().await;
         }
     }
 
-    fn capture_clipboard_change(&mut self) {
+    async fn capture_clipboard_change(&mut self) {
         if Self::is_self_writing() {
             return;
+        }
+
+        let current_generation = self.reset_generation.load(Ordering::SeqCst);
+        if current_generation != self.last_reset_generation {
+            self.last_reset_generation = current_generation;
+            self.last_hash = [0u8; 32];
+            self.last_read_error = None;
+            #[cfg(windows)]
+            {
+                self.last_clipboard_seq = None;
+            }
         }
 
         #[cfg(windows)]
@@ -71,7 +97,15 @@ impl ClipboardMonitor {
             return;
         }
 
-        match Self::read_clipboard() {
+        let (sync_files, max_file_bytes) = {
+            let config = self.config.lock().await;
+            (
+                config.sync_files.unwrap_or(true),
+                config.max_file_bytes.unwrap_or(DEFAULT_MAX_FILE_BYTES),
+            )
+        };
+
+        match Self::read_clipboard(max_file_bytes, sync_files) {
             Ok(snapshot) => {
                 self.last_read_error.take();
 
@@ -117,15 +151,24 @@ impl ClipboardMonitor {
         }
     }
 
-    fn read_clipboard() -> Result<ClipboardSnapshot, String> {
+    fn read_clipboard(max_file_bytes: u64, sync_files: bool) -> Result<ClipboardSnapshot, String> {
         #[cfg(windows)]
         if crate::platform::windows::clipboard::has_file_format() {
             if let Some(paths) = crate::platform::windows::clipboard::read_file_paths() {
-                match snapshot_from_file_paths(
-                    paths,
-                    DEFAULT_MAX_FILE_BYTES,
-                    MAX_BATCH_BYTES,
-                ) {
+                if !sync_files {
+                    match snapshot_from_file_paths_meta(paths) {
+                        Ok(ClipboardSnapshot::FileList { files }) => {
+                            if let Some(text) = file_list_as_sync_text(&files) {
+                                return Ok(ClipboardSnapshot::Text(text));
+                            }
+                            return Ok(ClipboardSnapshot::Empty);
+                        }
+                        Ok(snapshot) => return Ok(snapshot),
+                        Err(error) => return Err(error),
+                    }
+                }
+
+                match snapshot_from_file_paths(paths, max_file_bytes, MAX_BATCH_BYTES) {
                     Ok(snapshot) if !snapshot.is_empty() => return Ok(snapshot),
                     Ok(_) => {}
                     Err(error) => return Err(error),

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tauri::AppHandle;
 use tokio::sync::{broadcast, Mutex};
 
-use crate::clipboard::file::{image_snapshot_from_single_file, DEFAULT_MAX_FILE_BYTES};
+use crate::clipboard::file::DEFAULT_MAX_FILE_BYTES;
 use crate::clipboard::image::INLINE_IMAGE_BYTES;
 use crate::clipboard::types::{ClipboardEvent, ClipboardOrigin, ClipboardSnapshot};
 use crate::network::webrtc::ConnectionHandle;
@@ -43,7 +43,7 @@ impl SyncEngine {
                         let config = self.config.lock().await;
                         (
                             config.sync_images.unwrap_or(true),
-                            config.sync_files.unwrap_or(false),
+                            config.sync_files.unwrap_or(true),
                             config
                                 .max_file_bytes
                                 .unwrap_or(DEFAULT_MAX_FILE_BYTES),
@@ -79,7 +79,7 @@ impl SyncEngine {
                                     .await;
                             });
                         }
-                        ClipboardSnapshot::FileList { files } if sync_files => {
+                        ClipboardSnapshot::FileList { .. } if sync_files => {
                             let handle = handle.clone();
                             let snapshot = event.snapshot.clone();
                             let app_handle = self.app_handle.clone();
@@ -94,36 +94,6 @@ impl SyncEngine {
                                     )
                                     .await;
                             });
-                        }
-                        ClipboardSnapshot::FileList { files } => {
-                            let handle = handle.clone();
-                            let snapshot = event.snapshot.clone();
-                            let app_handle = self.app_handle.clone();
-                            let image_snapshot = sync_images
-                                .then(|| image_snapshot_from_single_file(files))
-                                .flatten();
-                            let needs_chunked = image_snapshot.as_ref().is_some_and(|snapshot| {
-                                matches!(
-                                    snapshot,
-                                    ClipboardSnapshot::Image { png_bytes, .. }
-                                        if png_bytes.len() > INLINE_IMAGE_BYTES
-                                )
-                            });
-                            drop(conn);
-                            if image_snapshot.is_none() {
-                                handle.send_file_list_meta(&snapshot, Some(&app_handle));
-                            }
-                            if let Some(image_snapshot) = image_snapshot {
-                                if needs_chunked && handle.supports_chunked_images() {
-                                    tokio::spawn(async move {
-                                        handle
-                                            .send_image_async(image_snapshot, true, Some(app_handle))
-                                            .await;
-                                    });
-                                } else {
-                                    handle.send_snapshot(&image_snapshot, true, Some(&app_handle));
-                                }
-                            }
                         }
                         _ => {
                             handle.send_snapshot(
