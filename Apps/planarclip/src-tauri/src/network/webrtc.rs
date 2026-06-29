@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -6,16 +7,18 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{broadcast, mpsc, Mutex};
 
+use crate::clipboard::file::{file_list_hash, MAX_BATCH_BYTES};
 use crate::clipboard::image::{format_byte_size, INLINE_IMAGE_BYTES, MAX_IMAGE_BYTES};
 use crate::clipboard::monitor::ClipboardMonitor;
-use crate::clipboard::types::{ClipboardEvent, ClipboardSnapshot};
+use crate::clipboard::types::{ClipboardEvent, ClipboardFileItem, ClipboardSnapshot};
 use crate::network::binary_chunk::BinaryChunk;
 use crate::network::direct::{ConnectionEvent, DirectConnection};
 use crate::network::protocol::SignalMessage;
 use crate::network::signalling;
 use crate::sync::dedup::DedupStore;
 use crate::sync::transfer::{
-    route_transfer_ack, send_image_with_flow_control, CompletedImage, ImageReceiveSession,
+    route_transfer_ack, send_file_with_flow_control, send_image_with_flow_control, CompletedFile,
+    CompletedImage, FileReceiveSession, ImageReceiveSession,
 };
 
 #[derive(Clone)]
@@ -43,6 +46,10 @@ impl ConnectionHandle {
 
     pub fn supports_chunked_images(&self) -> bool {
         matches!(self.transport, HandleTransport::Direct { .. })
+    }
+
+    pub fn supports_chunked_files(&self) -> bool {
+        self.supports_chunked_images()
     }
 
     pub fn notify_peer_left(&self, local_peer_id: &str) {
@@ -116,6 +123,111 @@ impl ConnectionHandle {
                 self.send_image_inline(png_bytes, *width, *height, app_handle);
             }
             ClipboardSnapshot::Empty => {}
+            ClipboardSnapshot::FileList { .. } => {
+                // File sends are handled asynchronously by SyncEngine.
+            }
+        }
+    }
+
+    pub async fn send_files_async(
+        &self,
+        snapshot: ClipboardSnapshot,
+        sync_files: bool,
+        max_file_bytes: u64,
+        app_handle: Option<AppHandle>,
+    ) {
+        let ClipboardSnapshot::FileList { files } = snapshot else {
+            return;
+        };
+
+        if !sync_files || files.is_empty() {
+            return;
+        }
+
+        let is_connected = *self.connected.lock().await;
+        if !is_connected {
+            return;
+        }
+
+        if !self.supports_chunked_files() {
+            emit_sync_notice(
+                app_handle.as_ref(),
+                "文件同步需要局域网直连，当前连接方式暂不支持。",
+            );
+            return;
+        }
+
+        let batch_bytes: u64 = files.iter().map(|file| file.size_bytes).sum();
+        if batch_bytes > MAX_BATCH_BYTES {
+            emit_sync_notice(
+                app_handle.as_ref(),
+                "本次复制的文件总量超过 500 MB，未同步到其他设备。",
+            );
+            return;
+        }
+
+        for file in &files {
+            if file.size_bytes > max_file_bytes {
+                emit_sync_notice(
+                    app_handle.as_ref(),
+                    &format!(
+                        "文件 {} 超过 {}，未同步到其他设备。",
+                        file.file_name,
+                        format_byte_size(max_file_bytes as usize)
+                    ),
+                );
+                return;
+            }
+        }
+
+        let batch_id = if files.len() > 1 {
+            Some(uuid::Uuid::new_v4().to_string())
+        } else {
+            None
+        };
+        let batch_total = files.len() as u32;
+
+        emit_sync_activity(app_handle.as_ref(), true, "file", "正在同步文件…");
+
+        let mut failed = false;
+
+        for (index, file) in files.iter().enumerate() {
+            let Some(source_path) = file.source_path.as_ref() else {
+                failed = true;
+                break;
+            };
+
+            let result = send_file_with_flow_control(
+                |msg| self.send_signal(msg),
+                |chunk| self.send_binary(chunk),
+                &self.ack_waiters,
+                source_path,
+                &file.file_name,
+                file.content_hash,
+                batch_id.clone(),
+                batch_id.as_ref().map(|_| index as u32),
+                batch_id.as_ref().map(|_| batch_total),
+            )
+            .await;
+
+            if result.is_err() {
+                failed = true;
+                tracing::warn!("File send failed for {}: {:?}", file.file_name, result);
+                break;
+            }
+        }
+
+        if !failed {
+            if let Some(batch_id) = batch_id {
+                self.send_signal(SignalMessage::ClipboardFileBatchEnd {
+                    batch_id,
+                    file_count: batch_total,
+                });
+            }
+            emit_sync_activity(app_handle.as_ref(), false, "file", "文件已同步");
+        } else {
+            let message = "文件同步失败，请确认对方设备已更新到最新版本，然后重新复制文件。";
+            emit_sync_notice(app_handle.as_ref(), message);
         }
     }
 
@@ -259,6 +371,59 @@ fn emit_sync_notice(app_handle: Option<&AppHandle>, message: &str) {
     );
 }
 
+async fn finalize_received_file(
+    completed: CompletedFile,
+    dedup: &Arc<Mutex<DedupStore>>,
+    clip_tx: &broadcast::Sender<ClipboardEvent>,
+    peer_name: &str,
+    app_handle: Option<&AppHandle>,
+    pending_paths: Option<Vec<PathBuf>>,
+) {
+    let paths = pending_paths.unwrap_or_else(|| vec![completed.path.clone()]);
+    let files = paths
+        .iter()
+        .filter_map(|path| {
+            let metadata = std::fs::metadata(path).ok()?;
+            let content_hash = crate::clipboard::file::hash_file(path).ok()?;
+            Some(ClipboardFileItem {
+                file_name: path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or(&completed.file_name)
+                    .to_string(),
+                size_bytes: metadata.len(),
+                content_hash,
+                source_path: Some(path.clone()),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if files.is_empty() {
+        return;
+    }
+
+    let list_hash = file_list_hash(&files);
+    {
+        let mut d = dedup.lock().await;
+        if d.has_seen(&list_hash) {
+            return;
+        }
+        d.mark_seen(list_hash);
+    }
+
+    tracing::info!(
+        "Received remote clipboard file(s): {} ({})",
+        crate::clipboard::file::file_list_summary(&files),
+        format_byte_size(files.iter().map(|file| file.size_bytes).sum::<u64>() as usize)
+    );
+
+    ClipboardMonitor::write_clipboard_files(&paths);
+
+    let snapshot = ClipboardSnapshot::FileList { files };
+    let _ = clip_tx.send(ClipboardEvent::remote(snapshot, peer_name.to_string()));
+    emit_sync_activity(app_handle, false, "file", "文件已同步");
+}
+
 async fn finalize_received_image(
     completed: CompletedImage,
     dedup: &Arc<Mutex<DedupStore>>,
@@ -304,7 +469,9 @@ async fn handle_incoming_signal(
     connected: Option<&Arc<Mutex<bool>>>,
     stop_on_peer_left: bool,
     image_session: &mut ImageReceiveSession,
+    file_session: &mut FileReceiveSession,
     handle: &ConnectionHandle,
+    max_file_bytes: u64,
 ) -> bool {
     match msg {
         SignalMessage::PeerJoined { peer_id } => {
@@ -327,6 +494,7 @@ async fn handle_incoming_signal(
         }
         SignalMessage::TransferCancel { transfer_id, .. } => {
             image_session.cancel(&transfer_id);
+            file_session.cancel(&transfer_id);
             true
         }
         SignalMessage::ClipboardImageBegin {
@@ -376,6 +544,113 @@ async fn handle_incoming_signal(
                 finalize_received_image(completed, dedup, clip_tx, peer_name, app_handle).await;
             } else {
                 emit_sync_notice(app_handle, "图片接收未完成，已忽略。");
+            }
+            true
+        }
+        SignalMessage::ClipboardFileBegin {
+            transfer_id,
+            hash,
+            file_name,
+            total_bytes,
+            chunk_size,
+            batch_id,
+            batch_index: _,
+            batch_total,
+        } => {
+            let hash_bytes = match decode_hash(&hash) {
+                Some(value) => value,
+                None => {
+                    tracing::warn!("Invalid hash in file begin");
+                    return true;
+                }
+            };
+
+            if total_bytes > max_file_bytes {
+                emit_sync_notice(
+                    app_handle,
+                    &format!(
+                        "收到的文件 {} 超过 {}，已忽略。",
+                        file_name,
+                        format_byte_size(max_file_bytes as usize)
+                    ),
+                );
+                return true;
+            }
+
+            if let (Some(batch_id), Some(batch_total)) = (batch_id.clone(), batch_total) {
+                if !file_session.has_batch(&batch_id) {
+                    file_session.register_batch(batch_id, batch_total);
+                }
+            }
+
+            emit_sync_activity(app_handle, true, "file", "正在同步文件…");
+            if file_session
+                .begin(
+                    transfer_id,
+                    hash_bytes,
+                    file_name,
+                    total_bytes,
+                    chunk_size,
+                    batch_id,
+                    max_file_bytes,
+                )
+                .is_err()
+            {
+                emit_sync_notice(app_handle, "无法接收这个文件。");
+            }
+            true
+        }
+        SignalMessage::ClipboardFileEnd { transfer_id, hash } => {
+            let hash_bytes = match decode_hash(&hash) {
+                Some(value) => value,
+                None => return true,
+            };
+
+            if let Some(completed) = file_session.end(&transfer_id, hash_bytes) {
+                if let Some(batch_id) = completed.batch_id.clone() {
+                    file_session.push_batch_file(&batch_id, completed.path.clone());
+                } else {
+                    finalize_received_file(
+                        completed,
+                        dedup,
+                        clip_tx,
+                        peer_name,
+                        app_handle,
+                        None,
+                    )
+                    .await;
+                }
+            } else {
+                emit_sync_notice(app_handle, "文件接收未完成，已忽略。");
+            }
+            true
+        }
+        SignalMessage::ClipboardFileBatchEnd { batch_id, file_count } => {
+            if let Some(paths) = file_session.finalize_batch(&batch_id, file_count) {
+                if let Some(first_path) = paths.first() {
+                    let file_name = first_path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("file")
+                        .to_string();
+                    let batch_hash = *blake3::hash(batch_id.as_bytes()).as_bytes();
+                    finalize_received_file(
+                        CompletedFile {
+                            path: first_path.clone(),
+                            file_name,
+                            hash: batch_hash,
+                            batch_id: Some(batch_id),
+                        },
+                        dedup,
+                        clip_tx,
+                        peer_name,
+                        app_handle,
+                        Some(paths),
+                    )
+                    .await;
+                }
+            } else {
+                emit_sync_notice(app_handle, "文件批次接收未完成，已忽略。");
             }
             true
         }
@@ -509,6 +784,8 @@ impl ConnectionManager {
         let receive_handle = handle.clone();
         tokio::spawn(async move {
             let mut image_session = ImageReceiveSession::new();
+            let mut file_session = FileReceiveSession::new();
+            let max_file_bytes = crate::clipboard::file::DEFAULT_MAX_FILE_BYTES;
             while let Some(msg) = sig_rx.recv().await {
                 if !handle_incoming_signal(
                     msg,
@@ -519,7 +796,9 @@ impl ConnectionManager {
                     Some(&connected),
                     false,
                     &mut image_session,
+                    &mut file_session,
                     &receive_handle,
+                    max_file_bytes,
                 )
                 .await
                 {
@@ -562,6 +841,14 @@ impl ConnectionManager {
         tokio::spawn(async move {
             let mut peer_left = false;
             let mut image_session = ImageReceiveSession::new();
+            let mut file_session = FileReceiveSession::new();
+            let max_file_bytes = {
+                let state = app_handle.state::<crate::AppState>();
+                let config = state.config.blocking_lock();
+                config
+                    .max_file_bytes
+                    .unwrap_or(crate::clipboard::file::DEFAULT_MAX_FILE_BYTES)
+            };
 
             while let Some(event) = event_rx.recv().await {
                 let should_continue = match event {
@@ -575,12 +862,15 @@ impl ConnectionManager {
                             None,
                             true,
                             &mut image_session,
+                            &mut file_session,
                             &receive_handle,
+                            max_file_bytes,
                         )
                         .await
                     }
                     ConnectionEvent::Binary(chunk) => {
                         let send_ack = |msg: SignalMessage| receive_handle.send_signal(msg);
+                        file_session.ingest_chunk(&chunk, &send_ack);
                         image_session.ingest_chunk(&chunk, &send_ack);
                         true
                     }

@@ -6,7 +6,18 @@ pub enum ClipboardSnapshot {
         width: u32,
         height: u32,
     },
+    FileList {
+        files: Vec<ClipboardFileItem>,
+    },
     Empty,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClipboardFileItem {
+    pub file_name: String,
+    pub size_bytes: u64,
+    pub content_hash: [u8; 32],
+    pub source_path: Option<std::path::PathBuf>,
 }
 
 impl ClipboardSnapshot {
@@ -14,6 +25,7 @@ impl ClipboardSnapshot {
         match self {
             ClipboardSnapshot::Text(s) => *blake3::hash(s.as_bytes()).as_bytes(),
             ClipboardSnapshot::Image { png_bytes, .. } => *blake3::hash(png_bytes).as_bytes(),
+            ClipboardSnapshot::FileList { files } => crate::clipboard::file::file_list_hash(files),
             ClipboardSnapshot::Empty => [0u8; 32],
         }
     }

@@ -1,4 +1,4 @@
-import { Clipboard, LayoutGrid, LayoutList } from "lucide-react";
+import { Clipboard, LayoutGrid, LayoutList, Trash2 } from "lucide-react";
 import { useRelativeTicker } from "../../hooks/useRelativeTicker";
 import type { AppConnectionStatus, ClipEntry, ViewMode } from "../../types";
 import { relativeTime } from "../../utils/time";
@@ -53,9 +53,20 @@ type ClipboardPageProps = {
   setViewMode: (mode: ViewMode) => void;
   status: AppConnectionStatus;
   statusMessage: string;
+  historyLimit: number;
+  isClearingHistory: boolean;
+  onClearHistory: () => void;
 };
 
-export function ClipboardPage({ clips, viewMode, setViewMode, status }: ClipboardPageProps) {
+export function ClipboardPage({
+  clips,
+  viewMode,
+  setViewMode,
+  status,
+  historyLimit,
+  isClearingHistory,
+  onClearHistory,
+}: ClipboardPageProps) {
   useRelativeTicker();
 
   return (
@@ -63,9 +74,22 @@ export function ClipboardPage({ clips, viewMode, setViewMode, status }: Clipboar
       <div className="flex shrink-0 items-center justify-between border-b border-border px-4 pb-3 pt-5 md:px-6">
         <div>
           <h1 className="text-base font-semibold text-primary">剪贴板历史</h1>
-          <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">最近 {clips.length} 条同步摘要</p>
+          <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">
+            最近 {clips.length} 条同步摘要（最多保留 {historyLimit} 条）
+          </p>
         </div>
         <div className="flex items-center gap-2">
+          {clips.length > 0 ? (
+            <button
+              onClick={onClearHistory}
+              disabled={isClearingHistory}
+              className="rounded-md p-1.5 text-secondary-foreground transition-colors hover:bg-secondary hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+              title={isClearingHistory ? "正在清空" : "清空剪贴板历史"}
+              type="button"
+            >
+              <Trash2 size={14} />
+            </button>
+          ) : null}
           <div className="flex items-center rounded-md bg-secondary p-0.5">
             <button
               onClick={() => setViewMode("list")}

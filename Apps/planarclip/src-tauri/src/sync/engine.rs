@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tauri::AppHandle;
 use tokio::sync::{broadcast, Mutex};
 
+use crate::clipboard::file::DEFAULT_MAX_FILE_BYTES;
 use crate::clipboard::image::INLINE_IMAGE_BYTES;
 use crate::clipboard::types::{ClipboardEvent, ClipboardOrigin, ClipboardSnapshot};
 use crate::network::webrtc::ConnectionHandle;
@@ -38,16 +39,24 @@ impl SyncEngine {
                         continue;
                     }
 
-                    let sync_images = {
+                    let (sync_images, sync_files, max_file_bytes) = {
                         let config = self.config.lock().await;
-                        config.sync_images.unwrap_or(true)
+                        (
+                            config.sync_images.unwrap_or(true),
+                            config.sync_files.unwrap_or(false),
+                            config
+                                .max_file_bytes
+                                .unwrap_or(DEFAULT_MAX_FILE_BYTES),
+                        )
                     };
 
-                    let needs_chunked = matches!(
+                    let needs_chunked_image = matches!(
                         &event.snapshot,
                         ClipboardSnapshot::Image { png_bytes, .. }
                             if png_bytes.len() > INLINE_IMAGE_BYTES
                     );
+                    let needs_file_transfer =
+                        matches!(event.snapshot, ClipboardSnapshot::FileList { .. });
 
                     let conn = self.connection.lock().await;
                     let Some(ref handle) = *conn else {
@@ -63,7 +72,7 @@ impl SyncEngine {
                         continue;
                     }
 
-                    if needs_chunked && handle.supports_chunked_images() {
+                    if needs_chunked_image && handle.supports_chunked_images() {
                         let handle = handle.clone();
                         let snapshot = event.snapshot.clone();
                         let app_handle = self.app_handle.clone();
@@ -71,6 +80,16 @@ impl SyncEngine {
                         tokio::spawn(async move {
                             handle
                                 .send_image_async(snapshot, sync_images, Some(app_handle))
+                                .await;
+                        });
+                    } else if needs_file_transfer {
+                        let handle = handle.clone();
+                        let snapshot = event.snapshot.clone();
+                        let app_handle = self.app_handle.clone();
+                        drop(conn);
+                        tokio::spawn(async move {
+                            handle
+                                .send_files_async(snapshot, sync_files, max_file_bytes, Some(app_handle))
                                 .await;
                         });
                     } else {

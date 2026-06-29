@@ -1,4 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -6,6 +9,7 @@ use tokio::sync::mpsc;
 use crate::clipboard::image::MAX_IMAGE_BYTES;
 use crate::network::binary_chunk::{transfer_id_to_bytes, BinaryChunk};
 use crate::network::protocol::SignalMessage;
+use crate::storage::staging;
 
 pub const CHUNK_SIZE: usize = 256 * 1024;
 pub const SEND_WINDOW: u32 = 8;
@@ -274,6 +278,318 @@ pub async fn send_image_with_flow_control(
     }
 
     transfer_result
+}
+
+pub struct CompletedFile {
+    pub path: PathBuf,
+    pub file_name: String,
+    pub hash: [u8; 32],
+    pub batch_id: Option<String>,
+}
+
+struct PendingFileReceive {
+    hash: [u8; 32],
+    file_name: String,
+    batch_id: Option<String>,
+    temp_path: PathBuf,
+    total_bytes: u64,
+    chunk_size: u32,
+    chunk_total: u32,
+    received: HashSet<u32>,
+}
+
+struct PendingFileBatch {
+    batch_id: String,
+    paths: Vec<PathBuf>,
+    expected_count: u32,
+}
+
+pub struct FileReceiveSession {
+    active: Option<(String, PendingFileReceive)>,
+    batch: Option<PendingFileBatch>,
+}
+
+impl FileReceiveSession {
+    pub fn new() -> Self {
+        Self {
+            active: None,
+            batch: None,
+        }
+    }
+
+    pub fn begin(
+        &mut self,
+        transfer_id: String,
+        hash: [u8; 32],
+        file_name: String,
+        total_bytes: u64,
+        chunk_size: u32,
+        batch_id: Option<String>,
+        max_file_bytes: u64,
+    ) -> Result<(), &'static str> {
+        if total_bytes > max_file_bytes {
+            return Err("file too large");
+        }
+
+        staging::ensure_staging().map_err(|_| "staging unavailable")?;
+        let temp_path = staging::temp_transfer_path(&transfer_id);
+        let _ = fs::remove_file(&temp_path);
+        File::create(&temp_path).map_err(|_| "temp file create failed")?;
+
+        let chunk_total = chunk_total_for_size(total_bytes as usize, chunk_size as usize);
+        self.active = Some((
+            transfer_id,
+            PendingFileReceive {
+                hash,
+                file_name,
+                batch_id,
+                temp_path,
+                total_bytes,
+                chunk_size,
+                chunk_total,
+                received: HashSet::new(),
+            },
+        ));
+        Ok(())
+    }
+
+    pub fn ingest_chunk(
+        &mut self,
+        chunk: &BinaryChunk,
+        send_ack: &impl Fn(SignalMessage),
+    ) {
+        let Some((transfer_id, pending)) = self.active.as_mut() else {
+            return;
+        };
+        let Some(expected_id) = transfer_id_to_bytes(transfer_id) else {
+            return;
+        };
+        if chunk.transfer_id != expected_id {
+            return;
+        }
+        if chunk.chunk_total != pending.chunk_total {
+            return;
+        }
+        if chunk.chunk_index >= pending.chunk_total {
+            return;
+        }
+
+        let chunk_size = pending.chunk_size.max(1) as usize;
+        let offset = chunk.chunk_index as usize * chunk_size;
+        if offset + chunk.payload.len() > pending.total_bytes as usize {
+            return;
+        }
+
+        if let Ok(mut file) = OpenOptions::new()
+            .write(true)
+            .open(&pending.temp_path)
+        {
+            if file.seek(SeekFrom::Start(offset as u64)).is_ok() {
+                let _ = file.write_all(&chunk.payload);
+            }
+        }
+
+        pending.received.insert(chunk.chunk_index);
+        send_ack(SignalMessage::TransferAck {
+            transfer_id: transfer_id.clone(),
+            chunk_index: chunk.chunk_index,
+        });
+    }
+
+    pub fn end(&mut self, transfer_id: &str, hash: [u8; 32]) -> Option<CompletedFile> {
+        let (active_id, pending) = self.active.as_ref()?;
+        if active_id != transfer_id {
+            return None;
+        }
+        if pending.hash != hash {
+            tracing::warn!("File end hash mismatch");
+            self.active = None;
+            return None;
+        }
+        if pending.received.len() as u32 != pending.chunk_total {
+            tracing::warn!("File transfer incomplete at end");
+            let temp_path = pending.temp_path.clone();
+            self.active = None;
+            let _ = fs::remove_file(temp_path);
+            return None;
+        }
+
+        let (_, pending) = self.active.take()?;
+        let actual_hash = hash_file_path(&pending.temp_path).ok()?;
+        if actual_hash != pending.hash {
+            tracing::warn!("Assembled file hash mismatch");
+            let _ = fs::remove_file(&pending.temp_path);
+            return None;
+        }
+
+        let final_path = staging::finalize_staged_file(
+            &pending.temp_path,
+            pending.batch_id.as_deref(),
+            &pending.file_name,
+        )
+        .ok()?;
+
+        Some(CompletedFile {
+            path: final_path,
+            file_name: pending.file_name,
+            hash: pending.hash,
+            batch_id: pending.batch_id,
+        })
+    }
+
+    pub fn cancel(&mut self, transfer_id: &str) {
+        if let Some((active_id, pending)) = self.active.take() {
+            if active_id == transfer_id {
+                let _ = fs::remove_file(&pending.temp_path);
+            } else {
+                self.active = Some((active_id, pending));
+            }
+        }
+    }
+
+    pub fn register_batch(&mut self, batch_id: String, expected_count: u32) {
+        self.batch = Some(PendingFileBatch {
+            batch_id,
+            paths: Vec::new(),
+            expected_count,
+        });
+    }
+
+    pub fn has_batch(&self, batch_id: &str) -> bool {
+        self.batch
+            .as_ref()
+            .is_some_and(|batch| batch.batch_id == batch_id)
+    }
+
+    pub fn push_batch_file(&mut self, batch_id: &str, path: PathBuf) -> bool {
+        let Some(batch) = self.batch.as_mut() else {
+            return false;
+        };
+        if batch.batch_id != batch_id {
+            return false;
+        }
+        batch.paths.push(path);
+        true
+    }
+
+    pub fn finalize_batch(&mut self, batch_id: &str, file_count: u32) -> Option<Vec<PathBuf>> {
+        let batch = self.batch.take()?;
+        if batch.batch_id != batch_id || batch.expected_count != file_count {
+            return None;
+        }
+        if batch.paths.len() as u32 != file_count {
+            return None;
+        }
+        Some(batch.paths)
+    }
+}
+
+pub async fn send_file_with_flow_control(
+    send_signal: impl Fn(SignalMessage),
+    send_binary: impl Fn(BinaryChunk),
+    ack_registry: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, mpsc::UnboundedSender<u32>>>>,
+    file_path: &Path,
+    file_name: &str,
+    hash: [u8; 32],
+    batch_id: Option<String>,
+    batch_index: Option<u32>,
+    batch_total: Option<u32>,
+) -> Result<(), &'static str> {
+    let metadata = fs::metadata(file_path).map_err(|_| "file metadata failed")?;
+    let total_bytes = metadata.len();
+    let transfer_id = uuid::Uuid::new_v4().to_string();
+    let chunk_total = chunk_total_for_size(total_bytes as usize, CHUNK_SIZE);
+    let hash_hex = hex::encode(hash);
+
+    send_signal(SignalMessage::ClipboardFileBegin {
+        transfer_id: transfer_id.clone(),
+        hash: hash_hex.clone(),
+        file_name: file_name.to_string(),
+        total_bytes,
+        chunk_size: CHUNK_SIZE as u32,
+        batch_id,
+        batch_index,
+        batch_total,
+    });
+
+    let mut ack_waiter = AckWaiter::register(ack_registry, &transfer_id).await;
+    let mut next_index = 0u32;
+    let mut in_flight = 0u32;
+    let mut acked = HashSet::new();
+    let mut file = File::open(file_path).map_err(|_| "file open failed")?;
+
+    let transfer_result = async {
+        while next_index < chunk_total || in_flight > 0 {
+            while in_flight < SEND_WINDOW && next_index < chunk_total {
+                let chunk = build_file_binary_chunk(&transfer_id, next_index, chunk_total, &mut file)
+                    .ok_or("chunk build failed")?;
+                send_binary(chunk);
+                next_index += 1;
+                in_flight += 1;
+            }
+
+            if in_flight == 0 {
+                break;
+            }
+
+            match tokio::time::timeout(ACK_TIMEOUT, ack_waiter.wait_any()).await {
+                Ok(Some(chunk_index)) => {
+                    if !acked.insert(chunk_index) {
+                        continue;
+                    }
+                    in_flight = in_flight.saturating_sub(1);
+                }
+                Ok(None) => return Err("ack channel closed"),
+                Err(_) => return Err("ack timeout"),
+            }
+        }
+
+        send_signal(SignalMessage::ClipboardFileEnd {
+            transfer_id: transfer_id.clone(),
+            hash: hash_hex,
+        });
+
+        Ok(())
+    }
+    .await;
+
+    AckWaiter::unregister(ack_registry, &transfer_id).await;
+
+    if transfer_result.is_err() {
+        send_signal(SignalMessage::TransferCancel {
+            transfer_id,
+            reason: Some("send_failed".into()),
+        });
+    }
+
+    transfer_result
+}
+
+pub fn build_file_binary_chunk(
+    transfer_id: &str,
+    chunk_index: u32,
+    chunk_total: u32,
+    file: &mut File,
+) -> Option<BinaryChunk> {
+    let transfer_bytes = transfer_id_to_bytes(transfer_id)?;
+    let start = chunk_index as u64 * CHUNK_SIZE as u64;
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut payload = vec![0u8; CHUNK_SIZE];
+    let read = file.read(&mut payload).ok()?;
+    if read == 0 {
+        return None;
+    }
+    payload.truncate(read);
+    Some(BinaryChunk {
+        transfer_id: transfer_bytes,
+        chunk_index,
+        chunk_total,
+        payload,
+    })
+}
+
+fn hash_file_path(path: &Path) -> Result<[u8; 32], String> {
+    crate::clipboard::file::hash_file(path)
 }
 
 pub async fn route_transfer_ack(

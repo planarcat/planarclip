@@ -32,7 +32,8 @@ const SIGNALLING_SERVER: &str = "ws://localhost:8765";
 const DEFAULT_DEVICE_NAME: &str = "我的设备";
 const DEFAULT_UI_COLOR_SCHEME: &str = "dark";
 const DEFAULT_UI_THEME_COLOR: &str = "cyan";
-const MAX_CLIPBOARD_HISTORY: usize = 12;
+const CLIPBOARD_HISTORY_LIMIT_OPTIONS: [usize; 5] = [25, 50, 100, 200, 500];
+const DEFAULT_CLIPBOARD_HISTORY_LIMIT: usize = 100;
 const MAX_CONNECTIONS: usize = 5;
 const DEFAULT_MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 
@@ -101,6 +102,11 @@ struct ConnectionSettingsPayload {
 struct SyncSettingsPayload {
     sync_images: bool,
     sync_files: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct ClipboardSettingsPayload {
+    history_limit: usize,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -517,13 +523,35 @@ fn sync_settings_from_config(config: &AppConfig) -> SyncSettingsPayload {
     }
 }
 
+fn normalized_clipboard_history_limit(value: Option<usize>) -> usize {
+    match value {
+        Some(limit) if CLIPBOARD_HISTORY_LIMIT_OPTIONS.contains(&limit) => limit,
+        _ => DEFAULT_CLIPBOARD_HISTORY_LIMIT,
+    }
+}
+
+fn validate_clipboard_history_limit(value: usize) -> Result<usize, String> {
+    if CLIPBOARD_HISTORY_LIMIT_OPTIONS.contains(&value) {
+        Ok(value)
+    } else {
+        Err("展示条数无效，请重新选择后再试。".to_string())
+    }
+}
+
+fn clipboard_settings_from_config(config: &AppConfig) -> ClipboardSettingsPayload {
+    ClipboardSettingsPayload {
+        history_limit: normalized_clipboard_history_limit(config.clipboard_history_limit),
+    }
+}
+
 fn load_clipboard_history_from_config(config: &AppConfig) -> Vec<ClipboardHistoryEntry> {
+    let limit = normalized_clipboard_history_limit(config.clipboard_history_limit);
     config
         .clipboard_history
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .take(MAX_CLIPBOARD_HISTORY)
+        .take(limit)
         .collect()
 }
 
@@ -801,11 +829,25 @@ fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHist
             size_label: Some(clipboard::image::format_byte_size(png_bytes.len())),
             image_data_url: Some(clipboard::image::png_data_url(png_bytes)),
         }),
+        clipboard::types::ClipboardSnapshot::FileList { files } => Some(ClipboardHistoryEntry {
+            id: format!("{}-{}", event.timestamp_ms, &hash[..8]),
+            content: clipboard::file::file_list_summary(files),
+            clip_type: "file".to_string(),
+            source_label,
+            direction,
+            timestamp_ms: event.timestamp_ms,
+            size_label: Some(clipboard::file::file_list_size_label(files)),
+            image_data_url: None,
+        }),
         clipboard::types::ClipboardSnapshot::Empty => None,
     }
 }
 
-fn merge_clipboard_history(history: &mut Vec<ClipboardHistoryEntry>, entry: ClipboardHistoryEntry) {
+fn merge_clipboard_history(
+    history: &mut Vec<ClipboardHistoryEntry>,
+    entry: ClipboardHistoryEntry,
+    limit: usize,
+) {
     if history.first().map(|item| item.id.as_str()) == Some(entry.id.as_str()) {
         return;
     }
@@ -832,7 +874,7 @@ fn merge_clipboard_history(history: &mut Vec<ClipboardHistoryEntry>, entry: Clip
     }
 
     history.insert(0, entry);
-    history.truncate(MAX_CLIPBOARD_HISTORY);
+    history.truncate(limit);
 }
 
 async fn active_connection_count(state: &AppState) -> usize {
@@ -1095,10 +1137,14 @@ async fn get_sync_settings(state: tauri::State<'_, AppState>) -> Result<SyncSett
 async fn save_sync_settings(
     state: tauri::State<'_, AppState>,
     sync_images: bool,
+    sync_files: Option<bool>,
 ) -> Result<SyncSettingsPayload, String> {
     {
         let mut config = state.config.lock().await;
         config.sync_images = Some(sync_images);
+        if let Some(sync_files) = sync_files {
+            config.sync_files = Some(sync_files);
+        }
         if config.max_file_bytes.is_none() {
             config.max_file_bytes = Some(DEFAULT_MAX_FILE_BYTES);
         }
@@ -1144,6 +1190,56 @@ async fn rotate_pairing_code(
 #[tauri::command]
 async fn end_pairing_session(state: tauri::State<'_, AppState>) -> Result<(), String> {
     clear_pairing_session(state.inner()).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_clipboard_settings(
+    state: tauri::State<'_, AppState>,
+) -> Result<ClipboardSettingsPayload, String> {
+    let config = state.config.lock().await;
+    Ok(clipboard_settings_from_config(&config))
+}
+
+#[tauri::command]
+async fn save_clipboard_settings(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    history_limit: usize,
+) -> Result<ClipboardSettingsPayload, String> {
+    let history_limit = validate_clipboard_history_limit(history_limit)?;
+
+    {
+        let mut config = state.config.lock().await;
+        config.clipboard_history_limit = Some(history_limit);
+        storage_json::save_config(&config);
+    }
+
+    let updated_history = {
+        let mut history = state.clipboard_history.lock().await;
+        history.truncate(history_limit);
+        history.clone()
+    };
+    persist_clipboard_history(&state.config, &updated_history).await;
+    let _ = app.emit("clipboard-history-changed", updated_history);
+
+    let config = state.config.lock().await;
+    Ok(clipboard_settings_from_config(&config))
+}
+
+#[tauri::command]
+async fn clear_clipboard_history(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    {
+        let mut history = state.clipboard_history.lock().await;
+        history.clear();
+    }
+
+    let updated_history = Vec::new();
+    persist_clipboard_history(&state.config, &updated_history).await;
+    let _ = app.emit("clipboard-history-changed", updated_history);
     Ok(())
 }
 
@@ -2016,6 +2112,12 @@ fn init_tracing() {
 pub fn run() {
     init_tracing();
 
+    match storage::staging::gc_staging() {
+        Ok(removed) if removed > 0 => tracing::info!("staging GC removed {removed} expired item(s)"),
+        Err(error) => tracing::warn!("staging GC failed: {error}"),
+        _ => {}
+    }
+
     let mut config = storage_json::load_config();
     config.device_name = normalize_stored_device_name(&config.device_name);
     normalize_trusted_peers(&mut config);
@@ -2351,8 +2453,12 @@ pub fn run() {
                     while let Ok(event) = clip_history_rx.recv().await {
                         if let Some(entry) = build_clipboard_history_entry(&event) {
                             let updated_history = {
+                                let limit = {
+                                    let cfg = config.lock().await;
+                                    normalized_clipboard_history_limit(cfg.clipboard_history_limit)
+                                };
                                 let mut history = clipboard_history.lock().await;
-                                merge_clipboard_history(&mut history, entry);
+                                merge_clipboard_history(&mut history, entry, limit);
                                 history.clone()
                             };
                             persist_clipboard_history(&config, &updated_history).await;
@@ -2406,7 +2512,10 @@ pub fn run() {
             save_connection_settings,
             get_sync_settings,
             save_sync_settings,
+            get_clipboard_settings,
+            save_clipboard_settings,
             get_clipboard_history,
+            clear_clipboard_history,
             get_pending_connection_request,
             save_ui_settings,
             pair,

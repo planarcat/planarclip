@@ -11,6 +11,7 @@ import { ClipboardPage } from "./components/pages/ClipboardPage";
 import { DevicesPage } from "./components/pages/DevicesPage";
 import { SettingsPage } from "./components/pages/SettingsPage";
 import { getThemeById, normalizeColorScheme } from "./constants/theme";
+import { useClipboardSettings } from "./hooks/useClipboardSettings";
 import { useConnectionBridge } from "./hooks/useConnectionBridge";
 import { useConnectionSettings } from "./hooks/useConnectionSettings";
 import { useSyncSettings } from "./hooks/useSyncSettings";
@@ -139,13 +140,29 @@ export default function App() {
 
   const {
     syncImages,
+    syncFiles,
     isSavingSyncSettings,
     syncSettingsLoaded,
     handleSyncImagesChange,
+    handleSyncFilesChange,
   } = useSyncSettings({
     tauriAvailable: TAURI_AVAILABLE,
     callCommand,
     setLastMessage,
+  });
+
+  const {
+    historyLimit,
+    isSavingClipboardSettings,
+    clipboardSettingsLoaded,
+    isClearingClipboardHistory,
+    handleHistoryLimitChange,
+    handleClearHistory,
+  } = useClipboardSettings({
+    tauriAvailable: TAURI_AVAILABLE,
+    callCommand,
+    setLastMessage,
+    setClips,
   });
 
   const refreshLanDevicesQuiet = useCallback(async () => {
@@ -368,6 +385,11 @@ export default function App() {
               setViewMode={setViewMode}
               status={status}
               statusMessage={lastMessage}
+              historyLimit={historyLimit}
+              isClearingHistory={isClearingClipboardHistory}
+              onClearHistory={() => {
+                void handleClearHistory();
+              }}
             />
             <DevicesPanel
               devices={devices}
@@ -428,9 +450,17 @@ export default function App() {
             connectionSettingsLoaded={connectionSettingsLoaded}
             onAutoConnectTrustedChange={handleAutoConnectTrustedChange}
             syncImages={syncImages}
+            syncFiles={syncFiles}
             isSavingSyncSettings={isSavingSyncSettings}
             syncSettingsLoaded={syncSettingsLoaded}
             onSyncImagesChange={handleSyncImagesChange}
+            onSyncFilesChange={handleSyncFilesChange}
+            clipboardHistoryLimit={historyLimit}
+            isSavingClipboardSettings={isSavingClipboardSettings}
+            clipboardSettingsLoaded={clipboardSettingsLoaded}
+            onClipboardHistoryLimitChange={(limit) => {
+              void handleHistoryLimitChange(limit);
+            }}
           />
         )}
       </main>

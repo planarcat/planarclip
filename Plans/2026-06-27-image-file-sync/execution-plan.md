@@ -63,6 +63,7 @@
 - [x] 剪贴板历史：图片类型摘要
 - [x] 「正在同步图片…」状态提示（侧栏 statusMessage）
 - [ ] Win/Mac 手工测试：截图互传（需双机/双实例联调）
+- [x] **增强**：接收端同步图片支持资源管理器「粘贴为文件」（`CF_HDROP` + staging，与 Phase 3 共用基础设施）
 
 ### Phase 2：大图分块
 
@@ -75,12 +76,14 @@
 
 ### Phase 3：Windows 文件同步
 
-- [ ] `clipboard/platform/windows.rs`：CF_HDROP 读写
-- [ ] `ClipboardSnapshot::FileList` + 发送端单文件分块
-- [ ] `storage/staging.rs` 临时目录与 GC
-- [ ] 接收端：组装 → 写剪贴板文件列表
-- [ ] `AppConfig`：`sync_files`、大小上限
-- [ ] 设置页文件开关
+- [x] `platform/windows/clipboard.rs`：CF_HDROP 读写
+- [x] `ClipboardSnapshot::FileList` + 发送端分块传输
+- [x] `storage/staging.rs` 临时目录与 GC
+- [x] 接收端：组装 → 写剪贴板文件列表
+- [x] `AppConfig`：`sync_files`、大小上限（沿用 `max_file_bytes`）
+- [x] 设置页文件开关
+- [x] **增强**：同步图片接收端支持资源管理器「粘贴为文件」（`CF_HDROP` + staging）
+- [ ] Win 双机联调：单文件 / 多文件 / 收到截图后文件夹粘贴
 
 ### Phase 4：macOS 文件 + 体验
 

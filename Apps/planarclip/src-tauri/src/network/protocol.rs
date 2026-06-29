@@ -34,6 +34,30 @@ pub enum SignalMessage {
         hash: String,
     },
 
+    #[serde(rename = "clipboard_file_begin")]
+    ClipboardFileBegin {
+        transfer_id: String,
+        hash: String,
+        file_name: String,
+        total_bytes: u64,
+        chunk_size: u32,
+        batch_id: Option<String>,
+        batch_index: Option<u32>,
+        batch_total: Option<u32>,
+    },
+
+    #[serde(rename = "clipboard_file_end")]
+    ClipboardFileEnd {
+        transfer_id: String,
+        hash: String,
+    },
+
+    #[serde(rename = "clipboard_file_batch_end")]
+    ClipboardFileBatchEnd {
+        batch_id: String,
+        file_count: u32,
+    },
+
     #[serde(rename = "transfer_ack")]
     TransferAck {
         transfer_id: String,

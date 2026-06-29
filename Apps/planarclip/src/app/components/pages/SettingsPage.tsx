@@ -1,5 +1,6 @@
 import { Moon, Save, Sun, SunMoon } from "lucide-react";
 import { APP_DISPLAY_NAME } from "../../constants/app";
+import { CLIPBOARD_HISTORY_LIMIT_OPTIONS } from "../../constants/clipboard";
 import { THEME_COLORS } from "../../constants/theme";
 import type { ColorScheme, SettingAvailability, ThemeColor } from "../../types";
 import { SettingBadge } from "../common/SettingBadge";
@@ -27,9 +28,15 @@ type SettingsPageProps = {
   onSilentStartChange: (enabled: boolean) => void;
   onAutoConnectTrustedChange: (enabled: boolean) => void;
   syncImages: boolean;
+  syncFiles: boolean;
   isSavingSyncSettings: boolean;
   syncSettingsLoaded: boolean;
   onSyncImagesChange: (enabled: boolean) => void;
+  onSyncFilesChange: (enabled: boolean) => void;
+  clipboardHistoryLimit: number;
+  isSavingClipboardSettings: boolean;
+  clipboardSettingsLoaded: boolean;
+  onClipboardHistoryLimitChange: (limit: number) => void;
 };
 
 export function SettingsPage({
@@ -53,9 +60,15 @@ export function SettingsPage({
   onSilentStartChange,
   onAutoConnectTrustedChange,
   syncImages,
+  syncFiles,
   isSavingSyncSettings,
   syncSettingsLoaded,
   onSyncImagesChange,
+  onSyncFilesChange,
+  clipboardHistoryLimit,
+  isSavingClipboardSettings,
+  clipboardSettingsLoaded,
+  onClipboardHistoryLimitChange,
 }: SettingsPageProps) {
   const settingRows: Array<{
     label: string;
@@ -66,11 +79,6 @@ export function SettingsPage({
       label: "剪贴板变化时自动同步",
       desc: "文本链路当前始终保持自动同步，暂不提供关闭开关。",
       availability: "managed",
-    },
-    {
-      label: "同步文件",
-      desc: "文件同步会在图片能力稳定后补齐，单文件默认上限 100 MB。",
-      availability: "planned",
     },
     {
       label: "加密传输内容",
@@ -232,6 +240,33 @@ export function SettingsPage({
         </div>
       </div>
 
+      <p className="mb-3 text-[13px] font-medium text-primary">剪贴板</p>
+      <div className="mb-6 rounded-xl border border-border bg-card px-4">
+        <div className="flex items-start justify-between gap-4 py-3.5">
+          <div>
+            <p className="text-sm font-medium text-primary">展示记录上限</p>
+            <p className="mt-0.5 text-[13px] font-medium leading-6 text-muted-foreground">
+              控制剪贴板历史页面最多保留多少条同步摘要，超出后会自动移除较早的记录。
+            </p>
+          </div>
+          <select
+            value={clipboardHistoryLimit}
+            disabled={!clipboardSettingsLoaded || isSavingClipboardSettings}
+            onChange={(event) => {
+              onClipboardHistoryLimitChange(Number(event.target.value));
+            }}
+            aria-label="剪贴板展示记录上限"
+            className="shrink-0 rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-foreground transition-colors focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {CLIPBOARD_HISTORY_LIMIT_OPTIONS.map((limit) => (
+              <option key={limit} value={limit}>
+                {limit} 条
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       <p className="mb-3 text-[13px] font-medium text-primary">同步与安全</p>
       <div className="rounded-xl border border-border bg-card px-4">
         <div className="flex items-start justify-between gap-4 border-b border-border py-3.5">
@@ -246,6 +281,20 @@ export function SettingsPage({
             disabled={!syncSettingsLoaded || isSavingSyncSettings}
             label="同步图片"
             onChange={onSyncImagesChange}
+          />
+        </div>
+        <div className="flex items-start justify-between gap-4 border-b border-border py-3.5">
+          <div>
+            <p className="text-sm font-medium text-primary">同步文件</p>
+            <p className="mt-0.5 text-[13px] font-medium leading-6 text-muted-foreground">
+              开启后，在资源管理器中复制文件会自动同步到已连接设备；单文件默认上限 100 MB。
+            </p>
+          </div>
+          <SettingToggle
+            checked={syncFiles}
+            disabled={!syncSettingsLoaded || isSavingSyncSettings}
+            label="同步文件"
+            onChange={onSyncFilesChange}
           />
         </div>
         {settingRows.map((item) => (

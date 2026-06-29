@@ -6,6 +6,7 @@ use std::sync::{
 use arboard::ImageData;
 use tokio::sync::broadcast;
 
+use crate::clipboard::file::{file_list_hash, snapshot_from_file_paths, DEFAULT_MAX_FILE_BYTES, MAX_BATCH_BYTES};
 use crate::clipboard::image::{encode_rgba_to_png, snapshot_from_png_bytes};
 #[cfg(not(windows))]
 use crate::clipboard::image::decode_png_to_rgba;
@@ -102,9 +103,9 @@ impl ClipboardMonitor {
             }
             Err(error) => {
                 #[cfg(windows)]
-                if Self::image_read_pending() {
+                if Self::image_read_pending() || Self::file_read_pending() {
                     tracing::debug!(
-                        "clipboard read failed while image format present, will retry: {error}"
+                        "clipboard read failed while image/file format present, will retry: {error}"
                     );
                     return;
                 }
@@ -117,6 +118,21 @@ impl ClipboardMonitor {
     }
 
     fn read_clipboard() -> Result<ClipboardSnapshot, String> {
+        #[cfg(windows)]
+        if crate::platform::windows::clipboard::has_file_format() {
+            if let Some(paths) = crate::platform::windows::clipboard::read_file_paths() {
+                match snapshot_from_file_paths(
+                    paths,
+                    DEFAULT_MAX_FILE_BYTES,
+                    MAX_BATCH_BYTES,
+                ) {
+                    Ok(snapshot) if !snapshot.is_empty() => return Ok(snapshot),
+                    Ok(_) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+
         #[cfg(windows)]
         if let Some(snapshot) = crate::platform::windows::clipboard::read_snapshot() {
             return Ok(snapshot);
@@ -210,6 +226,68 @@ impl ClipboardMonitor {
             }
             _ => false,
         }
+    }
+
+    #[cfg(windows)]
+    fn file_read_pending() -> bool {
+        crate::platform::windows::clipboard::has_file_format()
+    }
+
+    pub fn write_clipboard_files(paths: &[std::path::PathBuf]) {
+        if paths.is_empty() {
+            return;
+        }
+
+        let files: Vec<_> = paths
+            .iter()
+            .filter_map(|path| {
+                let metadata = std::fs::metadata(path).ok()?;
+                let content_hash = crate::clipboard::file::hash_file(path).ok()?;
+                Some(crate::clipboard::types::ClipboardFileItem {
+                    file_name: path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("file")
+                        .to_string(),
+                    size_bytes: metadata.len(),
+                    content_hash,
+                    source_path: Some(path.clone()),
+                })
+            })
+            .collect();
+
+        if files.is_empty() {
+            return;
+        }
+
+        let hash = file_list_hash(&files);
+        Self::register_suppressed_write(hash);
+        Self::set_self_writing(true);
+
+        #[cfg(windows)]
+        {
+            let paths = paths.to_vec();
+            if let Err(error) = std::thread::Builder::new()
+                .name("planarclip-clip-write".into())
+                .spawn(move || crate::platform::windows::clipboard::write_file_paths(&paths))
+                .map_err(|error| format!("spawn clipboard thread failed: {error}"))
+                .and_then(|handle| {
+                    handle
+                        .join()
+                        .map_err(|_| "clipboard write thread panicked".to_string())?
+                })
+            {
+                tracing::warn!("failed to write clipboard files: {error}");
+            }
+        }
+
+        #[cfg(not(windows))]
+        {
+            let _ = paths;
+            tracing::warn!("clipboard file write is not supported on this platform yet");
+        }
+
+        Self::set_self_writing(false);
     }
 
     pub fn write_clipboard(text: &str) {

@@ -20,6 +20,7 @@ pub struct AppConfig {
     pub sync_images: Option<bool>,
     pub sync_files: Option<bool>,
     pub max_file_bytes: Option<u64>,
+    pub clipboard_history_limit: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

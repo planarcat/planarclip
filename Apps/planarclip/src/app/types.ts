@@ -81,6 +81,10 @@ export type SyncSettingsPayload = {
   sync_files: boolean;
 };
 
+export type ClipboardSettingsPayload = {
+  history_limit: number;
+};
+
 export type ConnectedPeerPayload = {
   peer_name: string;
   peer_id: string;
