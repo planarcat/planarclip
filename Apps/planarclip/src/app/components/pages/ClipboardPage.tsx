@@ -75,7 +75,7 @@ export function ClipboardPage({
         <div>
           <h1 className="text-base font-semibold text-primary">剪贴板历史</h1>
           <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">
-            最近 {clips.length} 条同步摘要（最多保留 {historyLimit} 条）
+            最近 {clips.length} 条同步摘要
           </p>
         </div>
         <div className="flex items-center gap-2">
