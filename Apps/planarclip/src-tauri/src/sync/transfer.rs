@@ -15,6 +15,44 @@ pub const CHUNK_SIZE: usize = 256 * 1024;
 pub const SEND_WINDOW: u32 = 8;
 const ACK_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Opaque peer response: transfer was handled on the remote side (not an error for sender).
+pub const PEER_TRANSFER_HANDLED: &str = "peer:handled";
+/// Opaque peer response: transfer declined without exposing local settings.
+pub const PEER_TRANSFER_DECLINED: &str = "peer:declined";
+const PEER_FILE_TOO_LARGE_PREFIX: &str = "peer:file-too-large:";
+
+pub fn max_file_bytes_to_mb(bytes: u64) -> u32 {
+    ((bytes + 1024 * 1024 - 1) / (1024 * 1024)).max(1) as u32
+}
+
+pub fn peer_file_too_large_reason(limit_mb: u32) -> String {
+    format!("{PEER_FILE_TOO_LARGE_PREFIX}{limit_mb}")
+}
+
+/// Map an opaque peer cancel reason to sender outcome. `Ok(())` means treat as success.
+pub fn resolve_peer_transfer_cancel(reason: Option<String>) -> Result<(), String> {
+    match reason {
+        Some(ref reason) if reason == PEER_TRANSFER_HANDLED => Ok(()),
+        Some(ref reason) if reason.starts_with(PEER_FILE_TOO_LARGE_PREFIX) => {
+            let limit_mb = &reason[PEER_FILE_TOO_LARGE_PREFIX.len()..];
+            Err(format!(
+                "文件同步失败，对方回应：文件大小超出限制大小 {} MB。",
+                limit_mb
+            ))
+        }
+        Some(_) => Err("文件同步失败，对方拒绝了这次传输。".to_string()),
+        None => Err("文件同步失败，请重新复制文件后再试。".to_string()),
+    }
+}
+
+pub async fn take_peer_transfer_cancel(
+    cancel_reasons: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, String>>>,
+    transfer_id: &str,
+) -> Result<(), String> {
+    let reason = cancel_reasons.lock().await.remove(transfer_id);
+    resolve_peer_transfer_cancel(reason)
+}
+
 pub struct CompletedImage {
     pub png_bytes: Vec<u8>,
     pub width: u32,
@@ -210,6 +248,7 @@ pub async fn send_image_with_flow_control(
     send_signal: impl Fn(SignalMessage),
     send_binary: impl Fn(BinaryChunk),
     ack_registry: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, mpsc::UnboundedSender<u32>>>>,
+    _cancel_reasons: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, String>>>,
     png_bytes: &[u8],
     width: u32,
     height: u32,
@@ -488,14 +527,15 @@ pub async fn send_file_with_flow_control(
     send_signal: impl Fn(SignalMessage),
     send_binary: impl Fn(BinaryChunk),
     ack_registry: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, mpsc::UnboundedSender<u32>>>>,
+    cancel_reasons: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, String>>>,
     file_path: &Path,
     file_name: &str,
     hash: [u8; 32],
     batch_id: Option<String>,
     batch_index: Option<u32>,
     batch_total: Option<u32>,
-) -> Result<(), &'static str> {
-    let metadata = fs::metadata(file_path).map_err(|_| "file metadata failed")?;
+) -> Result<(), String> {
+    let metadata = fs::metadata(file_path).map_err(|_| "file metadata failed".to_string())?;
     let total_bytes = metadata.len();
     let transfer_id = uuid::Uuid::new_v4().to_string();
     let chunk_total = chunk_total_for_size(total_bytes as usize, CHUNK_SIZE);
@@ -516,13 +556,13 @@ pub async fn send_file_with_flow_control(
     let mut next_index = 0u32;
     let mut in_flight = 0u32;
     let mut acked = HashSet::new();
-    let mut file = File::open(file_path).map_err(|_| "file open failed")?;
+    let mut file = File::open(file_path).map_err(|_| "file open failed".to_string())?;
 
     let transfer_result = async {
         while next_index < chunk_total || in_flight > 0 {
             while in_flight < SEND_WINDOW && next_index < chunk_total {
                 let chunk = build_file_binary_chunk(&transfer_id, next_index, chunk_total, &mut file)
-                    .ok_or("chunk build failed")?;
+                    .ok_or_else(|| "chunk build failed".to_string())?;
                 send_binary(chunk);
                 next_index += 1;
                 in_flight += 1;
@@ -539,8 +579,10 @@ pub async fn send_file_with_flow_control(
                     }
                     in_flight = in_flight.saturating_sub(1);
                 }
-                Ok(None) => return Err("transfer cancelled"),
-                Err(_) => return Err("ack timeout"),
+                Ok(None) => {
+                    return take_peer_transfer_cancel(cancel_reasons, &transfer_id).await;
+                }
+                Err(_) => return Err("ack timeout".to_string()),
             }
         }
 
@@ -562,7 +604,17 @@ pub async fn send_file_with_flow_control(
         });
     }
 
-    transfer_result
+    transfer_result.map_err(map_file_send_error)
+}
+
+fn map_file_send_error(error: String) -> String {
+    match error.as_str() {
+        "ack timeout" => "文件同步超时，请检查网络连接后重新复制文件。".to_string(),
+        "file metadata failed" | "file open failed" | "chunk build failed" => {
+            "文件同步失败，请重新复制文件后再试。".to_string()
+        }
+        other => other.to_string(),
+    }
 }
 
 pub fn build_file_binary_chunk(
@@ -605,7 +657,15 @@ pub async fn route_transfer_ack(
 /// Drop the sender-side ack waiter so in-flight transfers fail fast instead of timing out.
 pub async fn cancel_transfer_ack(
     registry: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, mpsc::UnboundedSender<u32>>>>,
+    cancel_reasons: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, String>>>,
     transfer_id: &str,
+    reason: Option<String>,
 ) {
+    if let Some(reason) = reason {
+        cancel_reasons
+            .lock()
+            .await
+            .insert(transfer_id.to_string(), reason);
+    }
     registry.lock().await.remove(transfer_id);
 }
