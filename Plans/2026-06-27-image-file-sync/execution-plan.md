@@ -62,8 +62,9 @@
 - [x] 设置页开关接入；Tauri 命令读写配置
 - [x] 剪贴板历史：图片类型摘要
 - [x] 「正在同步图片…」状态提示（侧栏 statusMessage）
-- [ ] Win/Mac 手工测试：截图互传（需双机/双实例联调）
+- [x] Win 双机：截图互传（2026-06-29）
 - [x] **增强**：接收端同步图片支持资源管理器「粘贴为文件」（`CF_HDROP` + staging，与 Phase 3 共用基础设施）
+- [x] Win 双机：同步截图 → 资源管理器粘贴为 `.png`（2026-06-29）
 
 ### Phase 2：大图分块
 
@@ -72,7 +73,7 @@
 - [x] `sync/transfer.rs`：发送窗口、超时、取消
 - [x] 接收端流式组装 + 全量 hash 校验
 - [x] 超 5MB 拒绝 + 中文通知/日志
-- [ ] 512 KB–5 MB 图片双机联调
+- [x] 512 KB–5 MB 图片双机联调（2026-06-29）
 
 ### Phase 3：Windows 文件同步
 
@@ -83,13 +84,16 @@
 - [x] `AppConfig`：`sync_files`、大小上限（沿用 `max_file_bytes`）
 - [x] 设置页文件开关
 - [x] **增强**：同步图片接收端支持资源管理器「粘贴为文件」（`CF_HDROP` + staging）
-- [ ] Win 双机联调：单文件 / 多文件 / 收到截图后文件夹粘贴
+- [x] Win 双机联调：**发送端 → 接收端单文件传输**（2026-06-29，`windows279.zip`，含 `peer:*` 回应码与隐私文案）
+- [x] Win 双机联调：**多文件批次发送**（2026-06-29，13 个文件共 122.5 MB，历史摘要「CC-Switch…等 13 个文件」）
+- [x] Win 双机联调：**接收端资源管理器粘贴**（2026-06-29，对端 Downloads 文件夹 Ctrl+V 落盘）
+- [x] Win 双机联调：关文件同步时文件名文本回退（2026-06-29，`peer:handled`）
 
 ### Phase 4：macOS 文件 + 体验
 
 - [ ] `clipboard/platform/macos.rs`：NSPasteboard 文件 URL
 - [ ] 多文件 batch（batch_id / FileBatchEnd）
-- [ ] 前端传输进度（**百分比进度条**；Phase 1 已做 indeterminate「正在同步…」）
+- [ ] 前端传输进度（**百分比进度条**；方案见 [03-transfer-progress-design.md](03-transfer-progress-design.md)）
 - [ ] 剪贴板历史：文件条目
 - [ ] Win↔Mac 文件交叉测试
 
@@ -111,3 +115,4 @@
 - [01-image-file-sync-design.md](01-image-file-sync-design.md) — 完整方案
 - [2026-05-26-cross-platform-clipboard-sync/07-foreseeable-challenges.md](../2026-05-26-cross-platform-clipboard-sync/07-foreseeable-challenges.md) — 跨平台剪贴板风险
 - [2026-06-26-multi-connection-sessions/execution-plan.md](../2026-06-26-multi-connection-sessions/execution-plan.md) — 多连接依赖
+- [03-transfer-progress-design.md](03-transfer-progress-design.md) — 百分比进度条（复用右下角状态卡片）
