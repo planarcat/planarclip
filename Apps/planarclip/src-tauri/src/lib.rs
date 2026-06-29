@@ -1995,8 +1995,26 @@ async fn handle_incoming_connection(
         .await = None;
 }
 
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+
+    // Dev builds hide mdns-sd interface noise on multi-NIC hosts; override via RUST_LOG.
+    let default_filter = if cfg!(debug_assertions) {
+        "info,mdns_sd=off"
+    } else {
+        "info"
+    };
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new(default_filter)),
+        )
+        .init();
+}
+
 pub fn run() {
-    tracing_subscriber::fmt::init();
+    init_tracing();
 
     let mut config = storage_json::load_config();
     config.device_name = normalize_stored_device_name(&config.device_name);
