@@ -1,13 +1,16 @@
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Cursor, Read};
 use std::path::{Path, PathBuf};
 
-use crate::clipboard::image::format_byte_size;
+use image::GenericImageView;
+
+use crate::clipboard::image::{format_byte_size, png_data_url, snapshot_from_png_bytes, MAX_IMAGE_BYTES};
 use crate::clipboard::types::{ClipboardFileItem, ClipboardSnapshot};
 use crate::storage::staging;
 
 pub const MAX_BATCH_BYTES: u64 = 500 * 1024 * 1024;
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
+const HISTORY_PREVIEW_MAX_EDGE: u32 = 480;
 
 pub fn hash_file(path: &Path) -> Result<[u8; 32], String> {
     let file = File::open(path).map_err(|error| format!("open file failed: {error}"))?;
@@ -24,6 +27,22 @@ pub fn hash_file(path: &Path) -> Result<[u8; 32], String> {
         hasher.update(&buffer[..read]);
     }
     Ok(*hasher.finalize().as_bytes())
+}
+
+pub fn encode_hash(hash: &[u8; 32]) -> String {
+    hex::encode(hash)
+}
+
+pub fn file_list_for_meta(files: &[ClipboardFileItem]) -> Vec<ClipboardFileItem> {
+    files
+        .iter()
+        .map(|file| ClipboardFileItem {
+            file_name: file.file_name.clone(),
+            size_bytes: file.size_bytes,
+            content_hash: file.content_hash,
+            source_path: None,
+        })
+        .collect()
 }
 
 pub fn file_list_hash(files: &[ClipboardFileItem]) -> [u8; 32] {
@@ -114,4 +133,77 @@ pub fn file_list_summary(files: &[ClipboardFileItem]) -> String {
 pub fn file_list_size_label(files: &[ClipboardFileItem]) -> String {
     let total: u64 = files.iter().map(|file| file.size_bytes).sum();
     format_byte_size(total as usize)
+}
+
+pub fn is_image_file_name(file_name: &str) -> bool {
+    let extension = Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        extension.as_str(),
+        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp"
+    )
+}
+
+/// When the user copies a single image file in Explorer, treat it as an image snapshot for sync.
+pub fn image_snapshot_from_single_file(files: &[ClipboardFileItem]) -> Option<ClipboardSnapshot> {
+    if files.len() != 1 || !is_image_file_name(&files[0].file_name) {
+        return None;
+    }
+
+    let file = &files[0];
+    if file.size_bytes > MAX_IMAGE_BYTES as u64 {
+        return None;
+    }
+
+    let path = file.source_path.as_ref()?;
+    let bytes = std::fs::read(path).ok()?;
+    let image = image::load_from_memory(&bytes).ok()?;
+    let rgba = image.to_rgba8();
+    let mut png_bytes = Vec::new();
+    rgba.write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)
+        .ok()?;
+    snapshot_from_png_bytes(png_bytes)
+}
+
+pub fn history_preview_for_files(files: &[ClipboardFileItem]) -> Option<String> {
+    if files.len() != 1 || !is_image_file_name(&files[0].file_name) {
+        return None;
+    }
+
+    let path = files[0].source_path.as_ref()?;
+    let bytes = std::fs::read(path).ok()?;
+    let image = image::load_from_memory(&bytes).ok()?;
+    let (width, height) = image.dimensions();
+    let preview = if width <= HISTORY_PREVIEW_MAX_EDGE && height <= HISTORY_PREVIEW_MAX_EDGE {
+        image
+    } else {
+        image.resize(
+            HISTORY_PREVIEW_MAX_EDGE,
+            HISTORY_PREVIEW_MAX_EDGE,
+            image::imageops::FilterType::Triangle,
+        )
+    };
+    let rgba = preview.to_rgba8();
+    let mut png_bytes = Vec::new();
+    rgba.write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)
+        .ok()?;
+    Some(png_data_url(&png_bytes))
+}
+
+pub fn history_summary_for_files(files: &[ClipboardFileItem]) -> String {
+    if files.len() == 1 && is_image_file_name(&files[0].file_name) {
+        if let Some(path) = files[0].source_path.as_ref() {
+            if let Ok(bytes) = std::fs::read(path) {
+                if let Ok(image) = image::load_from_memory(&bytes) {
+                    let (width, height) = image.dimensions();
+                    return format!("[图片] {width}×{height}");
+                }
+            }
+        }
+    }
+
+    file_list_summary(files)
 }

@@ -58,6 +58,13 @@ pub enum SignalMessage {
         file_count: u32,
     },
 
+    /// File names and sizes only — no binary payload (used when file sync is disabled).
+    #[serde(rename = "clipboard_file_list_meta")]
+    ClipboardFileListMeta {
+        hash: String,
+        files: Vec<ClipboardFileMetaItem>,
+    },
+
     #[serde(rename = "transfer_ack")]
     TransferAck {
         transfer_id: String,
@@ -79,6 +86,13 @@ pub enum SignalMessage {
     PeerLeft {
         peer_id: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipboardFileMetaItem {
+    pub file_name: String,
+    pub size_bytes: u64,
+    pub content_hash: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

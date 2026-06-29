@@ -829,16 +829,24 @@ fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHist
             size_label: Some(clipboard::image::format_byte_size(png_bytes.len())),
             image_data_url: Some(clipboard::image::png_data_url(png_bytes)),
         }),
-        clipboard::types::ClipboardSnapshot::FileList { files } => Some(ClipboardHistoryEntry {
-            id: format!("{}-{}", event.timestamp_ms, &hash[..8]),
-            content: clipboard::file::file_list_summary(files),
-            clip_type: "file".to_string(),
-            source_label,
-            direction,
-            timestamp_ms: event.timestamp_ms,
-            size_label: Some(clipboard::file::file_list_size_label(files)),
-            image_data_url: None,
-        }),
+        clipboard::types::ClipboardSnapshot::FileList { files } => {
+            let is_single_image =
+                files.len() == 1 && clipboard::file::is_image_file_name(&files[0].file_name);
+            Some(ClipboardHistoryEntry {
+                id: format!("{}-{}", event.timestamp_ms, &hash[..8]),
+                content: clipboard::file::history_summary_for_files(files),
+                clip_type: if is_single_image {
+                    "image".to_string()
+                } else {
+                    "file".to_string()
+                },
+                source_label,
+                direction,
+                timestamp_ms: event.timestamp_ms,
+                size_label: Some(clipboard::file::file_list_size_label(files)),
+                image_data_url: clipboard::file::history_preview_for_files(files),
+            })
+        }
         clipboard::types::ClipboardSnapshot::Empty => None,
     }
 }

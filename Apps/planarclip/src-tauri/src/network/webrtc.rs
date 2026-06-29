@@ -7,13 +7,13 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{broadcast, mpsc, Mutex};
 
-use crate::clipboard::file::{file_list_hash, MAX_BATCH_BYTES};
+use crate::clipboard::file::{encode_hash, file_list_for_meta, file_list_hash, MAX_BATCH_BYTES};
 use crate::clipboard::image::{format_byte_size, INLINE_IMAGE_BYTES, MAX_IMAGE_BYTES};
 use crate::clipboard::monitor::ClipboardMonitor;
 use crate::clipboard::types::{ClipboardEvent, ClipboardFileItem, ClipboardSnapshot};
 use crate::network::binary_chunk::BinaryChunk;
 use crate::network::direct::{ConnectionEvent, DirectConnection};
-use crate::network::protocol::SignalMessage;
+use crate::network::protocol::{ClipboardFileMetaItem, SignalMessage};
 use crate::network::signalling;
 use crate::sync::dedup::DedupStore;
 use crate::sync::transfer::{
@@ -124,9 +124,47 @@ impl ConnectionHandle {
             }
             ClipboardSnapshot::Empty => {}
             ClipboardSnapshot::FileList { .. } => {
-                // File sends are handled asynchronously by SyncEngine.
+                // Full file transfer and metadata-only sends are handled by SyncEngine.
             }
         }
+    }
+
+    pub fn send_file_list_meta(
+        &self,
+        snapshot: &ClipboardSnapshot,
+        app_handle: Option<&AppHandle>,
+    ) {
+        let ClipboardSnapshot::FileList { files } = snapshot else {
+            return;
+        };
+        if files.is_empty() {
+            return;
+        }
+
+        let is_connected = self
+            .connected
+            .try_lock()
+            .map(|guard| *guard)
+            .unwrap_or(false);
+        if !is_connected {
+            return;
+        }
+
+        let list_hash = file_list_hash(files);
+        let meta_files = files
+            .iter()
+            .map(|file| ClipboardFileMetaItem {
+                file_name: file.file_name.clone(),
+                size_bytes: file.size_bytes,
+                content_hash: encode_hash(&file.content_hash),
+            })
+            .collect();
+
+        self.send_signal(SignalMessage::ClipboardFileListMeta {
+            hash: encode_hash(&list_hash),
+            files: meta_files,
+        });
+        emit_sync_activity(app_handle, false, "file", "文件名已同步");
     }
 
     pub async fn send_files_async(
@@ -371,6 +409,39 @@ fn emit_sync_notice(app_handle: Option<&AppHandle>, message: &str) {
     );
 }
 
+async fn finalize_received_file_meta(
+    files: Vec<ClipboardFileItem>,
+    list_hash: [u8; 32],
+    dedup: &Arc<Mutex<DedupStore>>,
+    clip_tx: &broadcast::Sender<ClipboardEvent>,
+    peer_name: &str,
+    app_handle: Option<&AppHandle>,
+) {
+    if files.is_empty() {
+        return;
+    }
+
+    {
+        let mut d = dedup.lock().await;
+        if d.has_seen(&list_hash) {
+            return;
+        }
+        d.mark_seen(list_hash);
+    }
+
+    tracing::info!(
+        "Received remote clipboard file name(s): {} ({})",
+        crate::clipboard::file::file_list_summary(&files),
+        format_byte_size(files.iter().map(|file| file.size_bytes).sum::<u64>() as usize)
+    );
+
+    let snapshot = ClipboardSnapshot::FileList {
+        files: file_list_for_meta(&files),
+    };
+    let _ = clip_tx.send(ClipboardEvent::remote(snapshot, peer_name.to_string()));
+    emit_sync_activity(app_handle, false, "file", "文件名已同步");
+}
+
 async fn finalize_received_file(
     completed: CompletedFile,
     dedup: &Arc<Mutex<DedupStore>>,
@@ -565,6 +636,29 @@ async fn handle_incoming_signal(
                 }
             };
 
+            let receiver_sync_files = read_sync_files_enabled(app_handle).await;
+            if !receiver_sync_files {
+                handle.send_signal(SignalMessage::TransferCancel {
+                    transfer_id: transfer_id.clone(),
+                    reason: Some("receiver file sync disabled".to_string()),
+                });
+                finalize_received_file_meta(
+                    vec![ClipboardFileItem {
+                        file_name: file_name.clone(),
+                        size_bytes: total_bytes,
+                        content_hash: hash_bytes,
+                        source_path: None,
+                    }],
+                    hash_bytes,
+                    dedup,
+                    clip_tx,
+                    peer_name,
+                    app_handle,
+                )
+                .await;
+                return true;
+            }
+
             if total_bytes > max_file_bytes {
                 emit_sync_notice(
                     app_handle,
@@ -652,6 +746,43 @@ async fn handle_incoming_signal(
             } else {
                 emit_sync_notice(app_handle, "文件批次接收未完成，已忽略。");
             }
+            true
+        }
+        SignalMessage::ClipboardFileListMeta { hash, files } => {
+            let list_hash = match decode_hash(&hash) {
+                Some(value) => value,
+                None => {
+                    tracing::warn!("Invalid hash in file list meta");
+                    return true;
+                }
+            };
+
+            let parsed_files = files
+                .into_iter()
+                .filter_map(|file| {
+                    let content_hash = decode_hash(&file.content_hash)?;
+                    Some(ClipboardFileItem {
+                        file_name: file.file_name,
+                        size_bytes: file.size_bytes,
+                        content_hash,
+                        source_path: None,
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            if parsed_files.is_empty() {
+                return true;
+            }
+
+            finalize_received_file_meta(
+                parsed_files,
+                list_hash,
+                dedup,
+                clip_tx,
+                peer_name,
+                app_handle,
+            )
+            .await;
             true
         }
         SignalMessage::Clipboard { payload, hash } => {
@@ -742,6 +873,15 @@ fn decode_hash(hash: &str) -> Option<[u8; 32]> {
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
     Some(arr)
+}
+
+async fn read_sync_files_enabled(app_handle: Option<&AppHandle>) -> bool {
+    let Some(app_handle) = app_handle else {
+        return false;
+    };
+    let state = app_handle.state::<crate::AppState>();
+    let sync_files = state.config.lock().await.sync_files.unwrap_or(false);
+    sync_files
 }
 
 fn new_handle(
