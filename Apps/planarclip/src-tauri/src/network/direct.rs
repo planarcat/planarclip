@@ -356,6 +356,7 @@ pub async fn initiator_abort(mut stream: TcpStream) {
     let _ = stream.shutdown().await;
 }
 
+#[cfg(test)]
 pub async fn initiator_connect(
     ip: &str,
     port: u16,

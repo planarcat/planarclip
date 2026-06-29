@@ -9,6 +9,7 @@
     "build:web": "pnpm --filter planarclip build:web",
     "check": "pnpm --filter planarclip check",
     "check:web": "pnpm --filter planarclip check:web",
+    "check:watch": "pnpm --filter planarclip check:watch",
     "preview:web": "pnpm --filter planarclip preview:web",
     "tauri": "pnpm --filter planarclip tauri"
   }
