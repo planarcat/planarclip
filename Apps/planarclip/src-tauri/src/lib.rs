@@ -18,7 +18,7 @@ mod sync;
 mod tray;
 mod window;
 
-use clipboard::monitor::ClipboardMonitor;
+use clipboard::monitor::{ClipboardDedupBaseline, ClipboardMonitor};
 use crate::app_profile::APP_DISPLAY_NAME;
 use tauri_plugin_autostart::ManagerExt;
 use clipboard::types::{ClipboardEvent, ClipboardHistoryEntry, ClipboardOrigin};
@@ -64,6 +64,7 @@ pub struct AppState {
     pub connection: Arc<Mutex<Option<ConnectionHandle>>>,
     pub connection_generation: Arc<AtomicU64>,
     pub clipboard_monitor_generation: Arc<AtomicU64>,
+    pub clipboard_dedup_baseline: Arc<Mutex<Option<ClipboardDedupBaseline>>>,
     pub clip_tx: broadcast::Sender<ClipboardEvent>,
     pub clipboard_history: Arc<Mutex<Vec<ClipboardHistoryEntry>>>,
     pub lan_devices: Arc<Mutex<Vec<LanDevice>>>,
@@ -1271,6 +1272,20 @@ async fn clear_clipboard_history(
         history.clear();
     }
 
+    let (sync_files, max_file_bytes) = {
+        let config = state.config.lock().await;
+        (
+            config.sync_files.unwrap_or(true),
+            config
+                .max_file_bytes
+                .unwrap_or(DEFAULT_MAX_FILE_BYTES),
+        )
+    };
+    *state.clipboard_dedup_baseline.lock().await = Some(ClipboardMonitor::capture_dedup_baseline(
+        max_file_bytes,
+        sync_files,
+    ));
+
     state
         .clipboard_monitor_generation
         .fetch_add(1, Ordering::SeqCst);
@@ -2176,6 +2191,7 @@ pub fn run() {
         connection: Arc::new(Mutex::new(None)),
         connection_generation: Arc::new(AtomicU64::new(0)),
         clipboard_monitor_generation: Arc::new(AtomicU64::new(0)),
+        clipboard_dedup_baseline: Arc::new(Mutex::new(None)),
         clip_tx: clip_tx.clone(),
         clipboard_history: Arc::new(Mutex::new(initial_clipboard_history)),
         lan_devices: Arc::new(Mutex::new(Vec::new())),
@@ -2516,6 +2532,10 @@ pub fn run() {
                 .state::<AppState>()
                 .clipboard_monitor_generation
                 .clone();
+            let clipboard_dedup_baseline = app
+                .state::<AppState>()
+                .clipboard_dedup_baseline
+                .clone();
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -2529,6 +2549,7 @@ pub fn run() {
                                 clip_tx_monitor,
                                 config_monitor,
                                 clipboard_monitor_generation,
+                                clipboard_dedup_baseline,
                             );
                             monitor.run().await;
                         },

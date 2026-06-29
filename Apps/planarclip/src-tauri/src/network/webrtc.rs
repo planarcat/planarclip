@@ -17,7 +17,8 @@ use crate::network::protocol::SignalMessage;
 use crate::network::signalling;
 use crate::sync::dedup::DedupStore;
 use crate::sync::transfer::{
-    route_transfer_ack, send_file_with_flow_control, send_image_with_flow_control, CompletedFile,
+    cancel_transfer_ack, route_transfer_ack, send_file_with_flow_control,
+    send_image_with_flow_control, CompletedFile,
     CompletedImage, FileReceiveSession, ImageReceiveSession,
 };
 
@@ -190,6 +191,7 @@ impl ConnectionHandle {
         emit_sync_activity(app_handle.as_ref(), true, "file", "正在同步文件…");
 
         let mut failed = false;
+        let mut last_send_error = "send_failed";
 
         for (index, file) in files.iter().enumerate() {
             let Some(source_path) = file.source_path.as_ref() else {
@@ -212,7 +214,8 @@ impl ConnectionHandle {
 
             if result.is_err() {
                 failed = true;
-                tracing::warn!("File send failed for {}: {:?}", file.file_name, result);
+                last_send_error = result.err().unwrap_or("send_failed");
+                tracing::warn!("File send failed for {}: {:?}", file.file_name, last_send_error);
                 break;
             }
         }
@@ -226,8 +229,7 @@ impl ConnectionHandle {
             }
             emit_sync_activity(app_handle.as_ref(), false, "file", "文件已同步");
         } else {
-            let message = "文件同步失败，请确认对方设备已更新到最新版本，然后重新复制文件。";
-            emit_sync_notice(app_handle.as_ref(), message);
+            emit_sync_notice(app_handle.as_ref(), file_send_failure_message(last_send_error));
         }
     }
 
@@ -301,7 +303,7 @@ impl ConnectionHandle {
                     "ack timeout" => {
                         "图片同步超时，请确认对方设备已更新到最新版本，然后重新复制图片。"
                     }
-                    "ack channel closed" => "图片同步失败，与对方设备的连接已中断。",
+                    "transfer cancelled" => "对方设备拒绝了图片传输。",
                     _ => "图片同步失败，请稍后再试。",
                 };
                 emit_sync_notice(app_handle.as_ref(), message);
@@ -340,6 +342,16 @@ impl ConnectionHandle {
         });
 
         emit_sync_activity(app_handle, false, "image", "图片已同步");
+    }
+}
+
+fn file_send_failure_message(error: &str) -> &'static str {
+    match error {
+        "ack timeout" => "文件同步超时，请检查网络连接，并确认对方设备的文件大小上限足够。",
+        "transfer cancelled" => {
+            "对方设备拒绝了文件传输，请确认对方已开启文件同步且文件大小未超过上限。"
+        }
+        _ => "文件同步失败，请确认对方设备已更新到最新版本，然后重新复制文件。",
     }
 }
 
@@ -518,9 +530,13 @@ async fn handle_incoming_signal(
             route_transfer_ack(&handle.ack_waiters, &transfer_id, chunk_index).await;
             true
         }
-        SignalMessage::TransferCancel { transfer_id, .. } => {
+        SignalMessage::TransferCancel { transfer_id, reason } => {
             image_session.cancel(&transfer_id);
             file_session.cancel(&transfer_id);
+            cancel_transfer_ack(&handle.ack_waiters, &transfer_id).await;
+            if let Some(reason) = reason {
+                tracing::info!("Transfer cancelled for {transfer_id}: {reason}");
+            }
             true
         }
         SignalMessage::ClipboardImageBegin {
@@ -540,6 +556,10 @@ async fn handle_incoming_signal(
             };
 
             if total_bytes as usize > MAX_IMAGE_BYTES {
+                handle.send_signal(SignalMessage::TransferCancel {
+                    transfer_id: transfer_id.clone(),
+                    reason: Some("image too large".to_string()),
+                });
                 emit_sync_notice(app_handle, "收到的图片过大，已忽略。");
                 return true;
             }
@@ -547,7 +567,7 @@ async fn handle_incoming_signal(
             emit_sync_activity(app_handle, true, "image", "正在同步图片…");
             if image_session
                 .begin(
-                    transfer_id,
+                    transfer_id.clone(),
                     hash_bytes,
                     width,
                     height,
@@ -556,6 +576,10 @@ async fn handle_incoming_signal(
                 )
                 .is_err()
             {
+                handle.send_signal(SignalMessage::TransferCancel {
+                    transfer_id,
+                    reason: Some("image receive begin failed".to_string()),
+                });
                 emit_sync_notice(app_handle, "无法接收这张图片。");
             }
             true
@@ -608,6 +632,10 @@ async fn handle_incoming_signal(
             }
 
             if total_bytes > max_file_bytes {
+                handle.send_signal(SignalMessage::TransferCancel {
+                    transfer_id: transfer_id.clone(),
+                    reason: Some("file too large".to_string()),
+                });
                 emit_sync_notice(
                     app_handle,
                     &format!(
@@ -628,7 +656,7 @@ async fn handle_incoming_signal(
             emit_sync_activity(app_handle, true, "file", "正在同步文件…");
             if file_session
                 .begin(
-                    transfer_id,
+                    transfer_id.clone(),
                     hash_bytes,
                     file_name,
                     total_bytes,
@@ -638,6 +666,10 @@ async fn handle_incoming_signal(
                 )
                 .is_err()
             {
+                handle.send_signal(SignalMessage::TransferCancel {
+                    transfer_id,
+                    reason: Some("file receive begin failed".to_string()),
+                });
                 emit_sync_notice(app_handle, "无法接收这个文件。");
             }
             true

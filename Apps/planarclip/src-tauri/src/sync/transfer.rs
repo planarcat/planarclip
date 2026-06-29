@@ -254,7 +254,7 @@ pub async fn send_image_with_flow_control(
                     }
                     in_flight = in_flight.saturating_sub(1);
                 }
-                Ok(None) => return Err("ack channel closed"),
+                Ok(None) => return Err("transfer cancelled"),
                 Err(_) => return Err("ack timeout"),
             }
         }
@@ -539,7 +539,7 @@ pub async fn send_file_with_flow_control(
                     }
                     in_flight = in_flight.saturating_sub(1);
                 }
-                Ok(None) => return Err("ack channel closed"),
+                Ok(None) => return Err("transfer cancelled"),
                 Err(_) => return Err("ack timeout"),
             }
         }
@@ -600,4 +600,12 @@ pub async fn route_transfer_ack(
     if let Some(tx) = registry.lock().await.get(transfer_id) {
         let _ = tx.send(chunk_index);
     }
+}
+
+/// Drop the sender-side ack waiter so in-flight transfers fail fast instead of timing out.
+pub async fn cancel_transfer_ack(
+    registry: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, mpsc::UnboundedSender<u32>>>>,
+    transfer_id: &str,
+) {
+    registry.lock().await.remove(transfer_id);
 }

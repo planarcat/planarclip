@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use arboard::ImageData;
-use tokio::sync::{broadcast, Mutex as AsyncMutex};
+use tokio::sync::{broadcast, mpsc, Mutex as AsyncMutex};
 
 use crate::clipboard::file::{
     file_list_as_sync_text, file_list_hash, snapshot_from_file_paths,
@@ -26,10 +26,19 @@ struct SuppressedRemoteWrite {
     until_ms: u64,
 }
 
+/// Dedup baseline captured when history is cleared so the monitor can resume without re-emitting.
+#[derive(Clone, Copy, Debug)]
+pub struct ClipboardDedupBaseline {
+    pub last_hash: [u8; 32],
+    #[cfg(windows)]
+    pub last_clipboard_seq: Option<u32>,
+}
+
 pub struct ClipboardMonitor {
     tx: broadcast::Sender<ClipboardEvent>,
     config: Arc<AsyncMutex<AppConfig>>,
     reset_generation: Arc<AtomicU64>,
+    dedup_baseline: Arc<AsyncMutex<Option<ClipboardDedupBaseline>>>,
     last_reset_generation: u64,
     last_hash: [u8; 32],
     last_read_error: Option<String>,
@@ -42,12 +51,14 @@ impl ClipboardMonitor {
         tx: broadcast::Sender<ClipboardEvent>,
         config: Arc<AsyncMutex<AppConfig>>,
         reset_generation: Arc<AtomicU64>,
+        dedup_baseline: Arc<AsyncMutex<Option<ClipboardDedupBaseline>>>,
     ) -> Self {
         let initial_generation = reset_generation.load(Ordering::SeqCst);
         Self {
             tx,
             config,
             reset_generation,
+            dedup_baseline,
             last_reset_generation: initial_generation,
             last_hash: [0u8; 32],
             last_read_error: None,
@@ -64,37 +75,95 @@ impl ClipboardMonitor {
         SELF_WRITING.load(Ordering::SeqCst)
     }
 
-    pub async fn run(&mut self) {
-        self.run_polling_loop().await;
-    }
+    pub fn capture_dedup_baseline(max_file_bytes: u64, sync_files: bool) -> ClipboardDedupBaseline {
+        let last_hash = match Self::read_clipboard(max_file_bytes, sync_files) {
+            Ok(snapshot) if !snapshot.is_empty() => snapshot.content_hash(),
+            _ => [0u8; 32],
+        };
 
-    async fn run_polling_loop(&mut self) {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(CLIPBOARD_POLL_INTERVAL_MS));
-        loop {
-            interval.tick().await;
-            self.capture_clipboard_change().await;
-        }
-    }
-
-    async fn capture_clipboard_change(&mut self) {
-        if Self::is_self_writing() {
-            return;
-        }
-
-        let current_generation = self.reset_generation.load(Ordering::SeqCst);
-        if current_generation != self.last_reset_generation {
-            self.last_reset_generation = current_generation;
-            self.last_hash = [0u8; 32];
-            self.last_read_error = None;
+        ClipboardDedupBaseline {
+            last_hash,
             #[cfg(windows)]
-            {
-                self.last_clipboard_seq = None;
+            last_clipboard_seq: Self::current_clipboard_seq(),
+        }
+    }
+
+    pub async fn run(&mut self) {
+        #[cfg(windows)]
+        {
+            match self.run_windows_listener().await {
+                Ok(()) => return,
+                Err(error) => {
+                    tracing::warn!(
+                        "clipboard event listener unavailable, falling back to polling: {error}"
+                    );
+                }
             }
         }
 
+        self.run_polling_loop().await;
+    }
+
+    #[cfg(windows)]
+    async fn run_windows_listener(&mut self) -> Result<(), String> {
+        let (signal_tx, mut signal_rx) = mpsc::unbounded_channel();
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+
+        std::thread::spawn(move || windows_listener::run(signal_tx, ready_tx));
+
+        match ready_rx.recv() {
+            Ok(Ok(())) => {
+                tracing::info!("clipboard event listener started");
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(_) => {
+                return Err("clipboard listener startup channel closed unexpectedly".to_string());
+            }
+        }
+
+        let mut pending_retry =
+            tokio::time::interval(std::time::Duration::from_millis(CLIPBOARD_POLL_INTERVAL_MS));
+        pending_retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut retry_pending = false;
+
+        loop {
+            tokio::select! {
+                signal = signal_rx.recv() => {
+                    match signal {
+                        Some(ClipboardListenerSignal::ClipboardChanged) => {
+                            retry_pending = self.capture_clipboard_change().await;
+                        }
+                        Some(ClipboardListenerSignal::Failed(error)) => return Err(error),
+                        None => return Err("clipboard listener exited unexpectedly".to_string()),
+                    }
+                }
+                _ = pending_retry.tick(), if retry_pending => {
+                    retry_pending = self.capture_clipboard_change().await;
+                }
+            }
+        }
+    }
+
+    async fn run_polling_loop(&mut self) {
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_millis(CLIPBOARD_POLL_INTERVAL_MS));
+        loop {
+            interval.tick().await;
+            let _ = self.capture_clipboard_change().await;
+        }
+    }
+
+    /// Returns `true` when clipboard content may not be ready yet and should be retried.
+    async fn capture_clipboard_change(&mut self) -> bool {
+        if Self::is_self_writing() {
+            return false;
+        }
+
+        self.apply_reset_if_needed().await;
+
         #[cfg(windows)]
         if !Self::clipboard_sequence_changed(self.last_clipboard_seq) {
-            return;
+            return false;
         }
 
         let (sync_files, max_file_bytes) = {
@@ -115,17 +184,17 @@ impl ClipboardMonitor {
                         tracing::debug!(
                             "clipboard image format present but read not ready, will retry"
                         );
-                        return;
+                        return true;
                     }
                     self.note_observed_clipboard_sequence();
                     self.last_hash = [0u8; 32];
-                    return;
+                    return false;
                 }
 
                 let hash = snapshot.content_hash();
                 if Self::should_suppress_local_emit(hash) {
                     self.track_clipboard_state(hash);
-                    return;
+                    return false;
                 }
 
                 if self.should_emit_clipboard_change(hash) {
@@ -134,6 +203,8 @@ impl ClipboardMonitor {
                 } else {
                     self.note_observed_clipboard_sequence();
                 }
+
+                false
             }
             Err(error) => {
                 #[cfg(windows)]
@@ -141,12 +212,31 @@ impl ClipboardMonitor {
                     tracing::debug!(
                         "clipboard read failed while image/file format present, will retry: {error}"
                     );
-                    return;
+                    return true;
                 }
                 self.note_observed_clipboard_sequence();
                 if self.last_read_error.as_deref() != Some(error.as_str()) {
                     self.last_read_error = Some(error.clone());
                 }
+                false
+            }
+        }
+    }
+
+    async fn apply_reset_if_needed(&mut self) {
+        let current_generation = self.reset_generation.load(Ordering::SeqCst);
+        if current_generation == self.last_reset_generation {
+            return;
+        }
+
+        self.last_reset_generation = current_generation;
+        self.last_read_error = None;
+
+        if let Some(baseline) = self.dedup_baseline.lock().await.take() {
+            self.last_hash = baseline.last_hash;
+            #[cfg(windows)]
+            {
+                self.last_clipboard_seq = baseline.last_clipboard_seq;
             }
         }
     }
@@ -391,6 +481,182 @@ impl ClipboardMonitor {
                 until_ms: now_ms() + REMOTE_WRITE_SUPPRESSION_MS,
             });
         }
+    }
+}
+
+#[cfg(windows)]
+enum ClipboardListenerSignal {
+    ClipboardChanged,
+    Failed(String),
+}
+
+#[cfg(windows)]
+mod windows_listener {
+    use std::ffi::c_void;
+
+    use tokio::sync::mpsc;
+    use windows_sys::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::System::DataExchange::{
+        AddClipboardFormatListener, RemoveClipboardFormatListener,
+    };
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetWindowLongPtrW,
+        RegisterClassW, SetWindowLongPtrW, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA,
+        HWND_MESSAGE, MSG, WM_CLIPBOARDUPDATE, WM_NCCREATE, WM_NCDESTROY, WNDCLASSW,
+    };
+
+    use super::ClipboardListenerSignal;
+
+    pub fn run(
+        signal_tx: mpsc::UnboundedSender<ClipboardListenerSignal>,
+        ready_tx: std::sync::mpsc::SyncSender<Result<(), String>>,
+    ) {
+        if let Err(error) = run_inner(signal_tx, ready_tx) {
+            tracing::warn!("clipboard event listener exited: {error}");
+        }
+    }
+
+    fn run_inner(
+        signal_tx: mpsc::UnboundedSender<ClipboardListenerSignal>,
+        ready_tx: std::sync::mpsc::SyncSender<Result<(), String>>,
+    ) -> Result<(), String> {
+        let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
+        if instance.is_null() {
+            let error = format!("load module handle failed: {}", unsafe { GetLastError() });
+            let _ = ready_tx.send(Err(error.clone()));
+            return Err(error);
+        }
+
+        let class_name = wide_null("PlanarClipClipboardListenerWindow");
+        let window_name = wide_null("PlanarClipClipboardListener");
+        let window_class = WNDCLASSW {
+            lpfnWndProc: Some(listener_wndproc),
+            hInstance: instance,
+            lpszClassName: class_name.as_ptr(),
+            ..unsafe { std::mem::zeroed() }
+        };
+
+        unsafe {
+            RegisterClassW(&window_class);
+        }
+
+        let listener_ptr = Box::into_raw(Box::new(signal_tx));
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                class_name.as_ptr(),
+                window_name.as_ptr(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                HWND_MESSAGE,
+                std::ptr::null_mut(),
+                instance,
+                listener_ptr.cast::<c_void>(),
+            )
+        };
+
+        if hwnd.is_null() {
+            unsafe {
+                drop(Box::from_raw(listener_ptr));
+            }
+            let error = format!(
+                "create clipboard listener window failed: {}",
+                unsafe { GetLastError() }
+            );
+            let _ = ready_tx.send(Err(error.clone()));
+            return Err(error);
+        }
+
+        if unsafe { AddClipboardFormatListener(hwnd) } == 0 {
+            let error = format!(
+                "register clipboard format listener failed: {}",
+                unsafe { GetLastError() }
+            );
+            let _ = ready_tx.send(Err(error.clone()));
+            return Err(error);
+        }
+
+        let _ = ready_tx.send(Ok(()));
+
+        let mut message = unsafe { std::mem::zeroed::<MSG>() };
+        loop {
+            let result = unsafe { GetMessageW(&mut message, hwnd, 0, 0) };
+            if result == -1 {
+                let error = format!(
+                    "clipboard listener message loop failed: {}",
+                    unsafe { GetLastError() }
+                );
+                if let Some(sender) = listener_sender(hwnd) {
+                    let _ = sender.send(ClipboardListenerSignal::Failed(error.clone()));
+                }
+                return Err(error);
+            }
+            if result == 0 {
+                break;
+            }
+
+            unsafe {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+
+        unsafe {
+            RemoveClipboardFormatListener(hwnd);
+        }
+
+        Ok(())
+    }
+
+    unsafe extern "system" fn listener_wndproc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        match message {
+            WM_NCCREATE => {
+                let create_struct = &*(lparam as *const CREATESTRUCTW);
+                let sender_ptr = create_struct.lpCreateParams
+                    as *mut mpsc::UnboundedSender<ClipboardListenerSignal>;
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, sender_ptr as isize);
+                1
+            }
+            WM_CLIPBOARDUPDATE => {
+                if let Some(sender) = listener_sender(hwnd) {
+                    let _ = sender.send(ClipboardListenerSignal::ClipboardChanged);
+                }
+                0
+            }
+            WM_NCDESTROY => {
+                let sender_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA)
+                    as *mut mpsc::UnboundedSender<ClipboardListenerSignal>;
+                if !sender_ptr.is_null() {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                    drop(Box::from_raw(sender_ptr));
+                }
+                DefWindowProcW(hwnd, message, wparam, lparam)
+            }
+            _ => DefWindowProcW(hwnd, message, wparam, lparam),
+        }
+    }
+
+    fn listener_sender(hwnd: HWND) -> Option<&'static mpsc::UnboundedSender<ClipboardListenerSignal>> {
+        let sender_ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) }
+            as *const mpsc::UnboundedSender<ClipboardListenerSignal>;
+        if sender_ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { &*sender_ptr })
+        }
+    }
+
+    fn wide_null(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
     }
 }
 
