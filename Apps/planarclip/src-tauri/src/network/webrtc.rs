@@ -837,18 +837,19 @@ impl ConnectionManager {
 
         *connected.lock().await = true;
 
+        let max_file_bytes = {
+            let state = app_handle.state::<crate::AppState>();
+            let config = state.config.lock().await;
+            config
+                .max_file_bytes
+                .unwrap_or(crate::clipboard::file::DEFAULT_MAX_FILE_BYTES)
+        };
+
         let receive_handle = handle.clone();
         tokio::spawn(async move {
             let mut peer_left = false;
             let mut image_session = ImageReceiveSession::new();
             let mut file_session = FileReceiveSession::new();
-            let max_file_bytes = {
-                let state = app_handle.state::<crate::AppState>();
-                let config = state.config.blocking_lock();
-                config
-                    .max_file_bytes
-                    .unwrap_or(crate::clipboard::file::DEFAULT_MAX_FILE_BYTES)
-            };
 
             while let Some(event) = event_rx.recv().await {
                 let should_continue = match event {

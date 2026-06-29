@@ -65,7 +65,7 @@ export function DevicesPanel({
 
             return (
               <div key={device.id} className="rounded-lg border border-border bg-secondary/30 p-3 transition-colors hover:border-primary/30">
-                <div className="mb-2 flex items-start">
+                <div className="mb-2 flex items-start justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-2">
                     <div
                       className={`rounded p-1.5 ${
@@ -75,37 +75,35 @@ export function DevicesPanel({
                       <OsIcon os={device.os} size={14} />
                     </div>
                     <div className="min-w-0">
-                      <div className="flex min-w-0 items-center gap-1">
-                        <p
-                          className={`truncate text-[13px] font-medium leading-none ${
-                            isConnected ? "text-primary" : "text-muted-foreground"
-                          }`}
-                        >
-                          {device.name}
-                        </p>
-                        {isConnected ? (
-                          <DisconnectIconButton
-                            size="sm"
-                            ariaLabel={disconnectTitle}
-                            title={disconnectTitle}
-                            onClick={onDisconnect}
-                          />
-                        ) : (
-                          <button
-                            type="button"
-                            aria-label={connectAction.ariaLabel}
-                            disabled={connectAction.disabled}
-                            title={connectAction.title}
-                            onClick={() => onConnectDevice(device)}
-                            className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            <Zap size={13} aria-hidden="true" />
-                          </button>
-                        )}
-                      </div>
+                      <p
+                        className={`truncate text-[13px] font-medium leading-none ${
+                          isConnected ? "text-primary" : "text-muted-foreground"
+                        }`}
+                      >
+                        {device.name}
+                      </p>
                       {showHostName && <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">主机名 {hostNameLabel}</p>}
                     </div>
                   </div>
+                  {isConnected ? (
+                    <DisconnectIconButton
+                      size="sm"
+                      ariaLabel={disconnectTitle}
+                      title={disconnectTitle}
+                      onClick={onDisconnect}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      aria-label={connectAction.ariaLabel}
+                      disabled={connectAction.disabled}
+                      title={connectAction.title}
+                      onClick={() => onConnectDevice(device)}
+                      className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <Zap size={13} aria-hidden="true" />
+                    </button>
+                  )}
                 </div>
                 <div className="space-y-1.5">
                   {[

@@ -121,7 +121,7 @@ planarclip/                  # 仓库根目录（pnpm workspace）
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **planarclip** (2236 symbols, 4084 relationships, 189 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **planarclip** (2369 symbols, 4381 relationships, 201 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
