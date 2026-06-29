@@ -53,7 +53,6 @@ type ClipboardPageProps = {
   setViewMode: (mode: ViewMode) => void;
   status: AppConnectionStatus;
   statusMessage: string;
-  historyLimit: number;
   isClearingHistory: boolean;
   onClearHistory: () => void;
 };
@@ -63,7 +62,6 @@ export function ClipboardPage({
   viewMode,
   setViewMode,
   status,
-  historyLimit,
   isClearingHistory,
   onClearHistory,
 }: ClipboardPageProps) {

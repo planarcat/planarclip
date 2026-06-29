@@ -385,7 +385,6 @@ export default function App() {
               setViewMode={setViewMode}
               status={status}
               statusMessage={lastMessage}
-              historyLimit={historyLimit}
               isClearingHistory={isClearingClipboardHistory}
               onClearHistory={() => {
                 void handleClearHistory();
