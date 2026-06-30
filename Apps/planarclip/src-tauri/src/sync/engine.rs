@@ -3,13 +3,12 @@ use std::sync::Arc;
 use tauri::AppHandle;
 use tokio::sync::{broadcast, Mutex};
 
-use crate::clipboard::file::{DEFAULT_MAX_FILE_BYTES, SYNC_NOT_CONNECTED_MESSAGE};
+use crate::clipboard::file::DEFAULT_MAX_FILE_BYTES;
 use crate::clipboard::image::INLINE_IMAGE_BYTES;
 use crate::clipboard::types::{ClipboardEvent, ClipboardOrigin, ClipboardSnapshot};
 use crate::network::sessions::ConnectionRegistry;
 use crate::network::webrtc::ConnectionHandle;
 use crate::storage::json::AppConfig;
-use crate::sync::activity::notify_sync_failure;
 use crate::sync::transfer_limit::TransferSlotLimiter;
 
 pub struct SyncEngine {
@@ -62,12 +61,6 @@ impl SyncEngine {
                     };
 
                     if handles.is_empty() {
-                        if should_notify_disconnected(&event.snapshot, sync_images, sync_files) {
-                            notify_sync_failure(
-                                Some(&self.app_handle),
-                                SYNC_NOT_CONNECTED_MESSAGE,
-                            );
-                        }
                         continue;
                     }
 
@@ -132,17 +125,5 @@ impl SyncEngine {
                 }
             }
         }
-    }
-}
-
-fn should_notify_disconnected(
-    snapshot: &ClipboardSnapshot,
-    sync_images: bool,
-    sync_files: bool,
-) -> bool {
-    match snapshot {
-        ClipboardSnapshot::FileList { files } if sync_files && !files.is_empty() => true,
-        ClipboardSnapshot::Image { png_bytes, .. } if sync_images && !png_bytes.is_empty() => true,
-        _ => false,
     }
 }
