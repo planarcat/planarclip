@@ -57,16 +57,22 @@ function pickDeviceName(...names: Array<string | undefined>) {
 
 export function buildDevices(
   lanDevices: LanDevicePayload[],
-  connectedPeer: ConnectedPeer | null,
+  connectedPeers: ConnectedPeer[],
   trustedPeers: TrustedPeerPayload[],
 ) {
   const deviceMap = new Map<string, Device>();
   const trustedPeerMap = new Map(trustedPeers.map((peer) => [peer.peer_id, peer]));
+  const connectedPeerMap = new Map(
+    connectedPeers
+      .filter((peer) => peer.peerId)
+      .map((peer) => [peer.peerId as string, peer]),
+  );
 
   lanDevices.forEach((device) => {
     const trustedPeer = trustedPeerMap.get(device.peer_id);
-    const isConnected = connectedPeer != null && connectedPeer.peerId === device.peer_id;
-    const displayName = pickDeviceName(connectedPeer?.peerId === device.peer_id ? connectedPeer.name : undefined, trustedPeer?.name, device.name);
+    const connectedPeer = connectedPeerMap.get(device.peer_id);
+    const isConnected = connectedPeer != null;
+    const displayName = pickDeviceName(connectedPeer?.name, trustedPeer?.name, device.name);
 
     deviceMap.set(device.peer_id, {
       id: createDeviceId(trustedPeer ? "trusted" : "lan", device.peer_id),
@@ -110,7 +116,7 @@ export function buildDevices(
     });
   });
 
-  if (connectedPeer) {
+  connectedPeers.forEach((connectedPeer) => {
     const connectedKey = connectedPeer.peerId ?? connectedPeer.name;
     const hasConnectedDevice = [...deviceMap.values()].some(
       (device) => device.peerId != null && device.peerId === connectedPeer.peerId,
@@ -131,7 +137,7 @@ export function buildDevices(
         discoveredOnLan: false,
       });
     }
-  }
+  });
 
   return [...deviceMap.values()].sort((left, right) => {
     if (left.status !== right.status) {

@@ -7,20 +7,23 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{broadcast, mpsc, Mutex};
 
-use crate::clipboard::file::{file_list_hash, file_list_summary, MAX_BATCH_BYTES};
+use crate::clipboard::file::{file_list_hash, file_list_summary, FILE_TRANSFER_LIMIT_MESSAGE, MAX_BATCH_BYTES, SYNC_NOT_CONNECTED_MESSAGE};
 use crate::clipboard::image::{format_byte_size, INLINE_IMAGE_BYTES, MAX_IMAGE_BYTES};
 use crate::clipboard::monitor::ClipboardMonitor;
 use crate::clipboard::types::{ClipboardEvent, ClipboardFileItem, ClipboardSnapshot};
 use crate::network::binary_chunk::BinaryChunk;
+use crate::network::sessions::{ConnectionRegistry, ConnectionSession};
 use crate::network::direct::{ConnectionEvent, DirectConnection};
 use crate::network::protocol::SignalMessage;
 use crate::network::signalling;
+use crate::sync::activity::{emit_sync_activity, notify_sync_failure, TransferProgressReporter};
 use crate::sync::dedup::DedupStore;
 use crate::sync::transfer::{
-    cancel_transfer_ack, max_file_bytes_to_mb, peer_file_too_large_reason, route_transfer_ack,
+    cancel_transfer_ack, max_file_bytes_to_mb, peer_file_too_large_message,
+    peer_file_receive_declined_message, peer_image_receive_declined_message,
+    peer_image_too_large_message, route_transfer_ack,
     send_file_with_flow_control, send_image_with_flow_control, CompletedFile,
-    CompletedImage, FileReceiveSession, ImageReceiveSession, PEER_TRANSFER_DECLINED,
-    PEER_TRANSFER_HANDLED,
+    CompletedImage, FileReceiveSession, ImageReceiveSession, PEER_TRANSFER_HANDLED,
 };
 
 #[derive(Clone)]
@@ -108,13 +111,13 @@ impl ConnectionHandle {
 
                 let size = png_bytes.len();
                 if size > MAX_IMAGE_BYTES {
-                    emit_sync_notice(app_handle, "图片超过 5 MB，未同步到其他设备。");
+                    notify_sync_failure(app_handle, "图片超过 5 MB，未同步到其他设备。");
                     return;
                 }
 
                 if size > INLINE_IMAGE_BYTES {
                     if !self.supports_chunked_images() {
-                        emit_sync_notice(
+                        notify_sync_failure(
                             app_handle,
                             "图片较大，当前连接方式暂不支持同步超过 512 KB 的图片。",
                         );
@@ -149,11 +152,15 @@ impl ConnectionHandle {
 
         let is_connected = *self.connected.lock().await;
         if !is_connected {
+            notify_sync_failure(
+                app_handle.as_ref(),
+                SYNC_NOT_CONNECTED_MESSAGE,
+            );
             return;
         }
 
         if !self.supports_chunked_files() {
-            emit_sync_notice(
+            notify_sync_failure(
                 app_handle.as_ref(),
                 "文件同步需要局域网直连，当前连接方式暂不支持。",
             );
@@ -162,22 +169,18 @@ impl ConnectionHandle {
 
         let batch_bytes: u64 = files.iter().map(|file| file.size_bytes).sum();
         if batch_bytes > MAX_BATCH_BYTES {
-            emit_sync_notice(
+            notify_sync_failure(
                 app_handle.as_ref(),
-                "本次复制的文件总量超过 500 MB，未同步到其他设备。",
+                FILE_TRANSFER_LIMIT_MESSAGE,
             );
             return;
         }
 
         for file in &files {
             if file.size_bytes > max_file_bytes {
-                emit_sync_notice(
+                notify_sync_failure(
                     app_handle.as_ref(),
-                    &format!(
-                        "文件 {} 超过 {}，未同步到其他设备。",
-                        file.file_name,
-                        format_byte_size(max_file_bytes as usize)
-                    ),
+                    FILE_TRANSFER_LIMIT_MESSAGE,
                 );
                 return;
             }
@@ -190,15 +193,37 @@ impl ConnectionHandle {
         };
         let batch_total = files.len() as u32;
 
-        emit_sync_activity(app_handle.as_ref(), true, "file", "正在同步文件…");
+        let mut progress = TransferProgressReporter::file_send(
+            app_handle.clone(),
+            files
+                .first()
+                .map(|file| file.file_name.clone())
+                .unwrap_or_else(|| "文件".to_string()),
+            None,
+            batch_id.as_ref().map(|_| batch_total),
+            batch_bytes,
+            0,
+        );
 
         let mut failed = false;
         let mut last_send_error = String::new();
 
         for (index, file) in files.iter().enumerate() {
+            progress.set_label(file.file_name.clone());
+            if batch_id.is_some() {
+                progress.set_batch_index(Some(index as u32));
+            }
+
             let Some(source_path) = file.source_path.as_ref() else {
                 failed = true;
+                last_send_error = "文件同步失败，请重新复制文件后再试。".to_string();
                 break;
+            };
+
+            let file_size = file.size_bytes;
+            let progress_sink = |acked: u32, chunk_total: u32| {
+                let force = acked == 0 || acked >= chunk_total;
+                progress.report_chunks(acked, chunk_total, file_size, force);
             };
 
             let result = send_file_with_flow_control(
@@ -212,6 +237,7 @@ impl ConnectionHandle {
                 batch_id.clone(),
                 batch_id.as_ref().map(|_| index as u32),
                 batch_id.as_ref().map(|_| batch_total),
+                Some(progress_sink),
             )
             .await;
 
@@ -221,6 +247,8 @@ impl ConnectionHandle {
                 tracing::warn!("File send failed for {}: {last_send_error}", file.file_name);
                 break;
             }
+
+            progress.complete_file_in_batch(file.size_bytes);
         }
 
         if !failed {
@@ -230,9 +258,9 @@ impl ConnectionHandle {
                     file_count: batch_total,
                 });
             }
-            emit_sync_activity(app_handle.as_ref(), false, "file", "文件已同步");
-        } else {
-            emit_sync_notice(app_handle.as_ref(), &last_send_error);
+            progress.finish("文件已同步");
+        } else if !last_send_error.is_empty() {
+            notify_sync_failure(app_handle.as_ref(), &last_send_error);
         }
     }
 
@@ -257,12 +285,16 @@ impl ConnectionHandle {
 
         let is_connected = *self.connected.lock().await;
         if !is_connected {
+            notify_sync_failure(
+                app_handle.as_ref(),
+                SYNC_NOT_CONNECTED_MESSAGE,
+            );
             return;
         }
 
         let size = png_bytes.len();
         if size > MAX_IMAGE_BYTES {
-            emit_sync_notice(app_handle.as_ref(), "图片超过 5 MB，未同步到其他设备。");
+            notify_sync_failure(app_handle.as_ref(), "图片超过 5 MB，未同步到其他设备。");
             return;
         }
 
@@ -272,7 +304,7 @@ impl ConnectionHandle {
         }
 
         if !self.supports_chunked_images() {
-            emit_sync_notice(
+            notify_sync_failure(
                 app_handle.as_ref(),
                 "图片较大，当前连接方式暂不支持同步超过 512 KB 的图片。",
             );
@@ -280,11 +312,14 @@ impl ConnectionHandle {
         }
 
         let hash = *blake3::hash(&png_bytes).as_bytes();
-
-        emit_sync_activity(app_handle.as_ref(), true, "image", "正在同步图片…");
+        let mut progress = TransferProgressReporter::image_send(app_handle.clone(), size as u64);
 
         let send_signal = |msg: SignalMessage| self.send_signal(msg);
         let send_binary = |chunk: BinaryChunk| self.send_binary(chunk);
+        let progress_sink = |acked: u32, chunk_total: u32| {
+            let force = acked == 0 || acked >= chunk_total;
+            progress.report_chunks(acked, chunk_total, size as u64, force);
+        };
         let result = send_image_with_flow_control(
             send_signal,
             send_binary,
@@ -294,21 +329,17 @@ impl ConnectionHandle {
             width,
             height,
             hash,
+            Some(progress_sink),
         )
         .await;
 
         match result {
             Ok(()) => {
-                emit_sync_activity(app_handle.as_ref(), false, "image", "图片已同步");
+                progress.finish("图片已同步");
             }
             Err(error) => {
                 tracing::warn!("Chunked image send failed: {error}");
-                let message = match error {
-                    "ack timeout" => "图片同步超时，请检查网络连接后重新复制图片。",
-                    "transfer cancelled" => "对方设备拒绝了图片传输。",
-                    _ => "图片同步失败，请重新复制图片后再试。",
-                };
-                emit_sync_notice(app_handle.as_ref(), message);
+                notify_sync_failure(app_handle.as_ref(), &error);
             }
         }
     }
@@ -347,34 +378,6 @@ impl ConnectionHandle {
     }
 }
 
-fn emit_sync_activity(app_handle: Option<&AppHandle>, active: bool, kind: &str, message: &str) {
-    let Some(app_handle) = app_handle else {
-        return;
-    };
-    let _ = app_handle.emit(
-        "clipboard-sync-activity",
-        serde_json::json!({
-            "active": active,
-            "kind": kind,
-            "message": message,
-        }),
-    );
-}
-
-fn emit_sync_notice(app_handle: Option<&AppHandle>, message: &str) {
-    let Some(app_handle) = app_handle else {
-        return;
-    };
-    let _ = app_handle.emit(
-        "clipboard-sync-activity",
-        serde_json::json!({
-            "active": false,
-            "kind": "notice",
-            "message": message,
-        }),
-    );
-}
-
 async fn finalize_received_file_names_as_text(
     text: String,
     dedup: &Arc<Mutex<DedupStore>>,
@@ -406,7 +409,7 @@ async fn finalize_received_file(
     dedup: &Arc<Mutex<DedupStore>>,
     clip_tx: &broadcast::Sender<ClipboardEvent>,
     peer_name: &str,
-    app_handle: Option<&AppHandle>,
+    _app_handle: Option<&AppHandle>,
     pending_paths: Option<Vec<PathBuf>>,
 ) {
     let paths = pending_paths.unwrap_or_else(|| vec![completed.path.clone()]);
@@ -451,7 +454,6 @@ async fn finalize_received_file(
 
     let snapshot = ClipboardSnapshot::FileList { files };
     let _ = clip_tx.send(ClipboardEvent::remote(snapshot, peer_name.to_string()));
-    emit_sync_activity(app_handle, false, "file", "文件已同步");
 }
 
 async fn finalize_received_image(
@@ -459,7 +461,7 @@ async fn finalize_received_image(
     dedup: &Arc<Mutex<DedupStore>>,
     clip_tx: &broadcast::Sender<ClipboardEvent>,
     peer_name: &str,
-    app_handle: Option<&AppHandle>,
+    _app_handle: Option<&AppHandle>,
 ) {
     {
         let mut d = dedup.lock().await;
@@ -469,7 +471,6 @@ async fn finalize_received_image(
         d.mark_seen(completed.hash);
     }
 
-    emit_sync_activity(app_handle, true, "image", "正在同步图片…");
     tracing::info!(
         "Received remote clipboard image: {}x{} ({})",
         completed.width,
@@ -487,7 +488,35 @@ async fn finalize_received_image(
         height: completed.height,
     };
     let _ = clip_tx.send(ClipboardEvent::remote(snapshot, peer_name.to_string()));
-    emit_sync_activity(app_handle, false, "image", "图片已同步");
+}
+
+fn report_receive_transfer_progress(
+    file_session: &FileReceiveSession,
+    file_progress: &mut Option<TransferProgressReporter>,
+    image_session: &ImageReceiveSession,
+    image_progress: &mut Option<TransferProgressReporter>,
+) {
+    if let Some((received, chunk_total, _, file_name, _, bytes_done, bytes_total)) =
+        file_session.receive_progress()
+    {
+        if let Some(reporter) = file_progress.as_mut() {
+            reporter.set_label(file_name);
+            let force = received == 0 || received >= chunk_total;
+            reporter.report_bytes(bytes_done, bytes_total, force);
+        }
+    }
+
+    if let Some((received, chunk_total, total_bytes)) = image_session.receive_progress() {
+        if let Some(reporter) = image_progress.as_mut() {
+            let bytes_done = if chunk_total > 0 {
+                ((received as f64 / chunk_total as f64) * total_bytes as f64) as u64
+            } else {
+                0
+            };
+            let force = received == 0 || received >= chunk_total;
+            reporter.report_bytes(bytes_done, total_bytes.max(1), force);
+        }
+    }
 }
 
 async fn handle_incoming_signal(
@@ -502,6 +531,8 @@ async fn handle_incoming_signal(
     file_session: &mut FileReceiveSession,
     handle: &ConnectionHandle,
     max_file_bytes: u64,
+    file_progress: &mut Option<TransferProgressReporter>,
+    image_progress: &mut Option<TransferProgressReporter>,
 ) -> bool {
     match msg {
         SignalMessage::PeerJoined { peer_id } => {
@@ -525,6 +556,8 @@ async fn handle_incoming_signal(
         SignalMessage::TransferCancel { transfer_id, reason } => {
             image_session.cancel(&transfer_id);
             file_session.cancel(&transfer_id);
+            *file_progress = None;
+            *image_progress = None;
             cancel_transfer_ack(
                 &handle.ack_waiters,
                 &handle.transfer_cancel_reasons,
@@ -553,13 +586,12 @@ async fn handle_incoming_signal(
             if total_bytes as usize > MAX_IMAGE_BYTES {
                 handle.send_signal(SignalMessage::TransferCancel {
                     transfer_id: transfer_id.clone(),
-                    reason: Some(PEER_TRANSFER_DECLINED.to_string()),
+                    reason: Some(peer_image_too_large_message()),
                 });
-                emit_sync_notice(app_handle, "收到的图片过大，已忽略。");
+                notify_sync_failure(app_handle, "收到的图片过大，已忽略。");
                 return true;
             }
 
-            emit_sync_activity(app_handle, true, "image", "正在同步图片…");
             if image_session
                 .begin(
                     transfer_id.clone(),
@@ -569,13 +601,17 @@ async fn handle_incoming_signal(
                     total_bytes,
                     chunk_size,
                 )
-                .is_err()
+                .is_ok()
             {
+                *image_progress = app_handle.cloned().map(|app| {
+                    TransferProgressReporter::image_receive(Some(app), total_bytes)
+                });
+            } else {
                 handle.send_signal(SignalMessage::TransferCancel {
                     transfer_id,
-                    reason: Some(PEER_TRANSFER_DECLINED.to_string()),
+                    reason: Some(peer_image_receive_declined_message()),
                 });
-                emit_sync_notice(app_handle, "无法接收这张图片。");
+                notify_sync_failure(app_handle, "无法接收这张图片。");
             }
             true
         }
@@ -586,9 +622,14 @@ async fn handle_incoming_signal(
             };
 
             if let Some(completed) = image_session.end(&transfer_id, hash_bytes) {
+                if let Some(reporter) = image_progress.as_mut() {
+                    reporter.finish("图片已同步");
+                }
+                *image_progress = None;
                 finalize_received_image(completed, dedup, clip_tx, peer_name, app_handle).await;
             } else {
-                emit_sync_notice(app_handle, "图片接收未完成，已忽略。");
+                *image_progress = None;
+                notify_sync_failure(app_handle, "图片接收未完成，已忽略。");
             }
             true
         }
@@ -599,7 +640,7 @@ async fn handle_incoming_signal(
             total_bytes,
             chunk_size,
             batch_id,
-            batch_index: _,
+            batch_index,
             batch_total,
         } => {
             let hash_bytes = match decode_hash(&hash) {
@@ -629,11 +670,11 @@ async fn handle_incoming_signal(
             if total_bytes > max_file_bytes {
                 handle.send_signal(SignalMessage::TransferCancel {
                     transfer_id: transfer_id.clone(),
-                    reason: Some(peer_file_too_large_reason(max_file_bytes_to_mb(
+                    reason: Some(peer_file_too_large_message(max_file_bytes_to_mb(
                         max_file_bytes,
                     ))),
                 });
-                emit_sync_notice(
+                notify_sync_failure(
                     app_handle,
                     &format!(
                         "收到的文件 {} 超过本机 {} 的上限，已忽略。可在设置中调大「文件大小上限」。",
@@ -650,24 +691,34 @@ async fn handle_incoming_signal(
                 }
             }
 
-            emit_sync_activity(app_handle, true, "file", "正在同步文件…");
             match file_session.begin(
                 transfer_id.clone(),
                 hash_bytes,
                 file_name.clone(),
                 total_bytes,
                 chunk_size,
-                batch_id,
+                batch_id.clone(),
                 max_file_bytes,
             ) {
-                Ok(()) => {}
+                Ok(()) => {
+                    *file_progress = app_handle.cloned().map(|app| {
+                        TransferProgressReporter::file_receive(
+                            Some(app),
+                            file_name.clone(),
+                            batch_index,
+                            batch_total,
+                            0,
+                            0,
+                        )
+                    });
+                }
                 Err(reason) => {
                     tracing::warn!("File receive begin failed for {file_name}: {reason}");
                     handle.send_signal(SignalMessage::TransferCancel {
                         transfer_id,
-                        reason: Some(PEER_TRANSFER_DECLINED.to_string()),
+                        reason: Some(peer_file_receive_declined_message()),
                     });
-                    emit_sync_notice(app_handle, "无法接收这个文件。");
+                    notify_sync_failure(app_handle, "无法接收这个文件。");
                 }
             }
             true
@@ -679,9 +730,17 @@ async fn handle_incoming_signal(
             };
 
             if let Some(completed) = file_session.end(&transfer_id, hash_bytes) {
+                let file_bytes = std::fs::metadata(&completed.path)
+                    .map(|metadata| metadata.len())
+                    .unwrap_or(0);
                 if let Some(batch_id) = completed.batch_id.clone() {
+                    file_session.mark_file_completed_in_batch(Some(&batch_id), file_bytes);
                     file_session.push_batch_file(&batch_id, completed.path.clone());
                 } else {
+                    if let Some(reporter) = file_progress.as_mut() {
+                        reporter.finish("文件已同步");
+                    }
+                    *file_progress = None;
                     finalize_received_file(
                         completed,
                         dedup,
@@ -693,7 +752,8 @@ async fn handle_incoming_signal(
                     .await;
                 }
             } else {
-                emit_sync_notice(app_handle, "文件接收未完成，已忽略。");
+                *file_progress = None;
+                notify_sync_failure(app_handle, "文件接收未完成，已忽略。");
             }
             true
         }
@@ -721,8 +781,13 @@ async fn handle_incoming_signal(
                     )
                     .await;
                 }
+                if let Some(reporter) = file_progress.as_mut() {
+                    reporter.finish("文件已同步");
+                }
+                *file_progress = None;
             } else {
-                emit_sync_notice(app_handle, "文件批次接收未完成，已忽略。");
+                *file_progress = None;
+                notify_sync_failure(app_handle, "文件批次接收未完成，已忽略。");
             }
             true
         }
@@ -797,18 +862,20 @@ async fn handle_incoming_signal(
                 Ok(value) => value,
                 Err(error) => {
                     tracing::warn!("Invalid image payload: {error}");
+                    notify_sync_failure(app_handle, "图片同步失败，请重新复制图片后再试。");
                     return true;
                 }
             };
 
             if png_bytes.len() > MAX_IMAGE_BYTES {
-                emit_sync_notice(app_handle, "收到的图片过大，已忽略。");
+                notify_sync_failure(app_handle, "收到的图片过大，已忽略。");
                 return true;
             }
 
             let payload_hash = *blake3::hash(&png_bytes).as_bytes();
             if payload_hash != hash_bytes {
                 tracing::warn!("Image hash mismatch");
+                notify_sync_failure(app_handle, "图片同步失败，请重新复制图片后再试。");
                 return true;
             }
 
@@ -891,6 +958,8 @@ impl ConnectionManager {
         tokio::spawn(async move {
             let mut image_session = ImageReceiveSession::new();
             let mut file_session = FileReceiveSession::new();
+            let mut file_progress = None;
+            let mut image_progress = None;
             let max_file_bytes = crate::clipboard::file::DEFAULT_MAX_FILE_BYTES;
             while let Some(msg) = sig_rx.recv().await {
                 if !handle_incoming_signal(
@@ -905,6 +974,8 @@ impl ConnectionManager {
                     &mut file_session,
                     &receive_handle,
                     max_file_bytes,
+                    &mut file_progress,
+                    &mut image_progress,
                 )
                 .await
                 {
@@ -921,9 +992,7 @@ impl ConnectionManager {
 
     pub async fn connect_direct(
         conn: DirectConnection,
-        connected: Arc<Mutex<bool>>,
-        connection: Arc<Mutex<Option<ConnectionHandle>>>,
-        connected_peer: Arc<Mutex<Option<crate::ConnectedPeerPayload>>>,
+        connections: Arc<Mutex<ConnectionRegistry>>,
         connection_generation: Arc<AtomicU64>,
         session_generation: u64,
         clip_tx: broadcast::Sender<ClipboardEvent>,
@@ -934,14 +1003,23 @@ impl ConnectionManager {
         let event_tx = conn.tx;
         let mut event_rx = conn.rx;
         let dedup = Arc::new(Mutex::new(DedupStore::new(128)));
+        let session_connected = Arc::new(Mutex::new(true));
 
         let handle = new_handle(
             HandleTransport::Direct { tx: event_tx },
-            connected.clone(),
+            session_connected.clone(),
             dedup.clone(),
         );
 
-        *connected.lock().await = true;
+        connections.lock().await.insert(
+            peer_id.clone(),
+            ConnectionSession {
+                handle: handle.clone(),
+                peer_name: peer_name.clone(),
+                session_generation,
+                connected: session_connected.clone(),
+            },
+        );
 
         let max_file_bytes = {
             let state = app_handle.state::<crate::AppState>();
@@ -956,6 +1034,8 @@ impl ConnectionManager {
             let mut peer_left = false;
             let mut image_session = ImageReceiveSession::new();
             let mut file_session = FileReceiveSession::new();
+            let mut file_progress = None;
+            let mut image_progress = None;
 
             while let Some(event) = event_rx.recv().await {
                 let should_continue = match event {
@@ -972,6 +1052,8 @@ impl ConnectionManager {
                             &mut file_session,
                             &receive_handle,
                             max_file_bytes,
+                            &mut file_progress,
+                            &mut image_progress,
                         )
                         .await
                     }
@@ -979,6 +1061,12 @@ impl ConnectionManager {
                         let send_ack = |msg: SignalMessage| receive_handle.send_signal(msg);
                         file_session.ingest_chunk(&chunk, &send_ack);
                         image_session.ingest_chunk(&chunk, &send_ack);
+                        report_receive_transfer_progress(
+                            &file_session,
+                            &mut file_progress,
+                            &image_session,
+                            &mut image_progress,
+                        );
                         true
                     }
                 };
@@ -989,16 +1077,25 @@ impl ConnectionManager {
                 }
             }
 
-            tracing::warn!("Direct connection lost");
+            tracing::warn!("Direct connection lost for peer {peer_id}");
 
             if connection_generation.load(Ordering::SeqCst) != session_generation {
                 return;
             }
 
-            let was_connected = *connected.lock().await;
-            *connected.lock().await = false;
-            *connection.lock().await = None;
-            *connected_peer.lock().await = None;
+            let was_connected = {
+                let mut registry = connections.lock().await;
+                let removed = registry
+                    .get(&peer_id)
+                    .filter(|session| session.session_generation == session_generation)
+                    .is_some();
+                if removed {
+                    registry.remove(&peer_id);
+                }
+                removed && *session_connected.lock().await
+            };
+
+            *session_connected.lock().await = false;
 
             if !was_connected {
                 return;

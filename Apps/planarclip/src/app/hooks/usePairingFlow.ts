@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import { MAX_CONNECTIONS } from "../constants/connection";
 import type {
   AppConnectionStatus,
@@ -68,7 +68,7 @@ type UsePairingFlowOptions = {
   incomingRequest: ConnectionRequestPayload | null;
   setStatus: (status: AppConnectionStatus) => void;
   setLastMessage: (message: string) => void;
-  setConnectedPeer: (peer: ConnectedPeer | null) => void;
+  setConnectedPeers: Dispatch<SetStateAction<ConnectedPeer[]>>;
   setShowPairing: (show: boolean) => void;
   setPairingInput: (value: string) => void;
   setPairingStage: (stage: PairingStage) => void;
@@ -101,6 +101,11 @@ function resolveAppStatus(connectedCount: number, connecting: boolean): AppConne
   return connectedCount > 0 ? "online" : "offline";
 }
 
+function upsertConnectedPeer(peers: ConnectedPeer[], peer: ConnectedPeer) {
+  const without = peers.filter((item) => item.peerId !== peer.peerId);
+  return [...without, peer];
+}
+
 /**
  * 管理配对弹层状态、手动配对、局域网连接与事件驱动的连接结果回写。
  */
@@ -113,7 +118,7 @@ export function usePairingFlow({
   incomingRequest,
   setStatus,
   setLastMessage,
-  setConnectedPeer,
+  setConnectedPeers,
   setShowPairing,
   setPairingInput,
   setPairingStage,
@@ -130,7 +135,6 @@ export function usePairingFlow({
   const pairingTargetRef = useRef<Device | null>(pairingTarget);
   const lastTerminalNoticeAtRef = useRef(0);
   const outboundCancelledRef = useRef(false);
-  const [switchConnectionTarget, setSwitchConnectionTarget] = useState<Device | null>(null);
 
   useEffect(() => {
     pairingStageRef.current = pairingStage;
@@ -191,7 +195,7 @@ export function usePairingFlow({
   const abortOutboundConnection = useCallback(async () => {
     outboundCancelledRef.current = true;
     try {
-      await callCommand("disconnect");
+      await callCommand("abort_outbound_connection");
     } catch {
     }
   }, [callCommand]);
@@ -351,13 +355,15 @@ export function usePairingFlow({
           return;
         }
 
-        setConnectedPeer({
-          name: device.name,
-          peerId: device.peerId,
-          address: device.address,
-          os: device.os,
-          source: "lan",
-        });
+        setConnectedPeers((previous) =>
+          upsertConnectedPeer(previous, {
+            name: device.name,
+            peerId: device.peerId,
+            address: device.address,
+            os: device.os,
+            source: "lan",
+          }),
+        );
         setStatus("online");
         setLastMessage(`已与 ${device.name} 建立连接，现在可以开始同步剪贴板了 — ${formatTime()}`);
         resetPairingFlow(true);
@@ -384,7 +390,7 @@ export function usePairingFlow({
       handleTerminalConnectionFailure,
       resetPairingFlow,
       refreshPairingCode,
-      setConnectedPeer,
+      setConnectedPeers,
       setLastMessage,
       setPairingError,
       setPairingHelperText,
@@ -401,41 +407,13 @@ export function usePairingFlow({
   const handleConnectLan = useCallback(
     async (device: Device) => {
       if (device.status === "connected") {
-        await executeConnectLan(device);
-        return;
-      }
-
-      if (connectedCount > 0) {
-        setSwitchConnectionTarget(device);
         return;
       }
 
       await executeConnectLan(device);
     },
-    [connectedCount, executeConnectLan],
+    [executeConnectLan],
   );
-
-  const confirmSwitchConnection = useCallback(async () => {
-    const target = switchConnectionTarget;
-    if (!target) {
-      return;
-    }
-
-    setSwitchConnectionTarget(null);
-    try {
-      await callCommand("disconnect");
-      setConnectedPeer(null);
-    } catch {
-      setLastMessage("断开当前连接时出了点问题，请稍后再试。");
-      return;
-    }
-
-    await executeConnectLan(target);
-  }, [callCommand, executeConnectLan, setConnectedPeer, setLastMessage, switchConnectionTarget]);
-
-  const cancelSwitchConnection = useCallback(() => {
-    setSwitchConnectionTarget(null);
-  }, []);
 
   const switchPairingTarget = useCallback(
     async (device: Device) => {
@@ -598,18 +576,25 @@ export function usePairingFlow({
     setStatus,
   ]);
 
-  const handleDisconnect = useCallback(async () => {
+  const handleDisconnect = useCallback(async (device?: Device) => {
     try {
-      await callCommand("disconnect");
-      setConnectedPeer(null);
-      setStatus("offline");
-      setLastMessage("已断开当前连接。");
-      resetPairingFlow(true);
+      if (device?.peerId) {
+        await callCommand("disconnect_peer", { peerId: device.peerId });
+        setConnectedPeers((previous) => previous.filter((peer) => peer.peerId !== device.peerId));
+        setLastMessage(`已断开与 ${device.name} 的连接。`);
+        setStatus(resolveAppStatus(Math.max(0, connectedCount - 1), false));
+      } else {
+        await callCommand("disconnect");
+        setConnectedPeers([]);
+        setStatus("offline");
+        setLastMessage("已断开所有连接。");
+        resetPairingFlow(true);
+      }
       void refreshLanDevices();
     } catch (error) {
       setLastMessage(normalizeUserMessage(error, "断开连接时出了点问题，请稍后再试。"));
     }
-  }, [callCommand, refreshLanDevices, resetPairingFlow, setConnectedPeer, setLastMessage, setStatus]);
+  }, [callCommand, connectedCount, refreshLanDevices, resetPairingFlow, setConnectedPeers, setLastMessage, setStatus]);
 
   const handleConnectionRequest = useCallback(
     (payload: ConnectionRequestPayload) => {
@@ -635,18 +620,22 @@ export function usePairingFlow({
   const handleConnectionEstablished = useCallback(
     (payload: ConnectionEstablishedPayload) => {
       if (outboundCancelledRef.current) {
-        void abortOutboundConnection();
+        if (payload.peer_id) {
+          void callCommand("disconnect_peer", { peerId: payload.peer_id }).catch(() => {});
+        }
         return;
       }
 
       const targetName = pairingTargetRef.current?.name;
-      setConnectedPeer({
-        name: payload.peer_name || "已连接设备",
-        peerId: payload.peer_id,
-        address: targetName ? `${targetName} · 局域网直连` : "局域网直连",
-        os: inferOs(payload.peer_name || "已连接设备"),
-        source: "lan",
-      });
+      setConnectedPeers((previous) =>
+        upsertConnectedPeer(previous, {
+          name: payload.peer_name || "已连接设备",
+          peerId: payload.peer_id,
+          address: targetName ? `${targetName} · 局域网直连` : "局域网直连",
+          os: inferOs(payload.peer_name || "已连接设备"),
+          source: "lan",
+        }),
+      );
       setStatus("online");
       setLastMessage(
         payload.is_reconnect
@@ -655,7 +644,7 @@ export function usePairingFlow({
       );
       resetPairingFlow(true);
     },
-    [abortOutboundConnection, resetPairingFlow, setConnectedPeer, setLastMessage, setStatus],
+    [callCommand, resetPairingFlow, setConnectedPeers, setLastMessage, setStatus],
   );
 
   const handleConnectionFailed = useCallback(
@@ -740,17 +729,18 @@ export function usePairingFlow({
   const handleConnectionEnded = useCallback(
     async (payload: ConnectionEndedPayload) => {
       const message = connectionEndedMessage(payload);
-      try {
-        await callCommand("disconnect");
-      } catch {
-      }
-      setConnectedPeer(null);
-      setStatus(resolveAppStatus(0, false));
+      setConnectedPeers((previous) => {
+        const next = previous.filter((peer) => peer.peerId !== payload.peer_id);
+        setStatus(resolveAppStatus(next.length, false));
+        return next;
+      });
       showTerminalNotice(message);
-      resetPairingFlow(true);
+      if (pairingStageRef.current !== "idle") {
+        resetPairingFlow(true);
+      }
       void refreshLanDevices();
     },
-    [callCommand, refreshLanDevices, resetPairingFlow, setConnectedPeer, setStatus, showTerminalNotice],
+    [refreshLanDevices, resetPairingFlow, setConnectedPeers, setStatus, showTerminalNotice],
   );
 
   const beginOutboundAttemptUi = useCallback(
@@ -863,9 +853,6 @@ export function usePairingFlow({
     handleOutboundConnectionStarted,
     handleOutboundConnectionPending,
     handlePairingCodeNeeded,
-    switchConnectionTarget,
-    confirmSwitchConnection,
-    cancelSwitchConnection,
     pairingStageRef,
     connectionLocked,
   };

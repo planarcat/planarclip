@@ -18,6 +18,7 @@ import type {
   TrustedPeerPayload,
   UiSettingsPayload,
 } from "../types";
+import type { ClipboardSyncActivityPayload } from "./useTransferProgress";
 import { mapClipboardHistory } from "../utils/clipboard";
 import { areLanDevicesEqual, inferOs } from "../utils/device";
 
@@ -32,6 +33,21 @@ function mapConnectedPeerPayload(payload: ConnectedPeerPayload): ConnectedPeer {
   };
 }
 
+function mapConnectedPeersPayload(payload: ConnectedPeerPayload[]): ConnectedPeer[] {
+  return payload.map(mapConnectedPeerPayload);
+}
+
+function areConnectedPeersEqual(left: ConnectedPeer[], right: ConnectedPeer[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((peer, index) => {
+    const other = right[index];
+    return peer.peerId === other.peerId && peer.name === other.name;
+  });
+}
+
 function useLatestRef<T>(value: T) {
   const ref = useRef(value);
   ref.current = value;
@@ -42,16 +58,18 @@ type UseConnectionBridgeOptions = {
   tauriAvailable: boolean;
   callCommand: CommandExecutor;
   status: AppConnectionStatus;
-  connectedPeer: ConnectedPeer | null;
+  connectedPeers: ConnectedPeer[];
   pairingStageRef: React.MutableRefObject<PairingStage>;
   setStatus: (status: AppConnectionStatus) => void;
   setLastMessage: (message: string) => void;
+  showNotice?: (message: string) => void;
+  onSyncActivity?: (payload: ClipboardSyncActivityPayload) => void;
   setPairingCode: (pairingCode: string) => void;
   onPairingCodeRotated?: (payload: PairingCodeRotatedPayload) => void;
   setLanDevices: Dispatch<SetStateAction<LanDevicePayload[]>>;
   setTrustedPeers: (peers: TrustedPeerPayload[]) => void;
   setClips: (clips: ReturnType<typeof mapClipboardHistory>) => void;
-  setConnectedPeer: (peer: ConnectedPeer | null) => void;
+  setConnectedPeers: Dispatch<SetStateAction<ConnectedPeer[]>>;
   applyDesktopUiSettings: (settings: UiSettingsPayload) => void;
   applyUiSettingsFallback: () => void;
   toUserMessage: (error: unknown, fallback: string, targetName?: string) => string;
@@ -73,16 +91,18 @@ export function useConnectionBridge({
   tauriAvailable,
   callCommand,
   status,
-  connectedPeer,
+  connectedPeers,
   pairingStageRef,
   setStatus,
   setLastMessage,
+  showNotice,
+  onSyncActivity,
   setPairingCode,
   onPairingCodeRotated,
   setLanDevices,
   setTrustedPeers,
   setClips,
-  setConnectedPeer,
+  setConnectedPeers,
   applyDesktopUiSettings,
   applyUiSettingsFallback,
   toUserMessage,
@@ -95,15 +115,17 @@ export function useConnectionBridge({
   onPairingCodeNeeded,
 }: UseConnectionBridgeOptions) {
   const statusRef = useRef(status);
-  const connectedPeerRef = useRef(connectedPeer);
+  const connectedPeersRef = useRef(connectedPeers);
 
   const setLanDevicesRef = useLatestRef(setLanDevices);
   const setClipsRef = useLatestRef(setClips);
   const setPairingCodeRef = useLatestRef(setPairingCode);
   const setStatusRef = useLatestRef(setStatus);
   const setLastMessageRef = useLatestRef(setLastMessage);
+  const showNoticeRef = useLatestRef(showNotice);
+  const onSyncActivityRef = useLatestRef(onSyncActivity);
   const setTrustedPeersRef = useLatestRef(setTrustedPeers);
-  const setConnectedPeerRef = useLatestRef(setConnectedPeer);
+  const setConnectedPeersRef = useLatestRef(setConnectedPeers);
   const applyDesktopUiSettingsRef = useLatestRef(applyDesktopUiSettings);
   const applyUiSettingsFallbackRef = useLatestRef(applyUiSettingsFallback);
   const toUserMessageRef = useLatestRef(toUserMessage);
@@ -121,8 +143,8 @@ export function useConnectionBridge({
   }, [status]);
 
   useEffect(() => {
-    connectedPeerRef.current = connectedPeer;
-  }, [connectedPeer]);
+    connectedPeersRef.current = connectedPeers;
+  }, [connectedPeers]);
 
   const refreshConnectionStatus = useCallback(async () => {
     try {
@@ -133,18 +155,18 @@ export function useConnectionBridge({
         if (statusRef.current !== "online") {
           setStatusRef.current("online");
         }
-        if (!connectedPeerRef.current) {
-          const peer = await callCommand<ConnectedPeerPayload | null>("get_connected_peer");
-          if (peer) {
-            setConnectedPeerRef.current(mapConnectedPeerPayload(peer));
-          }
+
+        const peers = await callCommand<ConnectedPeerPayload[]>("get_connected_peers");
+        const mappedPeers = mapConnectedPeersPayload(peers);
+        if (!areConnectedPeersEqual(connectedPeersRef.current, mappedPeers)) {
+          setConnectedPeersRef.current(mappedPeers);
         }
         return;
       }
 
       if (pairingStageRef.current === "idle") {
-        if (connectedPeerRef.current) {
-          setConnectedPeerRef.current(null);
+        if (connectedPeersRef.current.length > 0) {
+          setConnectedPeersRef.current([]);
           setLastMessageRef.current("当前连接已断开，请重新连接。");
         }
         setStatusRef.current("offline");
@@ -204,9 +226,17 @@ export function useConnectionBridge({
           setPairingCodeRef.current(event.payload.code);
           onPairingCodeRotatedRef.current?.(event.payload);
         }),
-        listen<{ active: boolean; kind: string; message: string }>("clipboard-sync-activity", (event) => {
-          if (event.payload.message) {
-            setLastMessageRef.current(event.payload.message);
+        listen<ClipboardSyncActivityPayload>("clipboard-sync-activity", (event) => {
+          const payload = event.payload;
+          if (!payload.message) {
+            return;
+          }
+
+          setLastMessageRef.current(payload.message);
+          onSyncActivityRef.current?.(payload);
+
+          if (payload.kind === "notice") {
+            showNoticeRef.current?.(payload.message);
           }
         }),
       ]);
@@ -226,7 +256,7 @@ export function useConnectionBridge({
           initialTrustedPeers,
           initialUiSettings,
           initialClipboardHistory,
-          initialConnectedPeer,
+          initialConnectedPeers,
           initialPendingConnectionRequest,
         ] = await Promise.all([
           callCommand<string>("get_status"),
@@ -235,7 +265,7 @@ export function useConnectionBridge({
           callCommand<TrustedPeerPayload[]>("get_trusted_peers"),
           callCommand<UiSettingsPayload>("get_ui_settings"),
           callCommand<ClipboardHistoryPayload[]>("get_clipboard_history"),
-          callCommand<ConnectedPeerPayload | null>("get_connected_peer"),
+          callCommand<ConnectedPeerPayload[]>("get_connected_peers"),
           callCommand<ConnectionRequestPayload | null>("get_pending_connection_request"),
         ]);
 
@@ -250,8 +280,8 @@ export function useConnectionBridge({
         applyDesktopUiSettingsRef.current(initialUiSettings);
         if (initialStatus === "connected") {
           setStatusRef.current("online");
-          if (initialConnectedPeer) {
-            setConnectedPeerRef.current(mapConnectedPeerPayload(initialConnectedPeer));
+          if (initialConnectedPeers.length > 0) {
+            setConnectedPeersRef.current(mapConnectedPeersPayload(initialConnectedPeers));
           }
           setLastMessageRef.current("已恢复现有连接，可以继续同步剪贴板。");
         } else {

@@ -10,7 +10,15 @@ use crate::storage::staging;
 
 pub const MAX_BATCH_BYTES: u64 = 500 * 1024 * 1024;
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
+pub const FILE_TRANSFER_LIMIT_MESSAGE: &str = "所选文件超出传输上限，同步失败";
+pub const SYNC_NOT_CONNECTED_MESSAGE: &str = "当前未连接其他设备，同步失败";
 const HISTORY_PREVIEW_MAX_EDGE: u32 = 480;
+const MAX_HISTORY_FILE_NAMES: usize = 50;
+
+/// User-facing validation errors from local clipboard reads (not transient I/O failures).
+pub fn is_user_limit_error(message: &str) -> bool {
+    message == FILE_TRANSFER_LIMIT_MESSAGE
+}
 
 pub fn hash_file(path: &Path) -> Result<[u8; 32], String> {
     let file = File::open(path).map_err(|error| format!("open file failed: {error}"))?;
@@ -130,21 +138,12 @@ pub fn snapshot_from_file_paths(
 
         let size_bytes = metadata.len();
         if size_bytes > max_file_bytes {
-            return Err(format!(
-                "文件 {} 超过 {}，未加入同步。",
-                path.file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("文件"),
-                format_byte_size(max_file_bytes as usize)
-            ));
+            return Err(FILE_TRANSFER_LIMIT_MESSAGE.to_string());
         }
 
         batch_bytes = batch_bytes.saturating_add(size_bytes);
         if batch_bytes > max_batch_bytes {
-            return Err(format!(
-                "本次复制的文件总量超过 {}，未加入同步。",
-                format_byte_size(max_batch_bytes as usize)
-            ));
+            return Err(FILE_TRANSFER_LIMIT_MESSAGE.to_string());
         }
 
         let content_hash = hash_file(&path)?;
@@ -192,6 +191,14 @@ pub fn file_list_as_sync_text(files: &[ClipboardFileItem]) -> Option<String> {
 pub fn file_list_size_label(files: &[ClipboardFileItem]) -> String {
     let total: u64 = files.iter().map(|file| file.size_bytes).sum();
     format_byte_size(total as usize)
+}
+
+pub fn file_names_for_history(files: &[ClipboardFileItem]) -> Vec<String> {
+    files
+        .iter()
+        .take(MAX_HISTORY_FILE_NAMES)
+        .map(|file| file.file_name.clone())
+        .collect()
 }
 
 pub fn is_image_file_name(file_name: &str) -> bool {

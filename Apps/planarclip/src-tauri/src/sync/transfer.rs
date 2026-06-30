@@ -17,7 +17,7 @@ const ACK_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Opaque peer response: transfer was handled on the remote side (not an error for sender).
 pub const PEER_TRANSFER_HANDLED: &str = "peer:handled";
-/// Opaque peer response: transfer declined without exposing local settings.
+/// Legacy opaque code; prefer sending a user-facing reason string from the receiver.
 pub const PEER_TRANSFER_DECLINED: &str = "peer:declined";
 const PEER_FILE_TOO_LARGE_PREFIX: &str = "peer:file-too-large:";
 
@@ -25,24 +25,61 @@ pub fn max_file_bytes_to_mb(bytes: u64) -> u32 {
     ((bytes + 1024 * 1024 - 1) / (1024 * 1024)).max(1) as u32
 }
 
-pub fn peer_file_too_large_reason(limit_mb: u32) -> String {
-    format!("{PEER_FILE_TOO_LARGE_PREFIX}{limit_mb}")
+/// Receiver-composed reason sent to the sender when a file exceeds the local limit.
+pub fn peer_file_too_large_message(limit_mb: u32) -> String {
+    format!("文件大小超出限制大小 {limit_mb} MB")
 }
 
-/// Map an opaque peer cancel reason to sender outcome. `Ok(())` means treat as success.
-pub fn resolve_peer_transfer_cancel(reason: Option<String>) -> Result<(), String> {
+pub fn peer_image_too_large_message() -> String {
+    "图片超过本机可接收的大小".to_string()
+}
+
+pub fn peer_file_receive_declined_message() -> String {
+    "无法接收这个文件".to_string()
+}
+
+pub fn peer_image_receive_declined_message() -> String {
+    "无法接收这张图片".to_string()
+}
+
+pub fn format_subject_sync_failure(subject: &str, peer_reason: &str) -> String {
+    let trimmed = peer_reason.trim().trim_end_matches(['。', '.', ' ']);
+    if trimmed.is_empty() {
+        return format!("{subject}同步失败，请重新复制后再试。");
+    }
+    format!("{subject}同步失败，{trimmed}。")
+}
+
+fn resolve_peer_transfer_cancel_reason(reason: Option<String>, subject: &str) -> Result<(), String> {
     match reason {
         Some(ref reason) if reason == PEER_TRANSFER_HANDLED => Ok(()),
         Some(ref reason) if reason.starts_with(PEER_FILE_TOO_LARGE_PREFIX) => {
-            let limit_mb = &reason[PEER_FILE_TOO_LARGE_PREFIX.len()..];
-            Err(format!(
-                "文件同步失败，对方回应：文件大小超出限制大小 {} MB。",
-                limit_mb
+            let limit_mb = reason[PEER_FILE_TOO_LARGE_PREFIX.len()..]
+                .parse::<u32>()
+                .unwrap_or(1);
+            Err(format_subject_sync_failure(
+                subject,
+                &peer_file_too_large_message(limit_mb),
             ))
         }
-        Some(_) => Err("文件同步失败，对方拒绝了这次传输。".to_string()),
-        None => Err("文件同步失败，请重新复制文件后再试。".to_string()),
+        Some(ref reason) if reason == PEER_TRANSFER_DECLINED || reason.starts_with("peer:") => {
+            Err(format_subject_sync_failure(subject, "对方拒绝了这次传输"))
+        }
+        Some(ref reason) => Err(format_subject_sync_failure(subject, reason)),
+        None => Err(format!(
+            "{subject}同步失败，请重新复制{}后再试。",
+            if subject == "图片" { "图片" } else { "文件" }
+        )),
     }
+}
+
+/// Map a peer cancel reason to sender outcome. `Ok(())` means treat as success.
+pub fn resolve_peer_transfer_cancel(reason: Option<String>) -> Result<(), String> {
+    resolve_peer_transfer_cancel_reason(reason, "文件")
+}
+
+pub fn resolve_peer_image_transfer_cancel(reason: Option<String>) -> Result<(), String> {
+    resolve_peer_transfer_cancel_reason(reason, "图片")
 }
 
 pub async fn take_peer_transfer_cancel(
@@ -51,6 +88,14 @@ pub async fn take_peer_transfer_cancel(
 ) -> Result<(), String> {
     let reason = cancel_reasons.lock().await.remove(transfer_id);
     resolve_peer_transfer_cancel(reason)
+}
+
+pub async fn take_peer_image_transfer_cancel(
+    cancel_reasons: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, String>>>,
+    transfer_id: &str,
+) -> Result<(), String> {
+    let reason = cancel_reasons.lock().await.remove(transfer_id);
+    resolve_peer_image_transfer_cancel(reason)
 }
 
 pub struct CompletedImage {
@@ -173,6 +218,15 @@ impl ImageReceiveSession {
         }
     }
 
+    pub fn receive_progress(&self) -> Option<(u32, u32, u64)> {
+        let (_, pending) = self.active.as_ref()?;
+        Some((
+            pending.received.len() as u32,
+            pending.chunk_total,
+            pending.buffer.len() as u64,
+        ))
+    }
+
     fn finalize_active(&mut self) -> Option<CompletedImage> {
         let (_, pending) = self.active.take()?;
         let actual_hash = *blake3::hash(&pending.buffer).as_bytes();
@@ -244,16 +298,20 @@ pub fn build_binary_chunk(
     })
 }
 
-pub async fn send_image_with_flow_control(
+pub async fn send_image_with_flow_control<F>(
     send_signal: impl Fn(SignalMessage),
     send_binary: impl Fn(BinaryChunk),
     ack_registry: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, mpsc::UnboundedSender<u32>>>>,
-    _cancel_reasons: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, String>>>,
+    cancel_reasons: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, String>>>,
     png_bytes: &[u8],
     width: u32,
     height: u32,
     hash: [u8; 32],
-) -> Result<(), &'static str> {
+    mut on_progress: Option<F>,
+) -> Result<(), String>
+where
+    F: FnMut(u32, u32) + Send,
+{
     let transfer_id = uuid::Uuid::new_v4().to_string();
     let chunk_total = chunk_total_for_size(png_bytes.len(), CHUNK_SIZE);
     let hash_hex = hex::encode(hash);
@@ -271,6 +329,10 @@ pub async fn send_image_with_flow_control(
     let mut next_index = 0u32;
     let mut in_flight = 0u32;
     let mut acked = HashSet::new();
+
+    if let Some(on_progress) = on_progress.as_mut() {
+        on_progress(0, chunk_total);
+    }
 
     let transfer_result = async {
         while next_index < chunk_total || in_flight > 0 {
@@ -292,9 +354,14 @@ pub async fn send_image_with_flow_control(
                         continue;
                     }
                     in_flight = in_flight.saturating_sub(1);
+                    if let Some(on_progress) = on_progress.as_mut() {
+                        on_progress(acked.len() as u32, chunk_total);
+                    }
                 }
-                Ok(None) => return Err("transfer cancelled"),
-                Err(_) => return Err("ack timeout"),
+                Ok(None) => {
+                    return take_peer_image_transfer_cancel(cancel_reasons, &transfer_id).await;
+                }
+                Err(_) => return Err("图片同步超时，请检查网络连接后重新复制图片。".to_string()),
             }
         }
 
@@ -341,6 +408,8 @@ struct PendingFileBatch {
     batch_id: String,
     paths: Vec<PathBuf>,
     expected_count: u32,
+    total_bytes: u64,
+    completed_bytes: u64,
 }
 
 pub struct FileReceiveSession {
@@ -376,6 +445,13 @@ impl FileReceiveSession {
         File::create(&temp_path).map_err(|_| "temp file create failed")?;
 
         let chunk_total = chunk_total_for_size(total_bytes as usize, chunk_size as usize);
+        if let Some(batch_id) = batch_id.clone() {
+            if let Some(batch) = self.batch.as_mut() {
+                if batch.batch_id == batch_id {
+                    batch.total_bytes = batch.total_bytes.saturating_add(total_bytes);
+                }
+            }
+        }
         self.active = Some((
             transfer_id,
             PendingFileReceive {
@@ -491,7 +567,59 @@ impl FileReceiveSession {
             batch_id,
             paths: Vec::new(),
             expected_count,
+            total_bytes: 0,
+            completed_bytes: 0,
         });
+    }
+
+    pub fn receive_progress(&self) -> Option<(u32, u32, u64, String, Option<u32>, u64, u64)> {
+        let (_, pending) = self.active.as_ref()?;
+        let received = pending.received.len() as u32;
+        let file_partial = if pending.chunk_total > 0 {
+            ((received as f64 / pending.chunk_total as f64) * pending.total_bytes as f64) as u64
+        } else {
+            0
+        };
+        let batch_total = self
+            .batch
+            .as_ref()
+            .filter(|batch| pending.batch_id.as_ref().is_some_and(|id| id == &batch.batch_id))
+            .map(|batch| batch.expected_count);
+        let (bytes_done, bytes_total) = if let (Some(batch_id), Some(batch)) =
+            (pending.batch_id.as_ref(), self.batch.as_ref())
+        {
+            if batch_id == &batch.batch_id {
+                (
+                    batch.completed_bytes.saturating_add(file_partial),
+                    batch.total_bytes.max(pending.total_bytes),
+                )
+            } else {
+                (file_partial, pending.total_bytes)
+            }
+        } else {
+            (file_partial, pending.total_bytes)
+        };
+        Some((
+            received,
+            pending.chunk_total,
+            pending.total_bytes,
+            pending.file_name.clone(),
+            batch_total,
+            bytes_done,
+            bytes_total.max(1),
+        ))
+    }
+
+    pub fn mark_file_completed_in_batch(&mut self, batch_id: Option<&str>, file_bytes: u64) {
+        let Some(batch_id) = batch_id else {
+            return;
+        };
+        let Some(batch) = self.batch.as_mut() else {
+            return;
+        };
+        if batch.batch_id == batch_id {
+            batch.completed_bytes = batch.completed_bytes.saturating_add(file_bytes);
+        }
     }
 
     pub fn has_batch(&self, batch_id: &str) -> bool {
@@ -523,7 +651,7 @@ impl FileReceiveSession {
     }
 }
 
-pub async fn send_file_with_flow_control(
+pub async fn send_file_with_flow_control<F>(
     send_signal: impl Fn(SignalMessage),
     send_binary: impl Fn(BinaryChunk),
     ack_registry: &std::sync::Arc<tokio::sync::Mutex<HashMap<String, mpsc::UnboundedSender<u32>>>>,
@@ -534,7 +662,11 @@ pub async fn send_file_with_flow_control(
     batch_id: Option<String>,
     batch_index: Option<u32>,
     batch_total: Option<u32>,
-) -> Result<(), String> {
+    mut on_progress: Option<F>,
+) -> Result<(), String>
+where
+    F: FnMut(u32, u32) + Send,
+{
     let metadata = fs::metadata(file_path).map_err(|_| "file metadata failed".to_string())?;
     let total_bytes = metadata.len();
     let transfer_id = uuid::Uuid::new_v4().to_string();
@@ -558,6 +690,10 @@ pub async fn send_file_with_flow_control(
     let mut acked = HashSet::new();
     let mut file = File::open(file_path).map_err(|_| "file open failed".to_string())?;
 
+    if let Some(on_progress) = on_progress.as_mut() {
+        on_progress(0, chunk_total);
+    }
+
     let transfer_result = async {
         while next_index < chunk_total || in_flight > 0 {
             while in_flight < SEND_WINDOW && next_index < chunk_total {
@@ -578,6 +714,9 @@ pub async fn send_file_with_flow_control(
                         continue;
                     }
                     in_flight = in_flight.saturating_sub(1);
+                    if let Some(on_progress) = on_progress.as_mut() {
+                        on_progress(acked.len() as u32, chunk_total);
+                    }
                 }
                 Ok(None) => {
                     return take_peer_transfer_cancel(cancel_reasons, &transfer_id).await;
@@ -668,4 +807,28 @@ pub async fn cancel_transfer_ack(
             .insert(transfer_id.to_string(), reason);
     }
     registry.lock().await.remove(transfer_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peer_caused_failure_uses_receiver_message() {
+        let err = resolve_peer_transfer_cancel(Some("文件大小超出限制大小 100 MB".to_string()))
+            .unwrap_err();
+        assert_eq!(err, "文件同步失败，文件大小超出限制大小 100 MB。");
+    }
+
+    #[test]
+    fn legacy_peer_file_too_large_code_still_works() {
+        let err = resolve_peer_transfer_cancel(Some("peer:file-too-large:100".to_string()))
+            .unwrap_err();
+        assert_eq!(err, "文件同步失败，文件大小超出限制大小 100 MB。");
+    }
+
+    #[test]
+    fn peer_handled_is_success() {
+        assert!(resolve_peer_transfer_cancel(Some(PEER_TRANSFER_HANDLED.to_string())).is_ok());
+    }
 }

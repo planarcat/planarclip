@@ -1,47 +1,42 @@
 # 未执行 / 遗留事项
 
 > 生成时间: 2026-06-27
-> 最后更新: 2026-06-29（Win 大图分块、截图粘贴为文件、关文件同步文件名回退已验证）
+> 最后更新: 2026-06-30
 > 来源主题: 2026-06-27-image-file-sync
-> 继承自: 2026-06-26-multi-connection-sessions/UNEXECUTED.md
+> 说明: 本文档记录当前主题执行后仍未完成、未处理或计划未来处理的事项
 
 详细任务与勾选状态见 [execution-plan.md](execution-plan.md)；已验证结果见 [COMPLETED.md](COMPLETED.md)。
 
 ---
 
-## 继承事项（继续传递）
+## ⏳ 仍待处理的遗留事项
 
-| 事项 | 处理结果 |
-|:---|:---|
-| 后端多路 TCP 会话 | Phase 5 |
-| 剪贴板多播 | Phase 5 |
-| 按设备断开 | Phase 5 |
-| 前端多 connectedPeer | Phase 5 |
-| 5 台联调验收 | Phase 5 |
+### ❌ 执行失败
 
----
+（无）
 
-## 待联调 / 待验收
+### ⚠️ 未开发完成 / 完成度不足
 
-| 事项 | 说明 |
-|:---|:---|
-| 图片 macOS 双机联调 | Win 端 inline / 分块 / 资源管理器粘贴已验证 |
+| 事项 | 当前状态 | 差距描述 | 后续建议 |
+|:---|:---|:---|:---|
+| macOS 图片双机联调 | 代码已完成，Win 端已验证 | macOS 端图片复制/粘贴未在真机验证 | 在 Mac 上与 Win 对测截图互传 |
+| macOS 文件同步双机联调 | `platform/macos/clipboard.rs` 已接入 | Finder 复制 → 同步 → 对端粘贴未验证 | 需在 Mac 环境双机联调 |
+| Win↔Mac 文件交叉测试 | Phase 4 最后一项 checklist 未勾选 | 跨平台文件同步全链路未测 | Win 发 Mac 收、Mac 发 Win 收各测一轮 |
+| 5 台多连接联调验收 | Phase 5 多连接代码已落地 | 连 2–5 台多播、单台 `disconnect_peer` 不影响其他台、全局 2 路大文件并发未实测 | 准备 2–5 台设备做文本/图片/文件多播验收 |
 
----
+### 📅 被移出本次开发节奏
 
-## 未开发（后续 Phase）
+（无）
 
-| 事项 | Phase | 参考 |
+### 🔮 计划在未来版本加入
+
+| 事项 | 计划版本/Phase | 参考讨论 |
 |:---|:---|:---|
-| macOS 文件同步（NSPasteboard） | 4 | execution-plan.md |
-| 百分比进度条 | 4 | [03-transfer-progress-design.md](03-transfer-progress-design.md) |
-| 多文件 batch 协议（batch_id / FileBatchEnd） | 4 | 当前多文件批次已可用，正式协议待定 |
-| 剪贴板历史文件条目增强 | 4 | execution-plan.md |
-| Win↔Mac 文件交叉测试 | 4 | execution-plan.md |
-| 多连接图片/文件多播 | 5 | execution-plan.md、multi-connection-sessions |
+| macOS 历史缩略图 Shell 预览 | Phase 4 可选（P2） | [04-clipboard-history-file-entries-design.md](04-clipboard-history-file-entries-design.md) §10 |
+| 多连接场景每 peer 独立进度条 | Phase 5 可选 | [03-transfer-progress-design.md](03-transfer-progress-design.md) |
 
 ---
 
-## 已放弃
+## 🗑️ 已放弃事项（仅记录）
 
 （无）

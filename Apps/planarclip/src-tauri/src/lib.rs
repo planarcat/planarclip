@@ -25,6 +25,7 @@ use clipboard::types::{ClipboardEvent, ClipboardHistoryEntry, ClipboardOrigin};
 use crypto::keys::{peer_id_from_public_key, KeyPair};
 use network::direct::{self, InitiatorResult, ListenerEvent};
 use network::discovery::{self, DiscoveryEvent, LanDevice};
+use network::sessions::ConnectionRegistry;
 use network::webrtc::{ConnectionHandle, ConnectionManager};
 use storage::json::{self as storage_json, AppConfig, KeyPairData, PeerData, TrustedPeerData};
 
@@ -34,7 +35,7 @@ const DEFAULT_UI_COLOR_SCHEME: &str = "dark";
 const DEFAULT_UI_THEME_COLOR: &str = "cyan";
 const CLIPBOARD_HISTORY_LIMIT_OPTIONS: [usize; 5] = [25, 50, 100, 200, 500];
 const DEFAULT_CLIPBOARD_HISTORY_LIMIT: usize = 100;
-const MAX_CONNECTIONS: usize = 5;
+pub(crate) const MAX_CONNECTIONS: usize = 5;
 const DEFAULT_MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 
 fn default_device_name() -> String {
@@ -59,9 +60,8 @@ fn default_device_name() -> String {
 pub struct AppState {
     pub config: Arc<Mutex<AppConfig>>,
     pub key_pair: Arc<Mutex<Option<KeyPair>>>,
-    pub connected: Arc<Mutex<bool>>,
-    pub connected_peer: Arc<Mutex<Option<ConnectedPeerPayload>>>,
-    pub connection: Arc<Mutex<Option<ConnectionHandle>>>,
+    pub connections: Arc<Mutex<ConnectionRegistry>>,
+    pub transfer_slots: Arc<sync::transfer_limit::TransferSlotLimiter>,
     pub connection_generation: Arc<AtomicU64>,
     pub clipboard_monitor_generation: Arc<AtomicU64>,
     pub clipboard_dedup_baseline: Arc<Mutex<Option<ClipboardDedupBaseline>>>,
@@ -259,18 +259,18 @@ async fn discover_trusted_peers_by_tcp_probe(
 pub(crate) async fn refresh_lan_presence(
     config: &Arc<Mutex<AppConfig>>,
     lan_devices: &Arc<Mutex<Vec<LanDevice>>>,
-    connected_peer: &Arc<Mutex<Option<ConnectedPeerPayload>>>,
+    connections: &Arc<Mutex<ConnectionRegistry>>,
     tcp_port: u16,
     app: &tauri::AppHandle,
 ) {
     discover_trusted_peers_by_tcp_probe(config, lan_devices, tcp_port, app).await;
-    reconcile_lan_devices(config, lan_devices, connected_peer, tcp_port, app).await;
+    reconcile_lan_devices(config, lan_devices, connections, tcp_port, app).await;
 }
 
 pub(crate) fn spawn_lan_presence_refresh(state: &AppState, app: &tauri::AppHandle) {
     let config = state.config.clone();
     let lan_devices = state.lan_devices.clone();
-    let connected_peer = state.connected_peer.clone();
+    let connections = state.connections.clone();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(LAN_PRESENCE_REFRESH_DELAY).await;
@@ -279,7 +279,7 @@ pub(crate) fn spawn_lan_presence_refresh(state: &AppState, app: &tauri::AppHandl
             .await
             .tcp_port
             .unwrap_or(app_profile::DEFAULT_TCP_PORT);
-        refresh_lan_presence(&config, &lan_devices, &connected_peer, tcp_port, &app).await;
+        refresh_lan_presence(&config, &lan_devices, &connections, tcp_port, &app).await;
     });
 }
 
@@ -356,7 +356,7 @@ pub(crate) async fn resolve_connection_ended_message(
 async fn reconcile_lan_devices(
     _config: &Arc<Mutex<AppConfig>>,
     lan_devices: &Arc<Mutex<Vec<LanDevice>>>,
-    connected_peer: &Arc<Mutex<Option<ConnectedPeerPayload>>>,
+    connections: &Arc<Mutex<ConnectionRegistry>>,
     tcp_port: u16,
     app: &tauri::AppHandle,
 ) {
@@ -366,17 +366,18 @@ async fn reconcile_lan_devices(
     }
 
     let probe_ports = app_profile::tcp_probe_port_candidates(tcp_port);
-    let connected_peer_id = connected_peer
+    let connected_peer_ids: std::collections::HashSet<String> = connections
         .lock()
         .await
-        .as_ref()
-        .map(|peer| peer.peer_id.clone());
+        .connected_peer_ids()
+        .into_iter()
+        .collect();
 
     let probe_results = futures_util::future::join_all(snapshot.iter().map(|device| {
         let peer_id = device.peer_id.clone();
         let ip = device.ip.clone();
         let port = device.port;
-        let skip_probe = connected_peer_id.as_deref() == Some(peer_id.as_str());
+        let skip_probe = connected_peer_ids.contains(&peer_id);
         let probe_ports = probe_ports.clone();
         async move {
             if skip_probe {
@@ -579,39 +580,11 @@ fn load_clipboard_history_from_config(config: &AppConfig) -> Vec<ClipboardHistor
         .collect()
 }
 
-pub(crate) async fn store_connected_peer(
-    connected_peer: &Arc<Mutex<Option<ConnectedPeerPayload>>>,
-    peer_name: String,
-    peer_id: String,
-) {
-    *connected_peer.lock().await = Some(ConnectedPeerPayload {
-        peer_name,
-        peer_id,
-    });
-}
-
-async fn clear_connected_peer(connected_peer: &Arc<Mutex<Option<ConnectedPeerPayload>>>) {
-    *connected_peer.lock().await = None;
-}
-
-fn next_connection_generation(state: &AppState) -> u64 {
-    state.connection_generation.fetch_add(1, Ordering::SeqCst) + 1
-}
-
-async fn is_duplicate_active_session(
-    connected: &Arc<Mutex<bool>>,
-    connected_peer: &Arc<Mutex<Option<ConnectedPeerPayload>>>,
+pub(crate) async fn is_peer_connected(
+    connections: &Arc<Mutex<ConnectionRegistry>>,
     peer_id: &str,
 ) -> bool {
-    if !*connected.lock().await {
-        return false;
-    }
-
-    connected_peer
-        .lock()
-        .await
-        .as_ref()
-        .is_some_and(|peer| peer.peer_id() == peer_id)
+    connections.lock().await.contains(peer_id)
 }
 
 async fn persist_clipboard_history(
@@ -837,6 +810,10 @@ fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHist
                 timestamp_ms: event.timestamp_ms,
                 size_label: None,
                 image_data_url: None,
+                file_count: None,
+                file_names: None,
+                preview_kind: None,
+                thumbnail_ref: None,
             })
         }
         clipboard::types::ClipboardSnapshot::Image {
@@ -852,6 +829,10 @@ fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHist
             timestamp_ms: event.timestamp_ms,
             size_label: Some(clipboard::image::format_byte_size(png_bytes.len())),
             image_data_url: Some(clipboard::image::png_data_url(png_bytes)),
+            file_count: None,
+            file_names: None,
+            preview_kind: None,
+            thumbnail_ref: None,
         }),
         clipboard::types::ClipboardSnapshot::FileList { files } => {
             let is_single_image =
@@ -868,7 +849,23 @@ fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHist
                 direction,
                 timestamp_ms: event.timestamp_ms,
                 size_label: Some(clipboard::file::file_list_size_label(files)),
-                image_data_url: clipboard::file::history_preview_for_files(files),
+                image_data_url: if is_single_image {
+                    clipboard::file::history_preview_for_files(files)
+                } else {
+                    None
+                },
+                file_count: if is_single_image {
+                    None
+                } else {
+                    Some(files.len() as u32)
+                },
+                file_names: if is_single_image {
+                    None
+                } else {
+                    Some(clipboard::file::file_names_for_history(files))
+                },
+                preview_kind: None,
+                thumbnail_ref: None,
             })
         }
         clipboard::types::ClipboardSnapshot::Empty => None,
@@ -906,15 +903,51 @@ fn merge_clipboard_history(
     }
 
     history.insert(0, entry);
-    history.truncate(limit);
+    if history.len() > limit {
+        let removed: Vec<ClipboardHistoryEntry> = history.drain(limit..).collect();
+        for item in removed {
+            if let Some(thumbnail_ref) = item.thumbnail_ref {
+                let _ = storage::history_thumbs::delete_by_ref(&thumbnail_ref);
+            }
+        }
+    }
+}
+
+fn single_file_preview_source(
+    event: &ClipboardEvent,
+    entry: &ClipboardHistoryEntry,
+) -> Option<(std::path::PathBuf, String, u64, String)> {
+    if entry.clip_type != "file" || entry.file_count != Some(1) {
+        return None;
+    }
+
+    let clipboard::types::ClipboardSnapshot::FileList { files } = &event.snapshot else {
+        return None;
+    };
+    let file = files.first()?;
+    let path = file.source_path.clone()?;
+
+    Some((
+        path,
+        file.file_name.clone(),
+        file.size_bytes,
+        entry.id.clone(),
+    ))
 }
 
 async fn active_connection_count(state: &AppState) -> usize {
-    if *state.connected.lock().await {
-        1
-    } else {
-        0
-    }
+    state.connections.lock().await.len()
+}
+
+fn next_connection_generation(state: &AppState) -> u64 {
+    state.connection_generation.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+async fn is_duplicate_active_session(
+    connections: &Arc<Mutex<ConnectionRegistry>>,
+    peer_id: &str,
+) -> bool {
+    is_peer_connected(connections, peer_id).await
 }
 
 async fn abort_outbound_handshake(state: &AppState) {
@@ -1024,7 +1057,7 @@ async fn finalize_outbound_pairing(
     let peer_id = conn.peer_id.clone();
     let peer_pk = conn.peer_public_key.clone();
 
-    if is_duplicate_active_session(&state.connected, &state.connected_peer, &peer_id).await {
+    if is_duplicate_active_session(&state.connections, &peer_id).await {
         tracing::info!(
             "Skipping duplicate outbound pairing session with already-connected peer {}",
             peer_name
@@ -1048,19 +1081,15 @@ async fn finalize_outbound_pairing(
     }
 
     let session_generation = next_connection_generation(state);
-    let handle = ConnectionManager::connect_direct(
+    ConnectionManager::connect_direct(
         conn,
-        state.connected.clone(),
-        state.connection.clone(),
-        state.connected_peer.clone(),
+        state.connections.clone(),
         state.connection_generation.clone(),
         session_generation,
         state.clip_tx.clone(),
         app.clone(),
     )
     .await;
-    *state.connection.lock().await = Some(handle);
-    store_connected_peer(&state.connected_peer, peer_name.clone(), peer_id.clone()).await;
 
     let _ = app.emit(
         "connection-established",
@@ -1099,13 +1128,14 @@ async fn get_pending_connection_request(
 async fn get_connected_peer(
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<ConnectedPeerPayload>, String> {
-    let connected = *state.connected.lock().await;
-    if !connected {
-        clear_connected_peer(&state.connected_peer).await;
-        return Ok(None);
-    }
+    Ok(state.connections.lock().await.connected_peers().into_iter().next())
+}
 
-    Ok(state.connected_peer.lock().await.clone())
+#[tauri::command]
+async fn get_connected_peers(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ConnectedPeerPayload>, String> {
+    Ok(state.connections.lock().await.connected_peers())
 }
 
 #[tauri::command]
@@ -1192,11 +1222,10 @@ async fn save_sync_settings(
 
 #[tauri::command]
 async fn get_status(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let connected = *state.connected.lock().await;
-    if connected {
-        Ok("connected".into())
-    } else {
+    if state.connections.lock().await.is_empty() {
         Ok("disconnected".into())
+    } else {
+        Ok("connected".into())
     }
 }
 
@@ -1224,6 +1253,16 @@ async fn rotate_pairing_code(
 
 #[tauri::command]
 async fn end_pairing_session(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    clear_pairing_session(state.inner()).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn abort_outbound_connection(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    abort_outbound_handshake(state.inner()).await;
+    if let Some(stream) = state.pending_initiator.lock().await.take() {
+        direct::initiator_abort(stream).await;
+    }
     clear_pairing_session(state.inner()).await;
     Ok(())
 }
@@ -1292,8 +1331,14 @@ async fn clear_clipboard_history(
 
     let updated_history = Vec::new();
     persist_clipboard_history(&state.config, &updated_history).await;
+    let _ = storage::history_thumbs::clear_all();
     let _ = app.emit("clipboard-history-changed", updated_history);
     Ok(())
+}
+
+#[tauri::command]
+fn resolve_history_thumbnail(thumbnail_ref: String) -> Result<String, String> {
+    storage::history_thumbs::resolve_data_url(&thumbnail_ref)
 }
 
 #[tauri::command]
@@ -1352,7 +1397,7 @@ async fn pair(state: tauri::State<'_, AppState>, code: String) -> Result<String,
         SIGNALLING_SERVER,
         &code,
         &peer_id,
-        state.connected.clone(),
+        Arc::new(Mutex::new(true)),
         state.clip_tx.clone(),
     )
     .await
@@ -1367,7 +1412,16 @@ async fn pair(state: tauri::State<'_, AppState>, code: String) -> Result<String,
         storage_json::save_config(&config);
     }
 
-    *state.connection.lock().await = Some(handle);
+    let session_generation = next_connection_generation(state.inner());
+    state.connections.lock().await.insert(
+        peer_id.clone(),
+        network::sessions::ConnectionSession {
+            handle,
+            peer_name: "已配对设备".into(),
+            session_generation,
+            connected: Arc::new(Mutex::new(true)),
+        },
+    );
 
     Ok("paired".into())
 }
@@ -1387,7 +1441,7 @@ async fn refresh_lan_devices(
     refresh_lan_presence(
         &state.config,
         &state.lan_devices,
-        &state.connected_peer,
+        &state.connections,
         tcp_port,
         &app,
     )
@@ -1558,22 +1612,13 @@ async fn connect_lan(
             }
 
             let session_generation = next_connection_generation(state.inner());
-            let handle = ConnectionManager::connect_direct(
+            ConnectionManager::connect_direct(
                 conn,
-                state.connected.clone(),
-                state.connection.clone(),
-                state.connected_peer.clone(),
+                state.connections.clone(),
                 state.connection_generation.clone(),
                 session_generation,
                 state.clip_tx.clone(),
                 app.clone(),
-            )
-            .await;
-            *state.connection.lock().await = Some(handle);
-            store_connected_peer(
-                &state.connected_peer,
-                peer_name.clone(),
-                peer_id.clone(),
             )
             .await;
 
@@ -1724,12 +1769,7 @@ async fn timeout_incoming_connection(state: tauri::State<'_, AppState>) -> Resul
 
 #[tauri::command]
 async fn disconnect(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
-    let disconnected_peer_name = state
-        .connected_peer
-        .lock()
-        .await
-        .as_ref()
-        .map(|peer| peer.peer_name().to_string());
+    let disconnected_peers = state.connections.lock().await.connected_peers();
 
     next_connection_generation(state.inner());
     abort_outbound_handshake(state.inner()).await;
@@ -1742,13 +1782,14 @@ async fn disconnect(state: tauri::State<'_, AppState>, app: tauri::AppHandle) ->
             .unwrap_or_default()
     };
 
-    if let Some(handle) = state.connection.lock().await.take() {
-        handle.notify_peer_left(&local_peer_id);
+    let sessions = state.connections.lock().await.drain_all();
+    let had_sessions = !sessions.is_empty();
+    for (_, session) in sessions {
+        session.handle.notify_peer_left(&local_peer_id);
+    }
+    if had_sessions {
         tokio::time::sleep(Duration::from_millis(120)).await;
     }
-
-    *state.connected.lock().await = false;
-    clear_connected_peer(&state.connected_peer).await;
 
     if let Some(stream) = state.pending_initiator.lock().await.take() {
         direct::initiator_abort(stream).await;
@@ -1764,7 +1805,8 @@ async fn disconnect(state: tauri::State<'_, AppState>, app: tauri::AppHandle) ->
 
     spawn_lan_presence_refresh(state.inner(), &app);
 
-    if let Some(peer_name) = disconnected_peer_name {
+    if disconnected_peers.len() == 1 {
+        let peer_name = disconnected_peers[0].peer_name();
         let trimmed = peer_name.trim();
         let message = if trimmed.is_empty() {
             "设备 已断开连接".to_string()
@@ -1772,8 +1814,50 @@ async fn disconnect(state: tauri::State<'_, AppState>, app: tauri::AppHandle) ->
             format!("{trimmed} 已断开连接")
         };
         window::send_session_ended_notification(&app, &message);
+    } else if !disconnected_peers.is_empty() {
+        window::send_session_ended_notification(&app, "已断开所有连接");
     }
 
+    Ok(())
+}
+
+#[tauri::command]
+async fn disconnect_peer(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    peer_id: String,
+) -> Result<(), String> {
+    let peer_id = peer_id.trim();
+    if peer_id.is_empty() {
+        return Err("缺少设备标识。".into());
+    }
+
+    let session = state.connections.lock().await.remove(peer_id);
+    let Some(session) = session else {
+        return Err("未找到该设备的连接。".into());
+    };
+
+    let local_peer_id = {
+        let key_pair = state.key_pair.lock().await;
+        key_pair
+            .as_ref()
+            .map(|pair| peer_id_from_public_key(pair.public.as_bytes()))
+            .unwrap_or_default()
+    };
+
+    session.handle.notify_peer_left(&local_peer_id);
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    *session.connected.lock().await = false;
+
+    spawn_lan_presence_refresh(state.inner(), &app);
+
+    let peer_name = session.peer_name.trim();
+    let message = if peer_name.is_empty() {
+        "设备 已断开连接".to_string()
+    } else {
+        format!("{peer_name} 已断开连接")
+    };
+    window::send_session_ended_notification(&app, &message);
     Ok(())
 }
 
@@ -1806,14 +1890,12 @@ async fn finalize_incoming_connection(
     initiator_ip: Option<String>,
     is_reconnect: bool,
     config: Arc<Mutex<AppConfig>>,
-    connected: Arc<Mutex<bool>>,
-    connected_peer: Arc<Mutex<Option<ConnectedPeerPayload>>>,
-    connection: Arc<Mutex<Option<ConnectionHandle>>>,
+    connections: Arc<Mutex<ConnectionRegistry>>,
     connection_generation: Arc<AtomicU64>,
     clip_tx: broadcast::Sender<ClipboardEvent>,
     app_handle: &tauri::AppHandle,
 ) {
-    if is_duplicate_active_session(&connected, &connected_peer, &initiator_peer_id).await {
+    if is_duplicate_active_session(&connections, &initiator_peer_id).await {
         tracing::info!(
             "Skipping duplicate incoming connection from already-connected peer {}",
             initiator_name
@@ -1839,22 +1921,13 @@ async fn finalize_incoming_connection(
     let session_generation = next_connection_generation(
         app_handle.state::<AppState>().inner(),
     );
-    let handle = ConnectionManager::connect_direct(
+    ConnectionManager::connect_direct(
         conn,
-        connected.clone(),
-        connection.clone(),
-        connected_peer.clone(),
+        connections.clone(),
         connection_generation,
         session_generation,
         clip_tx.clone(),
         app_handle.clone(),
-    )
-    .await;
-    *connection.lock().await = Some(handle);
-    store_connected_peer(
-        &connected_peer,
-        initiator_name.clone(),
-        initiator_peer_id.clone(),
     )
     .await;
 
@@ -1874,9 +1947,8 @@ async fn handle_incoming_connection(
     key_pair: KeyPair,
     config: Arc<Mutex<AppConfig>>,
     app_handle: tauri::AppHandle,
-    connected: Arc<Mutex<bool>>,
-    connected_peer: Arc<Mutex<Option<ConnectedPeerPayload>>>,
-    connection: Arc<Mutex<Option<ConnectionHandle>>>,
+    connections: Arc<Mutex<ConnectionRegistry>>,
+    connection_generation: Arc<AtomicU64>,
     clip_tx: broadcast::Sender<ClipboardEvent>,
     pending_accept_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     pending_reject_tx: Arc<Mutex<Option<mpsc::Sender<()>>>>,
@@ -1930,9 +2002,7 @@ async fn handle_incoming_connection(
                     initiator_ip,
                     true,
                     config,
-                    connected,
-                    connected_peer,
-                    connection,
+                    connections.clone(),
                     app_handle.state::<AppState>().connection_generation.clone(),
                     clip_tx,
                     &app_handle,
@@ -1995,9 +2065,7 @@ async fn handle_incoming_connection(
                     initiator_ip,
                     true,
                     config,
-                    connected,
-                    connected_peer,
-                    connection,
+                    connections.clone(),
                     app_handle.state::<AppState>().connection_generation.clone(),
                     clip_tx,
                     &app_handle,
@@ -2098,9 +2166,7 @@ async fn handle_incoming_connection(
                     initiator_ip,
                     false,
                     config,
-                    connected,
-                    connected_peer,
-                    connection,
+                    connections.clone(),
                     app_handle.state::<AppState>().connection_generation.clone(),
                     clip_tx,
                     &app_handle,
@@ -2186,9 +2252,10 @@ pub fn run() {
     let app_state = AppState {
         config: Arc::new(Mutex::new(config)),
         key_pair: Arc::new(Mutex::new(Some(key_pair.clone()))),
-        connected: Arc::new(Mutex::new(false)),
-        connected_peer: Arc::new(Mutex::new(None)),
-        connection: Arc::new(Mutex::new(None)),
+        connections: Arc::new(Mutex::new(ConnectionRegistry::new())),
+        transfer_slots: Arc::new(sync::transfer_limit::TransferSlotLimiter::new(
+            sync::transfer_limit::MAX_CONCURRENT_TRANSFERS,
+        )),
         connection_generation: Arc::new(AtomicU64::new(0)),
         clipboard_monitor_generation: Arc::new(AtomicU64::new(0)),
         clipboard_dedup_baseline: Arc::new(Mutex::new(None)),
@@ -2291,9 +2358,8 @@ pub fn run() {
             let clipboard_history = app.state::<AppState>().clipboard_history.clone();
             let pending_accept_tx = app.state::<AppState>().pending_accept_tx.clone();
             let pending_reject_tx = app.state::<AppState>().pending_reject_tx.clone();
-            let connected = app.state::<AppState>().connected.clone();
-            let connected_peer = app.state::<AppState>().connected_peer.clone();
-            let connection = app.state::<AppState>().connection.clone();
+            let connections = app.state::<AppState>().connections.clone();
+            let transfer_slots = app.state::<AppState>().transfer_slots.clone();
             let connection_generation = app.state::<AppState>().connection_generation.clone();
             let config = app.state::<AppState>().config.clone();
 
@@ -2319,9 +2385,7 @@ pub fn run() {
                 let auto_connect_deps = auto_connect::AutoConnectDeps {
                     config: config.clone(),
                     key_pair: app.state::<AppState>().key_pair.clone(),
-                    connected: connected.clone(),
-                    connected_peer: connected_peer.clone(),
-                    connection: connection.clone(),
+                    connections: connections.clone(),
                     connection_generation: connection_generation.clone(),
                     clip_tx: clip_tx.clone(),
                     pending_initiator: app.state::<AppState>().pending_initiator.clone(),
@@ -2377,9 +2441,7 @@ pub fn run() {
                             let deps = auto_connect::AutoConnectDeps {
                                 config: auto_connect_deps.config.clone(),
                                 key_pair: auto_connect_deps.key_pair.clone(),
-                                connected: auto_connect_deps.connected.clone(),
-                                connected_peer: auto_connect_deps.connected_peer.clone(),
-                                connection: auto_connect_deps.connection.clone(),
+                                connections: auto_connect_deps.connections.clone(),
                                 connection_generation: auto_connect_deps.connection_generation.clone(),
                                 clip_tx: auto_connect_deps.clip_tx.clone(),
                                 pending_initiator: auto_connect_deps.pending_initiator.clone(),
@@ -2406,7 +2468,7 @@ pub fn run() {
 
             {
                 let probe_lan_devices = lan_devices.clone();
-                let probe_connected_peer = connected_peer.clone();
+                let probe_connections = connections.clone();
                 let probe_config = config.clone();
                 let probe_app_handle = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
@@ -2415,7 +2477,7 @@ pub fn run() {
                         refresh_lan_presence(
                             &probe_config,
                             &probe_lan_devices,
-                            &probe_connected_peer,
+                            &probe_connections,
                             tcp_port,
                             &probe_app_handle,
                         )
@@ -2430,9 +2492,7 @@ pub fn run() {
                 let startup_deps = auto_connect::AutoConnectDeps {
                     config: config.clone(),
                     key_pair: app.state::<AppState>().key_pair.clone(),
-                    connected: connected.clone(),
-                    connected_peer: connected_peer.clone(),
-                    connection: connection.clone(),
+                    connections: connections.clone(),
                     connection_generation: connection_generation.clone(),
                     clip_tx: clip_tx.clone(),
                     pending_initiator: app.state::<AppState>().pending_initiator.clone(),
@@ -2466,9 +2526,8 @@ pub fn run() {
 
             {
                 let app_handle = app_handle.clone();
-                let connected = connected.clone();
-                let connected_peer = connected_peer.clone();
-                let connection = connection.clone();
+                let connections_listener = connections.clone();
+                let connection_generation_listener = connection_generation.clone();
                 let clip_tx = clip_tx.clone();
                 let pending_accept_tx = pending_accept_tx.clone();
                 let pending_reject_tx = pending_reject_tx.clone();
@@ -2484,9 +2543,8 @@ pub fn run() {
                                     key_pair.clone(),
                                     config.clone(),
                                     app_handle.clone(),
-                                    connected.clone(),
-                                    connected_peer.clone(),
-                                    connection.clone(),
+                                    connections_listener.clone(),
+                                    connection_generation_listener.clone(),
                                     clip_tx.clone(),
                                     pending_accept_tx.clone(),
                                     pending_reject_tx.clone(),
@@ -2507,6 +2565,7 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     while let Ok(event) = clip_history_rx.recv().await {
                         if let Some(entry) = build_clipboard_history_entry(&event) {
+                            let preview_source = single_file_preview_source(&event, &entry);
                             let updated_history = {
                                 let limit = {
                                     let cfg = config.lock().await;
@@ -2518,6 +2577,43 @@ pub fn run() {
                             };
                             persist_clipboard_history(&config, &updated_history).await;
                             let _ = app_handle.emit("clipboard-history-changed", updated_history);
+
+                            if let Some((path, file_name, size_bytes, entry_id)) = preview_source {
+                                let config = config.clone();
+                                let clipboard_history = clipboard_history.clone();
+                                let app_handle = app_handle.clone();
+                                let find_entry_id = entry_id.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let preview = tokio::task::spawn_blocking(move || {
+                                        clipboard::history_preview::generate_and_store_preview(
+                                            &path,
+                                            &file_name,
+                                            size_bytes,
+                                            &entry_id,
+                                        )
+                                    })
+                                    .await
+                                    .ok()
+                                    .flatten();
+
+                                    let Some(preview) = preview else {
+                                        return;
+                                    };
+
+                                    let updated_history = {
+                                        let mut history = clipboard_history.lock().await;
+                                        if let Some(item) =
+                                            history.iter_mut().find(|item| item.id == find_entry_id)
+                                        {
+                                            item.preview_kind = Some(preview.kind.to_string());
+                                            item.thumbnail_ref = Some(preview.thumbnail_ref);
+                                        }
+                                        history.clone()
+                                    };
+                                    persist_clipboard_history(&config, &updated_history).await;
+                                    let _ = app_handle.emit("clipboard-history-changed", updated_history);
+                                });
+                            }
                         }
                     }
                 });
@@ -2525,7 +2621,8 @@ pub fn run() {
 
             let clip_tx_monitor = clip_tx.clone();
             let clip_rx = clip_tx.subscribe();
-            let connection_bg = connection.clone();
+            let connections_bg = connections.clone();
+            let transfer_slots_bg = transfer_slots.clone();
             let config_bg = config.clone();
             let app_handle_bg = app_handle.clone();
             let clipboard_monitor_generation = app
@@ -2543,11 +2640,13 @@ pub fn run() {
                     .expect("Failed to create background runtime");
                 rt.block_on(async move {
                     let config_monitor = config_bg.clone();
+                    let app_handle_monitor = app_handle_bg.clone();
                     tokio::join!(
                         async move {
                             let mut monitor = ClipboardMonitor::new(
                                 clip_tx_monitor,
                                 config_monitor,
+                                Some(app_handle_monitor),
                                 clipboard_monitor_generation,
                                 clipboard_dedup_baseline,
                             );
@@ -2556,7 +2655,8 @@ pub fn run() {
                         async move {
                             let engine = sync::engine::SyncEngine::new(
                                 clip_rx,
-                                connection_bg,
+                                connections_bg,
+                                transfer_slots_bg,
                                 config_bg,
                                 app_handle_bg,
                             );
@@ -2571,9 +2671,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_status,
             get_connected_peer,
+            get_connected_peers,
             get_pairing_code,
             rotate_pairing_code,
             end_pairing_session,
+            abort_outbound_connection,
             get_ui_settings,
             get_startup_settings,
             save_startup_settings,
@@ -2585,6 +2687,7 @@ pub fn run() {
             save_clipboard_settings,
             get_clipboard_history,
             clear_clipboard_history,
+            resolve_history_thumbnail,
             get_pending_connection_request,
             save_ui_settings,
             pair,
@@ -2600,6 +2703,7 @@ pub fn run() {
             reject_connection,
             timeout_incoming_connection,
             disconnect,
+            disconnect_peer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

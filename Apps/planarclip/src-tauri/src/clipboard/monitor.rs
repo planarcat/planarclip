@@ -4,12 +4,14 @@ use std::sync::{
 };
 
 use arboard::ImageData;
+use tauri::AppHandle;
 use tokio::sync::{broadcast, mpsc, Mutex as AsyncMutex};
 
 use crate::clipboard::file::{
-    file_list_as_sync_text, file_list_hash, snapshot_from_file_paths,
+    file_list_as_sync_text, file_list_hash, is_user_limit_error, snapshot_from_file_paths,
     snapshot_from_file_paths_meta, DEFAULT_MAX_FILE_BYTES, MAX_BATCH_BYTES,
 };
+use crate::sync::activity::notify_sync_failure;
 use crate::clipboard::image::{encode_rgba_to_png, snapshot_from_png_bytes};
 #[cfg(not(windows))]
 use crate::clipboard::image::decode_png_to_rgba;
@@ -30,19 +32,20 @@ struct SuppressedRemoteWrite {
 #[derive(Clone, Copy, Debug)]
 pub struct ClipboardDedupBaseline {
     pub last_hash: [u8; 32],
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     pub last_clipboard_seq: Option<u32>,
 }
 
 pub struct ClipboardMonitor {
     tx: broadcast::Sender<ClipboardEvent>,
     config: Arc<AsyncMutex<AppConfig>>,
+    app_handle: Option<AppHandle>,
     reset_generation: Arc<AtomicU64>,
     dedup_baseline: Arc<AsyncMutex<Option<ClipboardDedupBaseline>>>,
     last_reset_generation: u64,
     last_hash: [u8; 32],
     last_read_error: Option<String>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     last_clipboard_seq: Option<u32>,
 }
 
@@ -50,6 +53,7 @@ impl ClipboardMonitor {
     pub fn new(
         tx: broadcast::Sender<ClipboardEvent>,
         config: Arc<AsyncMutex<AppConfig>>,
+        app_handle: Option<AppHandle>,
         reset_generation: Arc<AtomicU64>,
         dedup_baseline: Arc<AsyncMutex<Option<ClipboardDedupBaseline>>>,
     ) -> Self {
@@ -57,12 +61,13 @@ impl ClipboardMonitor {
         Self {
             tx,
             config,
+            app_handle,
             reset_generation,
             dedup_baseline,
             last_reset_generation: initial_generation,
             last_hash: [0u8; 32],
             last_read_error: None,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             last_clipboard_seq: None,
         }
     }
@@ -83,7 +88,7 @@ impl ClipboardMonitor {
 
         ClipboardDedupBaseline {
             last_hash,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             last_clipboard_seq: Self::current_clipboard_seq(),
         }
     }
@@ -161,7 +166,7 @@ impl ClipboardMonitor {
 
         self.apply_reset_if_needed().await;
 
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         if !Self::clipboard_sequence_changed(self.last_clipboard_seq) {
             return false;
         }
@@ -207,10 +212,27 @@ impl ClipboardMonitor {
                 false
             }
             Err(error) => {
+                if is_user_limit_error(&error) {
+                    self.note_observed_clipboard_sequence();
+                    if self.last_read_error.as_deref() != Some(error.as_str()) {
+                        self.last_read_error = Some(error.clone());
+                        notify_sync_failure(self.app_handle.as_ref(), &error);
+                    }
+                    return false;
+                }
+
                 #[cfg(windows)]
                 if Self::image_read_pending() || Self::file_read_pending() {
                     tracing::debug!(
                         "clipboard read failed while image/file format present, will retry: {error}"
+                    );
+                    return true;
+                }
+
+                #[cfg(all(target_os = "macos", not(windows)))]
+                if Self::file_read_pending() {
+                    tracing::debug!(
+                        "clipboard read failed while file format present, will retry: {error}"
                     );
                     return true;
                 }
@@ -234,7 +256,7 @@ impl ClipboardMonitor {
 
         if let Some(baseline) = self.dedup_baseline.lock().await.take() {
             self.last_hash = baseline.last_hash;
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             {
                 self.last_clipboard_seq = baseline.last_clipboard_seq;
             }
@@ -242,9 +264,9 @@ impl ClipboardMonitor {
     }
 
     fn read_clipboard(max_file_bytes: u64, sync_files: bool) -> Result<ClipboardSnapshot, String> {
-        #[cfg(windows)]
-        if crate::platform::windows::clipboard::has_file_format() {
-            if let Some(paths) = crate::platform::windows::clipboard::read_file_paths() {
+        #[cfg(any(windows, target_os = "macos"))]
+        if crate::platform::clipboard::has_file_format() {
+            if let Some(paths) = crate::platform::clipboard::read_file_paths() {
                 if !sync_files {
                     match snapshot_from_file_paths_meta(paths) {
                         Ok(ClipboardSnapshot::FileList { files }) => {
@@ -303,7 +325,7 @@ impl ClipboardMonitor {
             return true;
         }
 
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         {
             let Some(seq) = Self::current_clipboard_seq() else {
                 return false;
@@ -311,7 +333,7 @@ impl ClipboardMonitor {
             return self.last_clipboard_seq != Some(seq);
         }
 
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         false
     }
 
@@ -321,13 +343,13 @@ impl ClipboardMonitor {
     }
 
     fn note_observed_clipboard_sequence(&mut self) {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         if let Some(seq) = Self::current_clipboard_seq() {
             self.last_clipboard_seq = Some(seq);
         }
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     fn clipboard_sequence_changed(last_seq: Option<u32>) -> bool {
         let Some(seq) = Self::current_clipboard_seq() else {
             return true;
@@ -335,9 +357,9 @@ impl ClipboardMonitor {
         last_seq != Some(seq)
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     fn current_clipboard_seq() -> Option<u32> {
-        crate::platform::windows::clipboard::current_sequence()
+        crate::platform::clipboard::current_sequence()
     }
 
     #[cfg(windows)]
@@ -361,9 +383,9 @@ impl ClipboardMonitor {
         }
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     fn file_read_pending() -> bool {
-        crate::platform::windows::clipboard::has_file_format()
+        crate::platform::clipboard::has_file_format()
     }
 
     pub fn write_clipboard_files(paths: &[std::path::PathBuf]) {
@@ -397,12 +419,12 @@ impl ClipboardMonitor {
         Self::register_suppressed_write(hash);
         Self::set_self_writing(true);
 
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         {
             let paths = paths.to_vec();
             if let Err(error) = std::thread::Builder::new()
                 .name("planarclip-clip-write".into())
-                .spawn(move || crate::platform::windows::clipboard::write_file_paths(&paths))
+                .spawn(move || crate::platform::clipboard::write_file_paths(&paths))
                 .map_err(|error| format!("spawn clipboard thread failed: {error}"))
                 .and_then(|handle| {
                     handle
@@ -414,7 +436,7 @@ impl ClipboardMonitor {
             }
         }
 
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = paths;
             tracing::warn!("clipboard file write is not supported on this platform yet");

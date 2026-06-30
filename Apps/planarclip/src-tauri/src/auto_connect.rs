@@ -2,9 +2,10 @@ use crate::app_profile;
 use crate::crypto::keys::KeyPair;
 use crate::network::direct::{self, HandshakeError, InitiatorResult};
 use crate::network::discovery::LanDevice;
+use crate::network::sessions::ConnectionRegistry;
 use crate::network::webrtc::ConnectionManager;
 use crate::storage::json::{AppConfig, TrustedPeerData};
-use crate::{emit_connection_failed, store_connected_peer, upsert_trusted_peer, ConnectedPeerPayload};
+use crate::{emit_connection_failed, upsert_trusted_peer, MAX_CONNECTIONS};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -14,7 +15,6 @@ use tokio::net::TcpStream;
 use tokio::sync::{broadcast, oneshot, Mutex};
 
 use crate::clipboard::types::ClipboardEvent;
-use crate::network::webrtc::ConnectionHandle;
 
 /// Delay before surfacing auto-connect wait UI. Fast auto-accept paths finish silently.
 const AUTO_CONNECT_UI_DELAY_MS: u64 = 400;
@@ -23,9 +23,7 @@ const AUTO_CONNECT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 pub struct AutoConnectDeps {
     pub config: Arc<Mutex<AppConfig>>,
     pub key_pair: Arc<Mutex<Option<KeyPair>>>,
-    pub connected: Arc<Mutex<bool>>,
-    pub connected_peer: Arc<Mutex<Option<ConnectedPeerPayload>>>,
-    pub connection: Arc<Mutex<Option<ConnectionHandle>>>,
+    pub connections: Arc<Mutex<ConnectionRegistry>>,
     pub connection_generation: Arc<AtomicU64>,
     pub clip_tx: broadcast::Sender<ClipboardEvent>,
     pub pending_initiator: Arc<Mutex<Option<TcpStream>>>,
@@ -41,7 +39,7 @@ pub fn auto_connect_trusted_enabled(config: &AppConfig) -> bool {
 }
 
 pub async fn can_initiate_outbound(deps: &AutoConnectDeps) -> bool {
-    if *deps.connected.lock().await {
+    if deps.connections.lock().await.len() >= MAX_CONNECTIONS {
         return false;
     }
     if deps.outbound_handshake_active.load(Ordering::SeqCst) {
@@ -87,7 +85,7 @@ async fn establish_outbound_connection(
     let peer_id = conn.peer_id.clone();
     let peer_pk = conn.peer_public_key.clone();
 
-    if crate::is_duplicate_active_session(&deps.connected, &deps.connected_peer, &peer_id).await {
+    if crate::is_peer_connected(&deps.connections, &peer_id).await {
         tracing::info!(
             "Auto-connect outbound finished but {} is already connected; discarding duplicate session",
             peer_name
@@ -114,19 +112,15 @@ async fn establish_outbound_connection(
         .connection_generation
         .fetch_add(1, Ordering::SeqCst)
         + 1;
-    let handle = ConnectionManager::connect_direct(
+    ConnectionManager::connect_direct(
         conn,
-        deps.connected.clone(),
-        deps.connection.clone(),
-        deps.connected_peer.clone(),
+        deps.connections.clone(),
         deps.connection_generation.clone(),
         session_generation,
         deps.clip_tx.clone(),
         app.clone(),
     )
     .await;
-    *deps.connection.lock().await = Some(handle);
-    store_connected_peer(&deps.connected_peer, peer_name.clone(), peer_id.clone()).await;
 
     let _ = app.emit(
         "connection-established",
@@ -368,9 +362,7 @@ pub async fn attempt_connect_trusted_peer(
     let deps = AutoConnectDeps {
         config: deps.config.clone(),
         key_pair: deps.key_pair.clone(),
-        connected: deps.connected.clone(),
-        connected_peer: deps.connected_peer.clone(),
-        connection: deps.connection.clone(),
+        connections: deps.connections.clone(),
         connection_generation: deps.connection_generation.clone(),
         clip_tx: deps.clip_tx.clone(),
         pending_initiator: deps.pending_initiator.clone(),
@@ -435,7 +427,7 @@ pub async fn auto_connect_trusted_on_startup(
     crate::refresh_lan_presence(
         &deps.config,
         &lan_devices,
-        &deps.connected_peer,
+        &deps.connections,
         deps.tcp_port,
         &app,
     )
@@ -464,8 +456,11 @@ pub async fn auto_connect_trusted_on_startup(
         if !can_initiate_outbound(&deps).await {
             break;
         }
+        if deps.connections.lock().await.contains(&peer_id) {
+            continue;
+        }
         if attempt_connect_trusted_peer(&deps, &app, &ip, port, &peer_id, false).await {
-            break;
+            // Keep trying until limit; do not break after first success.
         }
     }
 }

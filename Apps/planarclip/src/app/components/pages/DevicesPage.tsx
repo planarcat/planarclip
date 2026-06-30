@@ -23,7 +23,7 @@ type DevicesPageProps = {
   onShowPairing: () => void;
   onRefreshDevices: () => void;
   onConnectDevice: (device: Device) => void;
-  onDisconnect: () => void;
+  onDisconnect: (device: Device) => void;
   onRemoveTrustedPeer: (device: Device) => void;
   onSetPeerAutoAccept: (device: Device, autoAccept: boolean) => void;
   isRefreshingDevices: boolean;
@@ -47,7 +47,7 @@ type ConnectableDeviceCardProps = {
 
 type KnownDeviceCardProps = {
   device: Device;
-  onDisconnect: () => void;
+  onDisconnect: (device: Device) => void;
   onRemoveTrustedPeer: (device: Device) => void;
   onSetPeerAutoAccept: (device: Device, autoAccept: boolean) => void;
 };
@@ -276,7 +276,7 @@ function KnownDeviceCard({
           {device.isTrusted && <RemoveDeviceIconButton device={device} onRemoveTrustedPeer={onRemoveTrustedPeer} />}
           <DisconnectIconButton
             ariaLabel={disconnectTitle}
-            onClick={onDisconnect}
+            onClick={() => onDisconnect(device)}
             title={disconnectTitle}
           />
         </div>

@@ -3,15 +3,19 @@ use std::sync::Arc;
 use tauri::AppHandle;
 use tokio::sync::{broadcast, Mutex};
 
-use crate::clipboard::file::DEFAULT_MAX_FILE_BYTES;
+use crate::clipboard::file::{DEFAULT_MAX_FILE_BYTES, SYNC_NOT_CONNECTED_MESSAGE};
 use crate::clipboard::image::INLINE_IMAGE_BYTES;
 use crate::clipboard::types::{ClipboardEvent, ClipboardOrigin, ClipboardSnapshot};
+use crate::network::sessions::ConnectionRegistry;
 use crate::network::webrtc::ConnectionHandle;
 use crate::storage::json::AppConfig;
+use crate::sync::activity::notify_sync_failure;
+use crate::sync::transfer_limit::TransferSlotLimiter;
 
 pub struct SyncEngine {
     rx: broadcast::Receiver<ClipboardEvent>,
-    connection: Arc<Mutex<Option<ConnectionHandle>>>,
+    connections: Arc<Mutex<ConnectionRegistry>>,
+    transfer_slots: Arc<TransferSlotLimiter>,
     config: Arc<Mutex<AppConfig>>,
     app_handle: AppHandle,
 }
@@ -19,13 +23,15 @@ pub struct SyncEngine {
 impl SyncEngine {
     pub fn new(
         rx: broadcast::Receiver<ClipboardEvent>,
-        connection: Arc<Mutex<Option<ConnectionHandle>>>,
+        connections: Arc<Mutex<ConnectionRegistry>>,
+        transfer_slots: Arc<TransferSlotLimiter>,
         config: Arc<Mutex<AppConfig>>,
         app_handle: AppHandle,
     ) -> Self {
         Self {
             rx,
-            connection,
+            connections,
+            transfer_slots,
             config,
             app_handle,
         }
@@ -50,59 +56,30 @@ impl SyncEngine {
                         )
                     };
 
-                    let conn = self.connection.lock().await;
-                    let Some(ref handle) = *conn else {
-                        continue;
+                    let handles = {
+                        let registry = self.connections.lock().await;
+                        registry.active_handles()
                     };
 
-                    let is_connected = handle
-                        .connected()
-                        .try_lock()
-                        .map(|guard| *guard)
-                        .unwrap_or(false);
-                    if !is_connected {
+                    if handles.is_empty() {
+                        if should_notify_disconnected(&event.snapshot, sync_images, sync_files) {
+                            notify_sync_failure(
+                                Some(&self.app_handle),
+                                SYNC_NOT_CONNECTED_MESSAGE,
+                            );
+                        }
                         continue;
                     }
 
-                    match &event.snapshot {
-                        ClipboardSnapshot::Image { png_bytes, .. }
-                            if png_bytes.len() > INLINE_IMAGE_BYTES
-                                && handle.supports_chunked_images() =>
-                        {
-                            let handle = handle.clone();
-                            let snapshot = event.snapshot.clone();
-                            let app_handle = self.app_handle.clone();
-                            drop(conn);
-                            tokio::spawn(async move {
-                                handle
-                                    .send_image_async(snapshot, sync_images, Some(app_handle))
-                                    .await;
-                            });
-                        }
-                        ClipboardSnapshot::FileList { .. } if sync_files => {
-                            let handle = handle.clone();
-                            let snapshot = event.snapshot.clone();
-                            let app_handle = self.app_handle.clone();
-                            drop(conn);
-                            tokio::spawn(async move {
-                                handle
-                                    .send_files_async(
-                                        snapshot,
-                                        true,
-                                        max_file_bytes,
-                                        Some(app_handle),
-                                    )
-                                    .await;
-                            });
-                        }
-                        _ => {
-                            handle.send_snapshot(
-                                &event.snapshot,
-                                sync_images,
-                                Some(&self.app_handle),
-                            );
-                        }
-                    }
+                    Self::broadcast_snapshot(
+                        &handles,
+                        &event.snapshot,
+                        sync_images,
+                        sync_files,
+                        max_file_bytes,
+                        self.transfer_slots.clone(),
+                        self.app_handle.clone(),
+                    );
                 }
                 Err(e) => {
                     tracing::error!("Sync engine channel error: {}", e);
@@ -110,5 +87,62 @@ impl SyncEngine {
                 }
             }
         }
+    }
+
+    fn broadcast_snapshot(
+        handles: &[ConnectionHandle],
+        snapshot: &ClipboardSnapshot,
+        sync_images: bool,
+        sync_files: bool,
+        max_file_bytes: u64,
+        transfer_slots: Arc<TransferSlotLimiter>,
+        app_handle: AppHandle,
+    ) {
+        for handle in handles {
+            match snapshot {
+                ClipboardSnapshot::Image { png_bytes, .. }
+                    if png_bytes.len() > INLINE_IMAGE_BYTES
+                        && handle.supports_chunked_images() =>
+                {
+                    let handle = handle.clone();
+                    let snapshot = snapshot.clone();
+                    let slots = transfer_slots.clone();
+                    let app = app_handle.clone();
+                    tokio::spawn(async move {
+                        let _permit = slots.acquire().await;
+                        handle
+                            .send_image_async(snapshot, sync_images, Some(app))
+                            .await;
+                    });
+                }
+                ClipboardSnapshot::FileList { .. } if sync_files => {
+                    let handle = handle.clone();
+                    let snapshot = snapshot.clone();
+                    let slots = transfer_slots.clone();
+                    let app = app_handle.clone();
+                    tokio::spawn(async move {
+                        let _permit = slots.acquire().await;
+                        handle
+                            .send_files_async(snapshot, true, max_file_bytes, Some(app))
+                            .await;
+                    });
+                }
+                _ => {
+                    handle.send_snapshot(snapshot, sync_images, Some(&app_handle));
+                }
+            }
+        }
+    }
+}
+
+fn should_notify_disconnected(
+    snapshot: &ClipboardSnapshot,
+    sync_images: bool,
+    sync_files: bool,
+) -> bool {
+    match snapshot {
+        ClipboardSnapshot::FileList { files } if sync_files && !files.is_empty() => true,
+        ClipboardSnapshot::Image { png_bytes, .. } if sync_images && !png_bytes.is_empty() => true,
+        _ => false,
     }
 }

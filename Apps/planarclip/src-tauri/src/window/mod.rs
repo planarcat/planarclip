@@ -101,10 +101,14 @@ pub fn send_session_established_notification(
 pub fn send_session_ended_notification(app: &AppHandle, message: &str) {
     let body = message.trim();
     if body.is_empty() {
-        show_planarclip_notification(app, "设备 已断开连接", true);
+        send_user_notification(app, "设备 已断开连接", true);
     } else {
-        show_planarclip_notification(app, body, true);
+        send_user_notification(app, body, true);
     }
+}
+
+pub fn send_user_notification(app: &AppHandle, body: &str, important: bool) {
+    show_planarclip_notification(app, body, important);
 }
 
 fn show_planarclip_notification(app: &AppHandle, body: &str, important: bool) {

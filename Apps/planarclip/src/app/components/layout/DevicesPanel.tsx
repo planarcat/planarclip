@@ -13,7 +13,7 @@ type DevicesPanelProps = {
   connectionLocked: boolean;
   connectedCount: number;
   onConnectDevice: (device: Device) => void;
-  onDisconnect: () => void;
+  onDisconnect: (device: Device) => void;
 };
 
 function buildConnectAction(device: Device, busyConnecting: boolean, atConnectionLimit: boolean) {
@@ -90,7 +90,7 @@ export function DevicesPanel({
                       size="sm"
                       ariaLabel={disconnectTitle}
                       title={disconnectTitle}
-                      onClick={onDisconnect}
+                      onClick={() => onDisconnect(device)}
                     />
                   ) : (
                     <button

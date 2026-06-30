@@ -6,6 +6,7 @@ use winreg::RegKey;
 use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
 
 pub mod clipboard;
+pub mod thumbnail;
 
 /// Registers this process with Windows so Toast notifications use the app identity
 /// and the app appears under Settings → System → Notifications.

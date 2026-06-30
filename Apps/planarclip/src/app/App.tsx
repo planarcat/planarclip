@@ -5,14 +5,15 @@ import { Sidebar } from "./components/layout/Sidebar";
 import { ConnectionAttemptCard } from "./components/overlays/ConnectionAttemptCard";
 import { IncomingConnectionPrompt } from "./components/overlays/IncomingConnectionPrompt";
 import { PairingModal } from "./components/overlays/PairingModal";
-import { SwitchConnectionPrompt } from "./components/overlays/SwitchConnectionPrompt";
 import { StatusNotice } from "./components/overlays/StatusNotice";
+import { TransferProgressCard } from "./components/overlays/TransferProgressCard";
 import { ClipboardPage } from "./components/pages/ClipboardPage";
 import { DevicesPage } from "./components/pages/DevicesPage";
 import { SettingsPage } from "./components/pages/SettingsPage";
 import { getThemeById, normalizeColorScheme } from "./constants/theme";
 import { useClipboardSettings } from "./hooks/useClipboardSettings";
 import { useConnectionBridge } from "./hooks/useConnectionBridge";
+import { useTransferProgress } from "./hooks/useTransferProgress";
 import { useConnectionSettings } from "./hooks/useConnectionSettings";
 import { useSyncSettings } from "./hooks/useSyncSettings";
 import { usePairingFlow } from "./hooks/usePairingFlow";
@@ -70,7 +71,7 @@ export default function App() {
   const [pairingCode, setPairingCode] = useState("------");
   const [lanDevices, setLanDevices] = useState<LanDevicePayload[]>([]);
   const [trustedPeers, setTrustedPeers] = useState<TrustedPeerPayload[]>([]);
-  const [connectedPeer, setConnectedPeer] = useState<ConnectedPeer | null>(null);
+  const [connectedPeers, setConnectedPeers] = useState<ConnectedPeer[]>([]);
   const [showPairing, setShowPairing] = useState(false);
   const [pairingInput, setPairingInput] = useState("");
   const [pairingStage, setPairingStage] = useState<PairingStage>("idle");
@@ -82,7 +83,7 @@ export default function App() {
   const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
   const [isRefreshingDevices, setIsRefreshingDevices] = useState(false);
 
-  const devices = useMemo(() => buildDevices(lanDevices, connectedPeer, trustedPeers), [lanDevices, connectedPeer, trustedPeers]);
+  const devices = useMemo(() => buildDevices(lanDevices, connectedPeers, trustedPeers), [lanDevices, connectedPeers, trustedPeers]);
   const connectedCount = useMemo(() => devices.filter((device) => device.status === "connected").length, [devices]);
   const onlineDeviceCount = useMemo(() => devices.filter((device) => device.status !== "offline").length, [devices]);
   const discoveredDevices = useMemo(
@@ -92,6 +93,8 @@ export default function App() {
   const identityLabel = deviceName;
   const showConnectionAttemptCard = pairingStage === "requesting_device" && pairingTarget != null;
   const showPairingModal = showPairing && pairingStage !== "requesting_device";
+
+  const { transferProgress, applySyncActivity, clearTransferProgress } = useTransferProgress();
 
   const {
     handleColorSchemeChange,
@@ -197,9 +200,6 @@ export default function App() {
     handleOutboundConnectionStarted,
     handleOutboundConnectionPending,
     handlePairingCodeNeeded,
-    switchConnectionTarget,
-    confirmSwitchConnection,
-    cancelSwitchConnection,
     pairingStageRef,
     connectionLocked,
   } = usePairingFlow({
@@ -212,7 +212,7 @@ export default function App() {
     incomingRequest,
     setStatus,
     setLastMessage,
-    setConnectedPeer,
+    setConnectedPeers,
     setShowPairing,
     setPairingInput,
     setPairingStage,
@@ -269,7 +269,7 @@ export default function App() {
         return;
       }
 
-      const wasConnected = device.status === "connected" || connectedPeer?.peerId === device.peerId;
+      const wasConnected = device.status === "connected" || connectedPeers.some((peer) => peer.peerId === device.peerId);
 
       try {
         const removed = await callCommand<boolean>("remove_trusted_peer", { peerId: device.peerId });
@@ -288,7 +288,7 @@ export default function App() {
         setLastMessage(normalizeUserMessage(error, `移除 ${device.name} 失败，请稍后重试。`, device.name));
       }
     },
-    [connectedPeer, handleDisconnect, refreshTrustedPeers, setLastMessage],
+    [connectedPeers, handleDisconnect, refreshTrustedPeers, setLastMessage],
   );
 
   const handleSetPeerAutoAccept = useCallback(
@@ -338,15 +338,17 @@ export default function App() {
     tauriAvailable: TAURI_AVAILABLE,
     callCommand,
     status,
-    connectedPeer,
+    connectedPeers,
     pairingStageRef,
     setStatus,
     setLastMessage,
+    showNotice: setNoticeMessage,
+    onSyncActivity: applySyncActivity,
     setPairingCode,
     setLanDevices,
     setTrustedPeers,
     setClips,
-    setConnectedPeer,
+    setConnectedPeers,
     applyDesktopUiSettings,
     applyUiSettingsFallback,
     toUserMessage: normalizeUserMessage,
@@ -400,8 +402,8 @@ export default function App() {
               onConnectDevice={(device) => {
                 void handleConnectLan(device);
               }}
-              onDisconnect={() => {
-                void handleDisconnect();
+              onDisconnect={(device) => {
+                void handleDisconnect(device);
               }}
             />
           </>
@@ -417,8 +419,8 @@ export default function App() {
             onConnectDevice={(device) => {
               void handleConnectLan(device);
             }}
-            onDisconnect={() => {
-              void handleDisconnect();
+            onDisconnect={(device) => {
+              void handleDisconnect(device);
             }}
             onRemoveTrustedPeer={(device) => {
               void handleRemoveTrustedPeer(device);
@@ -514,19 +516,12 @@ export default function App() {
         />
       )}
 
-      {switchConnectionTarget && connectedPeer && (
-        <SwitchConnectionPrompt
-          currentDeviceName={connectedPeer.name}
-          targetDevice={switchConnectionTarget}
-          onConfirm={() => {
-            void confirmSwitchConnection();
-          }}
-          onCancel={cancelSwitchConnection}
-        />
-      )}
-
       {showConnectionAttemptCard && pairingTarget && (
         <ConnectionAttemptCard deviceName={pairingTarget.name} />
+      )}
+
+      {transferProgress && !showConnectionAttemptCard && (
+        <TransferProgressCard progress={transferProgress} onDismiss={clearTransferProgress} />
       )}
 
       {noticeMessage && (

@@ -52,6 +52,10 @@ export type ClipEntry = {
   size: string;
   timestamp: Date;
   imagePreviewUrl?: string;
+  fileCount?: number;
+  fileNames?: string[];
+  previewKind?: "thumbnail" | "icon";
+  thumbnailRef?: string;
 };
 
 export type ThemeColor = {
@@ -102,6 +106,10 @@ export type ClipboardHistoryPayload = {
   timestamp_ms: number;
   size_label?: string | null;
   image_data_url?: string | null;
+  file_count?: number | null;
+  file_names?: string[] | null;
+  preview_kind?: string | null;
+  thumbnail_ref?: string | null;
 };
 
 export type LanDevicePayload = {

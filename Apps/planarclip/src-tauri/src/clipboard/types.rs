@@ -94,6 +94,14 @@ pub struct ClipboardHistoryEntry {
     pub size_label: Option<String>,
     #[serde(default)]
     pub image_data_url: Option<String>,
+    #[serde(default)]
+    pub file_count: Option<u32>,
+    #[serde(default)]
+    pub file_names: Option<Vec<String>>,
+    #[serde(default)]
+    pub preview_kind: Option<String>,
+    #[serde(default)]
+    pub thumbnail_ref: Option<String>,
 }
 
 fn now_ms() -> u64 {
