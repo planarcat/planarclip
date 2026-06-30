@@ -1101,6 +1101,15 @@ pub(crate) fn emit_outbound_connection_started(
     );
 }
 
+pub(crate) fn emit_outbound_connection_settled(app: &tauri::AppHandle, peer_id: &str) {
+    let _ = app.emit(
+        "outbound-connection-settled",
+        serde_json::json!({
+            "peer_id": peer_id,
+        }),
+    );
+}
+
 pub(crate) fn emit_connection_failed(app: &tauri::AppHandle, error: &direct::HandshakeError) {
     let _ = app.emit(
         "connection-failed",

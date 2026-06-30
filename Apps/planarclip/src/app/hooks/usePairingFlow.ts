@@ -10,6 +10,7 @@ import type {
   ConnectionRequestPayload,
   Device,
   OutboundConnectionPendingPayload,
+  OutboundConnectionSettledPayload,
   PairingCodeNeededPayload,
   PairingStage,
 } from "../types";
@@ -104,6 +105,30 @@ function resolveAppStatus(connectedCount: number, connecting: boolean): AppConne
 function upsertConnectedPeer(peers: ConnectedPeer[], peer: ConnectedPeer) {
   const without = peers.filter((item) => item.peerId !== peer.peerId);
   return [...without, peer];
+}
+
+function shouldClearOutboundAttempt(stage: PairingStage, targetPeerId: string | undefined, settledPeerId: string) {
+  if (!isOutboundLockedStage(stage)) {
+    return false;
+  }
+  if (!targetPeerId) {
+    return true;
+  }
+  return targetPeerId === settledPeerId;
+}
+
+function shouldClearOutboundAttemptForConnectedPeers(
+  stage: PairingStage,
+  targetPeerId: string | undefined,
+  peers: ConnectedPeer[],
+) {
+  if (!isOutboundLockedStage(stage) || peers.length === 0) {
+    return false;
+  }
+  if (!targetPeerId) {
+    return true;
+  }
+  return peers.some((peer) => peer.peerId === targetPeerId);
 }
 
 /**
@@ -833,6 +858,47 @@ export function usePairingFlow({
     ],
   );
 
+  const clearOutboundAttemptUi = useCallback(() => {
+    if (!isOutboundLockedStage(pairingStageRef.current)) {
+      return;
+    }
+    resetPairingFlow(false);
+    setStatus(resolveAppStatus(connectedCount, false));
+  }, [connectedCount, resetPairingFlow, setStatus]);
+
+  const handleOutboundConnectionSettled = useCallback(
+    (payload: OutboundConnectionSettledPayload) => {
+      if (
+        !shouldClearOutboundAttempt(
+          pairingStageRef.current,
+          pairingTargetRef.current?.peerId,
+          payload.peer_id,
+        )
+      ) {
+        return;
+      }
+      clearOutboundAttemptUi();
+    },
+    [clearOutboundAttemptUi],
+  );
+
+  const syncOutboundAttemptWithBackend = useCallback(
+    (peers: ConnectedPeer[]) => {
+      if (
+        !shouldClearOutboundAttemptForConnectedPeers(
+          pairingStageRef.current,
+          pairingTargetRef.current?.peerId,
+          peers,
+        )
+      ) {
+        return;
+      }
+      resetPairingFlow(false);
+      setStatus(resolveAppStatus(peers.length, false));
+    },
+    [resetPairingFlow, setStatus],
+  );
+
   const connectionLocked = isOutboundLockedStage(pairingStage);
 
   return {
@@ -852,7 +918,9 @@ export function usePairingFlow({
     handleConnectionEnded,
     handleOutboundConnectionStarted,
     handleOutboundConnectionPending,
+    handleOutboundConnectionSettled,
     handlePairingCodeNeeded,
+    syncOutboundAttemptWithBackend,
     pairingStageRef,
     connectionLocked,
   };

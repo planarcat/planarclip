@@ -88,8 +88,16 @@ async fn establish_outbound_connection(
 
     if crate::is_peer_connected(&deps.connections, &peer_id).await {
         tracing::info!(
-            "Auto-connect outbound finished but {} is already connected; discarding duplicate session",
+            "Auto-connect outbound finished but {} is already connected; syncing UI with existing session",
             peer_name
+        );
+        let _ = app.emit(
+            "connection-established",
+            serde_json::json!({
+                "peer_name": peer_name,
+                "peer_id": peer_id,
+                "is_reconnect": true,
+            }),
         );
         return true;
     }
@@ -217,6 +225,7 @@ async fn run_auto_outbound_handshake(
     let (handshake, ui_was_shown) = match handshake_result {
         Ok(value) => value,
         Err(error) => {
+            crate::emit_outbound_connection_settled(&app, &peer_id);
             if emit_failures {
                 emit_connection_failed(&app, &error);
             } else {
@@ -351,6 +360,7 @@ pub async fn attempt_connect_trusted_peer(
     {
         Ok(stream) => stream,
         Err(error) => {
+            crate::emit_outbound_connection_settled(app, peer_id);
             if emit_failures {
                 emit_connection_failed(app, &error);
             } else {

@@ -12,6 +12,7 @@ import type {
   ConnectionRequestPayload,
   LanDevicePayload,
   OutboundConnectionPendingPayload,
+  OutboundConnectionSettledPayload,
   PairingCodeNeededPayload,
   PairingCodeRotatedPayload,
   PairingStage,
@@ -79,7 +80,9 @@ type UseConnectionBridgeOptions = {
   onConnectionEnded: (payload: ConnectionEndedPayload) => void;
   onOutboundConnectionStarted: (payload: OutboundConnectionPendingPayload) => void;
   onOutboundConnectionPending: (payload: OutboundConnectionPendingPayload) => void;
+  onOutboundConnectionSettled: (payload: OutboundConnectionSettledPayload) => void;
   onPairingCodeNeeded: (payload: PairingCodeNeededPayload) => void;
+  onBackendConnectionSynced?: (peers: ConnectedPeer[]) => void;
 };
 
 /**
@@ -112,7 +115,9 @@ export function useConnectionBridge({
   onConnectionEnded,
   onOutboundConnectionStarted,
   onOutboundConnectionPending,
+  onOutboundConnectionSettled,
   onPairingCodeNeeded,
+  onBackendConnectionSynced,
 }: UseConnectionBridgeOptions) {
   const statusRef = useRef(status);
   const connectedPeersRef = useRef(connectedPeers);
@@ -136,7 +141,9 @@ export function useConnectionBridge({
   const onConnectionEndedRef = useLatestRef(onConnectionEnded);
   const onOutboundConnectionStartedRef = useLatestRef(onOutboundConnectionStarted);
   const onOutboundConnectionPendingRef = useLatestRef(onOutboundConnectionPending);
+  const onOutboundConnectionSettledRef = useLatestRef(onOutboundConnectionSettled);
   const onPairingCodeNeededRef = useLatestRef(onPairingCodeNeeded);
+  const onBackendConnectionSyncedRef = useLatestRef(onBackendConnectionSynced);
 
   useEffect(() => {
     statusRef.current = status;
@@ -161,6 +168,7 @@ export function useConnectionBridge({
         if (!areConnectedPeersEqual(connectedPeersRef.current, mappedPeers)) {
           setConnectedPeersRef.current(mappedPeers);
         }
+        onBackendConnectionSyncedRef.current?.(mappedPeers);
         return;
       }
 
@@ -218,6 +226,9 @@ export function useConnectionBridge({
         }),
         listen<OutboundConnectionPendingPayload>("outbound-connection-pending", (event) => {
           onOutboundConnectionPendingRef.current(event.payload);
+        }),
+        listen<OutboundConnectionSettledPayload>("outbound-connection-settled", (event) => {
+          onOutboundConnectionSettledRef.current(event.payload);
         }),
         listen<PairingCodeNeededPayload>("pairing-code-needed", (event) => {
           onPairingCodeNeededRef.current(event.payload);

@@ -199,7 +199,9 @@ export default function App() {
     handleConnectionEnded,
     handleOutboundConnectionStarted,
     handleOutboundConnectionPending,
+    handleOutboundConnectionSettled,
     handlePairingCodeNeeded,
+    syncOutboundAttemptWithBackend,
     pairingStageRef,
     connectionLocked,
   } = usePairingFlow({
@@ -358,7 +360,9 @@ export default function App() {
     onConnectionEnded: handleConnectionEnded,
     onOutboundConnectionStarted: handleOutboundConnectionStarted,
     onOutboundConnectionPending: handleOutboundConnectionPending,
+    onOutboundConnectionSettled: handleOutboundConnectionSettled,
     onPairingCodeNeeded: handlePairingCodeNeeded,
+    onBackendConnectionSynced: syncOutboundAttemptWithBackend,
     onPairingCodeRotated: handlePairingCodeRotated,
   });
 

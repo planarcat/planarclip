@@ -154,6 +154,10 @@ export type OutboundConnectionPendingPayload = {
   source?: string;
 };
 
+export type OutboundConnectionSettledPayload = {
+  peer_id: string;
+};
+
 export type PairingCodeNeededPayload = {
   peer_ip: string;
   peer_id?: string;
