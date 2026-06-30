@@ -409,6 +409,7 @@ struct PendingFileBatch {
     paths: Vec<PathBuf>,
     expected_count: u32,
     total_bytes: u64,
+    declared_total_bytes: Option<u64>,
     completed_bytes: u64,
 }
 
@@ -433,6 +434,7 @@ impl FileReceiveSession {
         total_bytes: u64,
         chunk_size: u32,
         batch_id: Option<String>,
+        batch_bytes_total: Option<u64>,
         max_file_bytes: u64,
     ) -> Result<(), &'static str> {
         if total_bytes > max_file_bytes {
@@ -449,6 +451,14 @@ impl FileReceiveSession {
             if let Some(batch) = self.batch.as_mut() {
                 if batch.batch_id == batch_id {
                     batch.total_bytes = batch.total_bytes.saturating_add(total_bytes);
+                    if let Some(declared) = batch_bytes_total {
+                        batch.declared_total_bytes = Some(
+                            batch
+                                .declared_total_bytes
+                                .map(|current| current.max(declared))
+                                .unwrap_or(declared),
+                        );
+                    }
                 }
             }
         }
@@ -568,8 +578,18 @@ impl FileReceiveSession {
             paths: Vec::new(),
             expected_count,
             total_bytes: 0,
+            declared_total_bytes: None,
             completed_bytes: 0,
         });
+    }
+
+    pub fn batch_transfer_totals(&self) -> Option<(u32, u64, u64)> {
+        let batch = self.batch.as_ref()?;
+        let bytes_total = batch
+            .declared_total_bytes
+            .unwrap_or(batch.total_bytes)
+            .max(1);
+        Some((batch.expected_count, bytes_total, batch.completed_bytes))
     }
 
     pub fn receive_progress(&self) -> Option<(u32, u32, u64, String, Option<u32>, u64, u64)> {
@@ -589,9 +609,13 @@ impl FileReceiveSession {
             (pending.batch_id.as_ref(), self.batch.as_ref())
         {
             if batch_id == &batch.batch_id {
+                let batch_bytes_total = batch
+                    .declared_total_bytes
+                    .unwrap_or(batch.total_bytes)
+                    .max(pending.total_bytes);
                 (
                     batch.completed_bytes.saturating_add(file_partial),
-                    batch.total_bytes.max(pending.total_bytes),
+                    batch_bytes_total,
                 )
             } else {
                 (file_partial, pending.total_bytes)
@@ -659,10 +683,11 @@ pub async fn send_file_with_flow_control<F>(
     file_path: &Path,
     file_name: &str,
     hash: [u8; 32],
-    batch_id: Option<String>,
-    batch_index: Option<u32>,
-    batch_total: Option<u32>,
-    mut on_progress: Option<F>,
+        batch_id: Option<String>,
+        batch_index: Option<u32>,
+        batch_total: Option<u32>,
+        batch_bytes_total: Option<u64>,
+        mut on_progress: Option<F>,
 ) -> Result<(), String>
 where
     F: FnMut(u32, u32) + Send,
@@ -682,6 +707,7 @@ where
         batch_id,
         batch_index,
         batch_total,
+        batch_bytes_total,
     });
 
     let mut ack_waiter = AckWaiter::register(ack_registry, &transfer_id).await;
