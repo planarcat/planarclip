@@ -129,4 +129,16 @@ pub enum HandshakeMessage {
         public_key: Option<String>,
         reason: Option<String>,
     },
+
+    #[serde(rename = "presence_query")]
+    PresenceQuery {
+        querier_peer_id: String,
+    },
+
+    #[serde(rename = "presence_reply")]
+    PresenceReply {
+        peer_id: String,
+        device_name: String,
+        service_profile: String,
+    },
 }

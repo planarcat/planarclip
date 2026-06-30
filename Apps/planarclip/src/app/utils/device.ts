@@ -37,9 +37,14 @@ export function areLanDevicesEqual(left: LanDevicePayload[], right: LanDevicePay
       device.name === other.name &&
       device.ip === other.ip &&
       device.host_name === other.host_name &&
-      device.port === other.port
+      device.port === other.port &&
+      device.last_presence_at === other.last_presence_at
     );
   });
+}
+
+function presenceDate(value?: number | null) {
+  return value != null && value > 0 ? new Date(value) : undefined;
 }
 
 export function createDeviceId(prefix: string, value: string) {
@@ -84,7 +89,8 @@ export function buildDevices(
       peerId: device.peer_id,
       address: formatDeviceAddress(device.ip, device.port),
       status: isConnected ? "connected" : "idle",
-      lastSeen: new Date(),
+      lastPresenceAt: presenceDate(device.last_presence_at),
+      lastSeen: presenceDate(device.last_presence_at),
       source: trustedPeer ? "trusted" : "discovery",
       isTrusted: Boolean(trustedPeer),
       autoAccept: trustedPeer ? trustedPeer.auto_accept : false,

@@ -20,6 +20,7 @@ use crate::clipboard::types::ClipboardEvent;
 const AUTO_CONNECT_UI_DELAY_MS: u64 = 400;
 const AUTO_CONNECT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
+#[derive(Clone)]
 pub struct AutoConnectDeps {
     pub config: Arc<Mutex<AppConfig>>,
     pub key_pair: Arc<Mutex<Option<KeyPair>>>,
@@ -306,18 +307,21 @@ pub async fn attempt_connect_trusted_peer(
     );
 
     let probe_ports = app_profile::tcp_probe_port_candidates(deps.tcp_port);
-    let resolved_port = match direct::probe_tcp_reachable_resilient(
+    let querier_peer_id = key_pair.fingerprint();
+    let resolved = match direct::probe_planarclip_presence_resilient(
         ip,
         port,
         &probe_ports,
+        &querier_peer_id,
+        Some(peer_id),
         AUTO_CONNECT_PROBE_TIMEOUT,
     )
     .await
     {
-        Some(found_port) => found_port,
+        Some(result) => result,
         None => {
             tracing::debug!(
-                "Auto-connect skipped: trusted peer {} not reachable at {}:{}",
+                "Auto-connect skipped: trusted peer {} not present at {}:{}",
                 peer_id,
                 ip,
                 port
@@ -325,6 +329,7 @@ pub async fn attempt_connect_trusted_peer(
             return false;
         }
     };
+    let resolved_port = resolved.port;
 
     crate::emit_outbound_connection_started(
         app,
@@ -424,10 +429,13 @@ pub async fn auto_connect_trusted_on_startup(
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
+    let state = app.state::<crate::AppState>();
     crate::refresh_lan_presence(
         &deps.config,
+        &deps.key_pair,
         &lan_devices,
         &deps.connections,
+        &state.peer_offline_cooldown,
         deps.tcp_port,
         &app,
     )

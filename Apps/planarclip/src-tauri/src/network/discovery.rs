@@ -15,6 +15,9 @@ pub struct LanDevice {
     /// mDNS instance full name, used to match ServiceRemoved events.
     #[serde(default)]
     pub service_fullname: String,
+    /// Unix ms when PlanarClip presence was last confirmed via protocol probe.
+    #[serde(default)]
+    pub last_presence_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +84,7 @@ pub fn start_discovery(
                             host_name,
                             port: info.get_port(),
                             service_fullname: info.get_fullname().to_string(),
+                            last_presence_at: None,
                         };
                         tracing::info!(
                             "mDNS discovered: {} at {}:{} ({})",

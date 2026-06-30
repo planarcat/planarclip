@@ -1,12 +1,16 @@
 use std::io::ErrorKind;
 
+use std::sync::Arc;
+
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 
+use crate::app_profile;
 use crate::crypto::keys::{peer_id_from_public_key, KeyPair};
 use crate::network::binary_chunk::{decode_binary_body, encode_binary_body, BinaryChunk};
 use crate::network::protocol::{HandshakeMessage, SignalMessage};
+use crate::storage::json::AppConfig;
 
 const FRAME_HANDSHAKE: u8 = 0x00;
 const FRAME_DATA: u8 = 0x01;
@@ -18,6 +22,7 @@ pub enum ConnectionEvent {
     Binary(BinaryChunk),
 }
 
+#[derive(Debug)]
 pub enum Frame {
     Handshake(HandshakeMessage),
     Data(SignalMessage),
@@ -81,43 +86,124 @@ fn format_socket_addr(host: &str, port: u16) -> String {
     }
 }
 
-/// Returns true when something is accepting TCP connections on the PlanarClip port.
-pub async fn probe_tcp_reachable(ip: &str, port: u16, timeout: std::time::Duration) -> bool {
-    match tokio::time::timeout(timeout, TcpStream::connect(format_socket_addr(ip, port))).await {
-        Ok(Ok(mut stream)) => {
-            let _ = stream.shutdown().await;
-            true
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresenceProbeResult {
+    pub peer_id: String,
+    pub device_name: String,
+    pub service_profile: String,
+    pub port: u16,
+}
+
+#[derive(Clone)]
+pub struct PresenceResponder {
+    pub config: Arc<Mutex<AppConfig>>,
+    pub key_pair: Arc<Mutex<Option<KeyPair>>>,
+}
+
+fn presence_reply_matches(
+    reply: &HandshakeMessage,
+    expected_peer_id: Option<&str>,
+) -> Option<PresenceProbeResult> {
+    let HandshakeMessage::PresenceReply {
+        peer_id,
+        device_name,
+        service_profile,
+    } = reply
+    else {
+        return None;
+    };
+
+    if service_profile != app_profile::service_profile_name() {
+        return None;
+    }
+
+    if let Some(expected) = expected_peer_id {
+        if peer_id != expected {
+            return None;
         }
-        _ => false,
+    }
+
+    Some(PresenceProbeResult {
+        peer_id: peer_id.clone(),
+        device_name: device_name.clone(),
+        service_profile: service_profile.clone(),
+        port: 0,
+    })
+}
+
+async fn probe_planarclip_presence_on_port(
+    ip: &str,
+    port: u16,
+    querier_peer_id: &str,
+    expected_peer_id: Option<&str>,
+    timeout: std::time::Duration,
+) -> Option<PresenceProbeResult> {
+    let mut stream = match tokio::time::timeout(timeout, tcp_connect(ip, port)).await {
+        Ok(Ok(stream)) => stream,
+        _ => return None,
+    };
+
+    let query = HandshakeMessage::PresenceQuery {
+        querier_peer_id: querier_peer_id.to_string(),
+    };
+    if tokio::time::timeout(timeout, write_frame(&mut stream, &Frame::Handshake(query)))
+        .await
+        .is_err()
+    {
+        return None;
+    }
+
+    let frame = match tokio::time::timeout(timeout, read_frame(&mut stream)).await {
+        Ok(Ok(frame)) => frame,
+        _ => return None,
+    };
+
+    let _ = stream.shutdown().await;
+
+    match frame {
+        Frame::Handshake(message) => presence_reply_matches(&message, expected_peer_id).map(|mut result| {
+            result.port = port;
+            result
+        }),
+        _ => None,
     }
 }
 
-pub async fn probe_tcp_reachable_on_any_port(
+/// Returns Some when the remote responds with a matching PlanarClip presence reply.
+pub async fn probe_planarclip_presence(
     ip: &str,
     ports: &[u16],
+    querier_peer_id: &str,
+    expected_peer_id: Option<&str>,
     timeout: std::time::Duration,
-) -> Option<u16> {
+) -> Option<PresenceProbeResult> {
     for port in ports {
-        if probe_tcp_reachable(ip, *port, timeout).await {
-            return Some(*port);
+        if let Some(result) =
+            probe_planarclip_presence_on_port(ip, *port, querier_peer_id, expected_peer_id, timeout).await
+        {
+            return Some(result);
         }
     }
     None
 }
 
 /// Probe primary port with one retry, then fall back to alternate ports.
-pub async fn probe_tcp_reachable_resilient(
+pub async fn probe_planarclip_presence_resilient(
     ip: &str,
     port: u16,
     alternate_ports: &[u16],
+    querier_peer_id: &str,
+    expected_peer_id: Option<&str>,
     timeout: std::time::Duration,
-) -> Option<u16> {
+) -> Option<PresenceProbeResult> {
     for attempt in 0..2 {
         if attempt > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         }
-        if probe_tcp_reachable(ip, port, timeout).await {
-            return Some(port);
+        if let Some(result) =
+            probe_planarclip_presence_on_port(ip, port, querier_peer_id, expected_peer_id, timeout).await
+        {
+            return Some(result);
         }
     }
 
@@ -125,12 +211,40 @@ pub async fn probe_tcp_reachable_resilient(
         if alt == port {
             continue;
         }
-        if probe_tcp_reachable(ip, alt, timeout).await {
-            return Some(alt);
+        if let Some(result) =
+            probe_planarclip_presence_on_port(ip, alt, querier_peer_id, expected_peer_id, timeout).await
+        {
+            return Some(result);
         }
     }
 
     None
+}
+
+pub async fn respond_to_presence_query(
+    mut stream: TcpStream,
+    responder: &PresenceResponder,
+) -> Result<(), HandshakeError> {
+    let (device_name, peer_id) = {
+        let config = responder.config.lock().await;
+        let key_pair = responder.key_pair.lock().await;
+        let Some(key_pair) = key_pair.as_ref() else {
+            return Err(HandshakeError::Protocol("responder key pair not ready"));
+        };
+        (config.device_name.clone(), key_pair.fingerprint())
+    };
+
+    write_frame(
+        &mut stream,
+        &Frame::Handshake(HandshakeMessage::PresenceReply {
+            peer_id,
+            device_name,
+            service_profile: app_profile::service_profile_name().to_string(),
+        }),
+    )
+    .await?;
+    let _ = stream.shutdown().await;
+    Ok(())
 }
 
 pub fn is_likely_probe_disconnect(error: &HandshakeError) -> bool {
@@ -500,6 +614,53 @@ pub struct IncomingRequest {
     pub requires_confirmation: bool,
 }
 
+pub enum FirstHandshake {
+    PresenceQuery { stream: TcpStream },
+    ConnectRequest(IncomingRequest),
+}
+
+fn parse_connect_request(
+    stream: TcpStream,
+    device_name: String,
+    peer_id: String,
+    public_key: String,
+    requires_confirmation: bool,
+) -> Result<IncomingRequest, HandshakeError> {
+    let pk_bytes = hex::decode(&public_key)
+        .map_err(|_| HandshakeError::Protocol("公钥十六进制格式无效"))?;
+    Ok(IncomingRequest {
+        stream,
+        initiator_name: device_name,
+        initiator_peer_id: peer_id,
+        initiator_public_key: pk_bytes,
+        requires_confirmation,
+    })
+}
+
+pub async fn read_first_handshake(mut stream: TcpStream) -> Result<FirstHandshake, HandshakeError> {
+    match read_frame(&mut stream).await? {
+        Frame::Handshake(HandshakeMessage::PresenceQuery { .. }) => {
+            Ok(FirstHandshake::PresenceQuery { stream })
+        }
+        Frame::Handshake(HandshakeMessage::ConnectRequest {
+            device_name,
+            peer_id,
+            public_key,
+            requires_confirmation,
+        }) => parse_connect_request(
+            stream,
+            device_name,
+            peer_id,
+            public_key,
+            requires_confirmation,
+        )
+        .map(FirstHandshake::ConnectRequest),
+        _ => Err(HandshakeError::Protocol(
+            "expected ConnectRequest or PresenceQuery",
+        )),
+    }
+}
+
 pub async fn read_connect_request(mut stream: TcpStream) -> Result<IncomingRequest, HandshakeError> {
     let frame = read_frame(&mut stream).await?;
     match frame {
@@ -508,17 +669,13 @@ pub async fn read_connect_request(mut stream: TcpStream) -> Result<IncomingReque
             peer_id,
             public_key,
             requires_confirmation,
-        }) => {
-            let pk_bytes = hex::decode(&public_key)
-                .map_err(|_| HandshakeError::Protocol("公钥十六进制格式无效"))?;
-            Ok(IncomingRequest {
-                stream,
-                initiator_name: device_name,
-                initiator_peer_id: peer_id,
-                initiator_public_key: pk_bytes,
-                requires_confirmation,
-            })
-        }
+        }) => parse_connect_request(
+            stream,
+            device_name,
+            peer_id,
+            public_key,
+            requires_confirmation,
+        ),
         _ => Err(HandshakeError::Protocol("应收到连接请求消息")),
     }
 }
@@ -821,6 +978,7 @@ pub enum ListenerEvent {
 
 pub async fn run_listener(
     port: u16,
+    presence: PresenceResponder,
     event_tx: mpsc::UnboundedSender<ListenerEvent>,
 ) -> Result<(), std::io::Error> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
@@ -831,20 +989,32 @@ pub async fn run_listener(
         tracing::info!("TCP connection accepted from {}", addr);
 
         let tx = event_tx.clone();
+        let presence = presence.clone();
         tokio::spawn(async move {
-            match read_connect_request(stream).await {
-                Ok(req) => {
+            match read_first_handshake(stream).await {
+                Ok(FirstHandshake::PresenceQuery { stream }) => {
+                    if let Err(error) = respond_to_presence_query(stream, &presence).await {
+                        if !is_likely_probe_disconnect(&error) {
+                            tracing::debug!(
+                                "Presence query handling failed from {}: {}",
+                                addr,
+                                error
+                            );
+                        }
+                    }
+                }
+                Ok(FirstHandshake::ConnectRequest(req)) => {
                     let _ = tx.send(ListenerEvent::Incoming(req));
                 }
-                Err(e) => {
-                    if is_likely_probe_disconnect(&e) {
+                Err(error) => {
+                    if is_likely_probe_disconnect(&error) {
                         tracing::debug!(
                             "Incomplete TCP handshake from {} (likely reachability probe): {}",
                             addr,
-                            e
+                            error
                         );
                     } else {
-                        tracing::warn!("Failed to read ConnectRequest from {}: {}", addr, e);
+                        tracing::warn!("Failed to read first handshake from {}: {}", addr, error);
                     }
                 }
             }
@@ -1158,5 +1328,113 @@ mod tests {
 
         let server_result = server.await.unwrap();
         assert!(matches!(server_result, Err(HandshakeError::InvalidCode)));
+    }
+
+    #[tokio::test]
+    async fn probe_planarclip_presence_succeeds_for_matching_peer() {
+        let responder_key = KeyPair::generate();
+        let expected_peer_id = responder_key.fingerprint();
+        let (listener, port) = bind_test_listener().await;
+        let reply_peer_id = expected_peer_id.clone();
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            match read_frame(&mut stream).await.unwrap() {
+                Frame::Handshake(HandshakeMessage::PresenceQuery { .. }) => {
+                    write_frame(
+                        &mut stream,
+                        &Frame::Handshake(HandshakeMessage::PresenceReply {
+                            peer_id: reply_peer_id,
+                            device_name: "Responder".into(),
+                            service_profile: app_profile::service_profile_name().to_string(),
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                }
+                other => panic!("unexpected first frame: {:?}", other),
+            }
+        });
+
+        let result = probe_planarclip_presence(
+            "127.0.0.1",
+            &[port],
+            "querier-peer",
+            Some(&expected_peer_id),
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+
+        assert!(result.is_some());
+        let result = result.unwrap();
+        assert_eq!(result.peer_id, expected_peer_id);
+        assert_eq!(result.port, port);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_planarclip_presence_rejects_peer_id_mismatch() {
+        let responder_key = KeyPair::generate();
+        let (listener, port) = bind_test_listener().await;
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _ = read_frame(&mut stream).await.unwrap();
+            write_frame(
+                &mut stream,
+                &Frame::Handshake(HandshakeMessage::PresenceReply {
+                    peer_id: responder_key.fingerprint(),
+                    device_name: "Responder".into(),
+                    service_profile: app_profile::service_profile_name().to_string(),
+                }),
+            )
+            .await
+            .unwrap();
+        });
+
+        let result = probe_planarclip_presence(
+            "127.0.0.1",
+            &[port],
+            "querier-peer",
+            Some("different-peer-id"),
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+
+        assert!(result.is_none());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn presence_query_does_not_emit_connect_request() {
+        let (listener, port) = bind_test_listener().await;
+        drop(listener);
+        let responder_key = KeyPair::generate();
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+
+        let responder = PresenceResponder {
+            config: Arc::new(Mutex::new(AppConfig {
+                device_name: "Responder".into(),
+                ..Default::default()
+            })),
+            key_pair: Arc::new(Mutex::new(Some(responder_key))),
+        };
+
+        tokio::spawn(async move {
+            let _ = run_listener(port, responder, event_tx).await;
+        });
+
+        let result = probe_planarclip_presence(
+            "127.0.0.1",
+            &[port],
+            "querier-peer",
+            None,
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+        assert!(result.is_some());
+
+        let incoming = tokio::time::timeout(std::time::Duration::from_millis(200), event_rx.recv()).await;
+        assert!(incoming.is_err());
     }
 }

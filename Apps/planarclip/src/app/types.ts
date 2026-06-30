@@ -27,6 +27,7 @@ export type Device = {
   address: string;
   status: DeviceStatus;
   lastSeen?: Date;
+  lastPresenceAt?: Date;
   pairedAt?: Date;
   latencyMs?: number;
   source: "discovery" | "connected" | "trusted";
@@ -118,6 +119,7 @@ export type LanDevicePayload = {
   ip: string;
   host_name: string;
   port: number;
+  last_presence_at?: number | null;
 };
 
 export type TrustedPeerPayload = {

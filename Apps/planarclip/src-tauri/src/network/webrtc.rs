@@ -1131,6 +1131,8 @@ impl ConnectionManager {
 
             if kind == "peer_offline" {
                 let state = app_handle.state::<crate::AppState>();
+                crate::mark_peer_offline_cooldown(state.inner(), &peer_id).await;
+                let state = app_handle.state::<crate::AppState>();
                 crate::remove_lan_device_by_peer_id(
                     &state.lan_devices,
                     &peer_id,

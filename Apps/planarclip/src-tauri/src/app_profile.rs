@@ -43,3 +43,12 @@ pub const MDNS_SERVICE_TYPE: &str = "_planarclip._tcp.local.";
 pub fn mdns_service_fullname_prefix(device_name: &str) -> String {
     format!("{device_name}{MDNS_SERVICE_TYPE}")
 }
+
+/// Build profile label returned in presence replies (`dev` or `release`).
+pub fn service_profile_name() -> &'static str {
+    if cfg!(debug_assertions) {
+        "dev"
+    } else {
+        "release"
+    }
+}

@@ -109,7 +109,15 @@ export function DevicesPanel({
                   {[
                     { label: "地址", value: device.address, className: "text-secondary-foreground", mono: true },
                     { label: "系统", value: osLabel, className: "text-secondary-foreground", mono: false },
-                    { label: "最近活跃", value: relativeTime(device.lastSeen), className: "text-secondary-foreground", mono: false },
+                    {
+                      label: "最近活跃",
+                      value: (() => {
+                        const seen = device.lastPresenceAt ?? device.lastSeen;
+                        return seen ? relativeTime(seen) : "—";
+                      })(),
+                      className: "text-secondary-foreground",
+                      mono: false,
+                    },
                   ].map((row) => (
                     <div key={row.label} className="flex items-center justify-between gap-3 leading-5">
                       <span className="text-[13px] font-medium text-muted-foreground">{row.label}</span>

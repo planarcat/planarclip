@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -68,6 +69,7 @@ pub struct AppState {
     pub clip_tx: broadcast::Sender<ClipboardEvent>,
     pub clipboard_history: Arc<Mutex<Vec<ClipboardHistoryEntry>>>,
     pub lan_devices: Arc<Mutex<Vec<LanDevice>>>,
+    pub peer_offline_cooldown: Arc<Mutex<HashMap<String, i64>>>,
     pub pending_initiator: Arc<Mutex<Option<TcpStream>>>,
     pub pending_outbound: Arc<Mutex<Option<TcpStream>>>,
     pub outbound_abort: Arc<Mutex<Option<oneshot::Sender<()>>>>,
@@ -176,13 +178,84 @@ fn lan_device_matches_removal(device: &LanDevice, service_fullname: &str) -> boo
 const LAN_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const LAN_PROBE_INTERVAL: Duration = Duration::from_secs(8);
 const LAN_PRESENCE_REFRESH_DELAY: Duration = Duration::from_millis(350);
+const PEER_OFFLINE_COOLDOWN: Duration = Duration::from_secs(30);
 
-async fn discover_trusted_peers_by_tcp_probe(
-    config: &Arc<Mutex<AppConfig>>,
+fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+async fn local_querier_peer_id(key_pair: &Arc<Mutex<Option<KeyPair>>>) -> Option<String> {
+    key_pair
+        .lock()
+        .await
+        .as_ref()
+        .map(|key_pair| key_pair.fingerprint())
+}
+
+async fn is_peer_in_offline_cooldown(
+    cooldown: &Arc<Mutex<HashMap<String, i64>>>,
+    peer_id: &str,
+) -> bool {
+    let Some(until) = cooldown.lock().await.get(peer_id).copied() else {
+        return false;
+    };
+    now_unix_ms() < until
+}
+
+pub(crate) async fn mark_peer_offline_cooldown(state: &AppState, peer_id: &str) {
+    let peer_id = peer_id.trim();
+    if peer_id.is_empty() {
+        return;
+    }
+    let until = now_unix_ms() + PEER_OFFLINE_COOLDOWN.as_millis() as i64;
+    state
+        .peer_offline_cooldown
+        .lock()
+        .await
+        .insert(peer_id.to_string(), until);
+}
+
+fn apply_presence_probe(device: &mut LanDevice, presence: &direct::PresenceProbeResult) {
+    device.port = presence.port;
+    device.last_presence_at = Some(now_unix_ms());
+    if !presence.device_name.trim().is_empty() {
+        device.name = presence.device_name.clone();
+    }
+}
+
+async fn upsert_presence_confirmed_device(
     lan_devices: &Arc<Mutex<Vec<LanDevice>>>,
+    device: LanDevice,
+    app: &tauri::AppHandle,
+) -> bool {
+    let mut devices = lan_devices.lock().await;
+    if let Some(existing) = devices.iter_mut().find(|entry| entry.peer_id == device.peer_id) {
+        *existing = device;
+    } else {
+        devices.push(device);
+    }
+
+    let updated = devices.clone();
+    drop(devices);
+    let _ = app.emit("lan-devices-changed", &updated);
+    true
+}
+
+async fn discover_trusted_peers_by_presence_probe(
+    config: &Arc<Mutex<AppConfig>>,
+    key_pair: &Arc<Mutex<Option<KeyPair>>>,
+    lan_devices: &Arc<Mutex<Vec<LanDevice>>>,
+    peer_offline_cooldown: &Arc<Mutex<HashMap<String, i64>>>,
     tcp_port: u16,
     app: &tauri::AppHandle,
 ) {
+    let Some(querier_peer_id) = local_querier_peer_id(key_pair).await else {
+        return;
+    };
+
     let (trusted_peers, known_peer_ids) = {
         let config_guard = config.lock().await;
         let peers = config_guard.trusted_peers.clone().unwrap_or_default();
@@ -191,7 +264,7 @@ async fn discover_trusted_peers_by_tcp_probe(
             .await
             .iter()
             .map(|device| device.peer_id.clone())
-            .collect::<std::collections::HashSet<_>>();
+            .collect::<HashSet<_>>();
         (peers, known_peer_ids)
     };
 
@@ -200,6 +273,9 @@ async fn discover_trusted_peers_by_tcp_probe(
 
     for peer in trusted_peers {
         if known_peer_ids.contains(&peer.peer_id) {
+            continue;
+        }
+        if is_peer_in_offline_cooldown(peer_offline_cooldown, &peer.peer_id).await {
             continue;
         }
         let Some(last_ip) = peer
@@ -211,66 +287,77 @@ async fn discover_trusted_peers_by_tcp_probe(
             continue;
         };
 
-        let Some(port) =
-            direct::probe_tcp_reachable_on_any_port(last_ip, &probe_ports, LAN_PROBE_TIMEOUT).await
+        let Some(presence) = direct::probe_planarclip_presence(
+            last_ip,
+            &probe_ports,
+            &querier_peer_id,
+            Some(&peer.peer_id),
+            LAN_PROBE_TIMEOUT,
+        )
+        .await
         else {
             continue;
         };
 
-        discovered.push(LanDevice {
+        let mut device = LanDevice {
             name: peer.name.clone(),
             peer_id: peer.peer_id.clone(),
             ip: last_ip.to_string(),
             host_name: String::new(),
-            port,
+            port: presence.port,
             service_fullname: String::new(),
-        });
+            last_presence_at: Some(now_unix_ms()),
+        };
+        apply_presence_probe(&mut device, &presence);
+        discovered.push(device);
     }
 
-    if discovered.is_empty() {
-        return;
-    }
-
-    let mut devices = lan_devices.lock().await;
-    let mut changed = false;
     for device in discovered {
-        if devices.iter().any(|entry| entry.peer_id == device.peer_id) {
-            continue;
-        }
         tracing::info!(
-            "Familiar peer {} reachable at {}:{} via TCP probe (mDNS miss)",
+            "Familiar peer {} confirmed at {}:{} via presence probe (mDNS miss)",
             device.name,
             device.ip,
             device.port
         );
-        devices.push(device);
-        changed = true;
+        upsert_presence_confirmed_device(lan_devices, device, app).await;
     }
-
-    if !changed {
-        return;
-    }
-
-    let updated = devices.clone();
-    drop(devices);
-    let _ = app.emit("lan-devices-changed", &updated);
 }
 
 pub(crate) async fn refresh_lan_presence(
     config: &Arc<Mutex<AppConfig>>,
+    key_pair: &Arc<Mutex<Option<KeyPair>>>,
     lan_devices: &Arc<Mutex<Vec<LanDevice>>>,
     connections: &Arc<Mutex<ConnectionRegistry>>,
+    peer_offline_cooldown: &Arc<Mutex<HashMap<String, i64>>>,
     tcp_port: u16,
     app: &tauri::AppHandle,
 ) {
-    discover_trusted_peers_by_tcp_probe(config, lan_devices, tcp_port, app).await;
-    reconcile_lan_devices(config, lan_devices, connections, tcp_port, app).await;
+    discover_trusted_peers_by_presence_probe(
+        config,
+        key_pair,
+        lan_devices,
+        peer_offline_cooldown,
+        tcp_port,
+        app,
+    )
+    .await;
+    reconcile_lan_devices(
+        key_pair,
+        lan_devices,
+        connections,
+        peer_offline_cooldown,
+        tcp_port,
+        app,
+    )
+    .await;
 }
 
 pub(crate) fn spawn_lan_presence_refresh(state: &AppState, app: &tauri::AppHandle) {
     let config = state.config.clone();
+    let key_pair = state.key_pair.clone();
     let lan_devices = state.lan_devices.clone();
     let connections = state.connections.clone();
+    let peer_offline_cooldown = state.peer_offline_cooldown.clone();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(LAN_PRESENCE_REFRESH_DELAY).await;
@@ -279,7 +366,16 @@ pub(crate) fn spawn_lan_presence_refresh(state: &AppState, app: &tauri::AppHandl
             .await
             .tcp_port
             .unwrap_or(app_profile::DEFAULT_TCP_PORT);
-        refresh_lan_presence(&config, &lan_devices, &connections, tcp_port, &app).await;
+        refresh_lan_presence(
+            &config,
+            &key_pair,
+            &lan_devices,
+            &connections,
+            &peer_offline_cooldown,
+            tcp_port,
+            &app,
+        )
+        .await;
     });
 }
 
@@ -300,6 +396,10 @@ fn peer_offline_message(peer_name: &str) -> String {
 }
 
 async fn peer_still_reachable(state: &AppState, peer_id: &str, tcp_port: u16) -> bool {
+    let Some(querier_peer_id) = local_querier_peer_id(&state.key_pair).await else {
+        return false;
+    };
+
     let probe_ports = app_profile::tcp_probe_port_candidates(tcp_port);
 
     let lan_target = {
@@ -311,9 +411,16 @@ async fn peer_still_reachable(state: &AppState, peer_id: &str, tcp_port: u16) ->
     };
 
     if let Some((ip, port)) = lan_target {
-        return direct::probe_tcp_reachable_resilient(&ip, port, &probe_ports, LAN_PROBE_TIMEOUT)
-            .await
-            .is_some();
+        return direct::probe_planarclip_presence_resilient(
+            &ip,
+            port,
+            &probe_ports,
+            &querier_peer_id,
+            Some(peer_id),
+            LAN_PROBE_TIMEOUT,
+        )
+        .await
+        .is_some();
     }
 
     let trusted_ip = {
@@ -327,9 +434,15 @@ async fn peer_still_reachable(state: &AppState, peer_id: &str, tcp_port: u16) ->
     };
 
     if let Some(ip) = trusted_ip {
-        return direct::probe_tcp_reachable_on_any_port(&ip, &probe_ports, LAN_PROBE_TIMEOUT)
-            .await
-            .is_some();
+        return direct::probe_planarclip_presence(
+            &ip,
+            &probe_ports,
+            &querier_peer_id,
+            Some(peer_id),
+            LAN_PROBE_TIMEOUT,
+        )
+        .await
+        .is_some();
     }
 
     false
@@ -354,19 +467,24 @@ pub(crate) async fn resolve_connection_ended_message(
 }
 
 async fn reconcile_lan_devices(
-    _config: &Arc<Mutex<AppConfig>>,
+    key_pair: &Arc<Mutex<Option<KeyPair>>>,
     lan_devices: &Arc<Mutex<Vec<LanDevice>>>,
     connections: &Arc<Mutex<ConnectionRegistry>>,
+    _peer_offline_cooldown: &Arc<Mutex<HashMap<String, i64>>>,
     tcp_port: u16,
     app: &tauri::AppHandle,
 ) {
+    let Some(querier_peer_id) = local_querier_peer_id(key_pair).await else {
+        return;
+    };
+
     let snapshot = lan_devices.lock().await.clone();
     if snapshot.is_empty() {
         return;
     }
 
     let probe_ports = app_profile::tcp_probe_port_candidates(tcp_port);
-    let connected_peer_ids: std::collections::HashSet<String> = connections
+    let connected_peer_ids: HashSet<String> = connections
         .lock()
         .await
         .connected_peer_ids()
@@ -379,31 +497,39 @@ async fn reconcile_lan_devices(
         let port = device.port;
         let skip_probe = connected_peer_ids.contains(&peer_id);
         let probe_ports = probe_ports.clone();
+        let querier_peer_id = querier_peer_id.clone();
         async move {
             if skip_probe {
                 return (peer_id, true, None);
             }
-            match direct::probe_tcp_reachable_resilient(&ip, port, &probe_ports, LAN_PROBE_TIMEOUT)
-                .await
+            match direct::probe_planarclip_presence_resilient(
+                &ip,
+                port,
+                &probe_ports,
+                &querier_peer_id,
+                Some(&peer_id),
+                LAN_PROBE_TIMEOUT,
+            )
+            .await
             {
-                Some(found_port) => (peer_id, true, Some(found_port)),
+                Some(presence) => (peer_id, true, Some(presence)),
                 None => (peer_id, false, None),
             }
         }
     }))
     .await;
 
-    let unreachable: std::collections::HashSet<_> = probe_results
+    let unreachable: HashSet<_> = probe_results
         .iter()
         .filter(|(_, reachable, _)| !reachable)
         .map(|(peer_id, _, _)| peer_id.clone())
         .collect();
 
-    let port_updates: std::collections::HashMap<_, _> = probe_results
+    let presence_updates: HashMap<_, _> = probe_results
         .into_iter()
-        .filter_map(|(peer_id, reachable, found_port)| {
+        .filter_map(|(peer_id, reachable, presence)| {
             if reachable {
-                found_port.map(|port| (peer_id, port))
+                presence.map(|result| (peer_id, result))
             } else {
                 None
             }
@@ -414,17 +540,9 @@ async fn reconcile_lan_devices(
     let mut changed = false;
 
     for device in devices.iter_mut() {
-        if let Some(found_port) = port_updates.get(&device.peer_id) {
-            if device.port != *found_port {
-                tracing::info!(
-                    "LAN device {} reachable on updated port {} (was {})",
-                    device.name,
-                    found_port,
-                    device.port
-                );
-                device.port = *found_port;
-                changed = true;
-            }
+        if let Some(presence) = presence_updates.get(&device.peer_id) {
+            apply_presence_probe(device, presence);
+            changed = true;
         }
     }
 
@@ -433,7 +551,7 @@ async fn reconcile_lan_devices(
         devices.retain(|device| !unreachable.contains(&device.peer_id));
         if devices.len() != before {
             tracing::info!(
-                "Pruned {} unreachable LAN device(s) after TCP probe",
+                "Pruned {} unreachable LAN device(s) after presence probe",
                 before - devices.len()
             );
             changed = true;
@@ -1440,8 +1558,10 @@ async fn refresh_lan_devices(
     let tcp_port = state.config.lock().await.tcp_port.unwrap_or(app_profile::DEFAULT_TCP_PORT);
     refresh_lan_presence(
         &state.config,
+        &state.key_pair,
         &state.lan_devices,
         &state.connections,
+        &state.peer_offline_cooldown,
         tcp_port,
         &app,
     )
@@ -2262,6 +2382,7 @@ pub fn run() {
         clip_tx: clip_tx.clone(),
         clipboard_history: Arc::new(Mutex::new(initial_clipboard_history)),
         lan_devices: Arc::new(Mutex::new(Vec::new())),
+        peer_offline_cooldown: Arc::new(Mutex::new(HashMap::new())),
         pending_initiator: Arc::new(Mutex::new(None)),
         pending_outbound: Arc::new(Mutex::new(None)),
         outbound_abort: Arc::new(Mutex::new(None)),
@@ -2351,6 +2472,7 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            let app_key_pair = app.state::<AppState>().key_pair.clone();
             let app_handle = app.handle().clone();
             let device_name = normalize_stored_device_name(&app.state::<AppState>().config.blocking_lock().device_name);
             let peer_id = key_pair.fingerprint();
@@ -2382,9 +2504,11 @@ pub fn run() {
             {
                 let lan_devices = lan_devices.clone();
                 let app_handle = app_handle.clone();
+                let verify_key_pair = app_key_pair.clone();
+                let verify_cooldown = app.state::<AppState>().peer_offline_cooldown.clone();
                 let auto_connect_deps = auto_connect::AutoConnectDeps {
                     config: config.clone(),
-                    key_pair: app.state::<AppState>().key_pair.clone(),
+                    key_pair: app_key_pair.clone(),
                     connections: connections.clone(),
                     connection_generation: connection_generation.clone(),
                     clip_tx: clip_tx.clone(),
@@ -2400,67 +2524,74 @@ pub fn run() {
                 };
                 tauri::async_runtime::spawn(async move {
                     while let Some(event) = discovery_rx.recv().await {
-                        let mut devices = lan_devices.lock().await;
-                        let mut changed = false;
-                        let mut added_or_refreshed: Option<LanDevice> = None;
                         match event {
-                            DiscoveryEvent::Added(dev) => {
-                                if let Some(existing) =
-                                    devices.iter_mut().find(|d| d.peer_id == dev.peer_id)
-                                {
-                                    if *existing != dev {
-                                        tracing::info!(
-                                            "LAN device refreshed: {} ({})",
-                                            dev.name,
-                                            dev.ip
-                                        );
-                                        *existing = dev.clone();
-                                        changed = true;
-                                        added_or_refreshed = Some(dev);
+                            DiscoveryEvent::Added(candidate) => {
+                                let verify_key_pair = verify_key_pair.clone();
+                                let verify_cooldown = verify_cooldown.clone();
+                                let verify_lan_devices = lan_devices.clone();
+                                let verify_app = app_handle.clone();
+                                let auto_connect_deps = auto_connect_deps.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    if is_peer_in_offline_cooldown(&verify_cooldown, &candidate.peer_id)
+                                        .await
+                                    {
+                                        return;
                                     }
-                                } else {
-                                    tracing::info!("LAN device added: {} ({})", dev.name, dev.ip);
-                                    devices.push(dev.clone());
-                                    changed = true;
-                                    added_or_refreshed = Some(dev);
-                                }
+                                    let Some(querier_peer_id) =
+                                        local_querier_peer_id(&verify_key_pair).await
+                                    else {
+                                        return;
+                                    };
+                                    let probe_ports =
+                                        app_profile::tcp_probe_port_candidates(tcp_port);
+                                    let Some(presence) = direct::probe_planarclip_presence(
+                                        &candidate.ip,
+                                        &probe_ports,
+                                        &querier_peer_id,
+                                        Some(&candidate.peer_id),
+                                        LAN_PROBE_TIMEOUT,
+                                    )
+                                    .await
+                                    else {
+                                        return;
+                                    };
+
+                                    let mut confirmed = candidate;
+                                    apply_presence_probe(&mut confirmed, &presence);
+                                    tracing::info!(
+                                        "LAN device confirmed: {} ({}) via presence probe",
+                                        confirmed.name,
+                                        confirmed.ip
+                                    );
+                                    if !upsert_presence_confirmed_device(
+                                        &verify_lan_devices,
+                                        confirmed.clone(),
+                                        &verify_app,
+                                    )
+                                    .await
+                                    {
+                                        return;
+                                    }
+
+                                    auto_connect::maybe_auto_connect_discovered_device(
+                                        &auto_connect_deps,
+                                        &verify_app,
+                                        &confirmed,
+                                    )
+                                    .await;
+                                });
                             }
                             DiscoveryEvent::Removed { service_fullname } => {
+                                let mut devices = lan_devices.lock().await;
                                 let before = devices.len();
                                 devices.retain(|d| !lan_device_matches_removal(d, &service_fullname));
                                 if devices.len() != before {
                                     tracing::info!("LAN device removed: {}", service_fullname);
-                                    changed = true;
+                                    let updated = devices.clone();
+                                    drop(devices);
+                                    let _ = app_handle.emit("lan-devices-changed", &updated);
                                 }
                             }
-                        }
-                        if changed {
-                            let _ = app_handle.emit("lan-devices-changed", &*devices);
-                        }
-                        if let Some(device) = added_or_refreshed {
-                            let deps = auto_connect::AutoConnectDeps {
-                                config: auto_connect_deps.config.clone(),
-                                key_pair: auto_connect_deps.key_pair.clone(),
-                                connections: auto_connect_deps.connections.clone(),
-                                connection_generation: auto_connect_deps.connection_generation.clone(),
-                                clip_tx: auto_connect_deps.clip_tx.clone(),
-                                pending_initiator: auto_connect_deps.pending_initiator.clone(),
-                                pending_outbound: auto_connect_deps.pending_outbound.clone(),
-                                outbound_abort: auto_connect_deps.outbound_abort.clone(),
-                                outbound_handshake_active: auto_connect_deps
-                                    .outbound_handshake_active
-                                    .clone(),
-                                pending_connection_request: auto_connect_deps
-                                    .pending_connection_request
-                                    .clone(),
-                                tcp_port: auto_connect_deps.tcp_port,
-                            };
-                            auto_connect::maybe_auto_connect_discovered_device(
-                                &deps,
-                                &app_handle,
-                                &device,
-                            )
-                            .await;
                         }
                     }
                 });
@@ -2470,14 +2601,18 @@ pub fn run() {
                 let probe_lan_devices = lan_devices.clone();
                 let probe_connections = connections.clone();
                 let probe_config = config.clone();
+                let probe_key_pair = app_key_pair.clone();
+                let probe_cooldown = app.state::<AppState>().peer_offline_cooldown.clone();
                 let probe_app_handle = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(3)).await;
                     loop {
                         refresh_lan_presence(
                             &probe_config,
+                            &probe_key_pair,
                             &probe_lan_devices,
                             &probe_connections,
+                            &probe_cooldown,
                             tcp_port,
                             &probe_app_handle,
                         )
@@ -2518,8 +2653,13 @@ pub fn run() {
 
             let (listener_tx, mut listener_rx) = mpsc::unbounded_channel::<ListenerEvent>();
 
+            let presence_responder = direct::PresenceResponder {
+                config: config.clone(),
+                key_pair: app_key_pair.clone(),
+            };
+
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = direct::run_listener(tcp_port, listener_tx).await {
+                if let Err(e) = direct::run_listener(tcp_port, presence_responder, listener_tx).await {
                     tracing::error!("TCP listener error: {}", e);
                 }
             });
