@@ -7,7 +7,11 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{broadcast, mpsc, Mutex};
 
-use crate::clipboard::file::{file_list_hash, file_list_summary, FILE_TRANSFER_LIMIT_MESSAGE, MAX_BATCH_BYTES, SYNC_NOT_CONNECTED_MESSAGE};
+use crate::clipboard::file::{
+    clipboard_hdrop_paths, file_list_hash, file_list_needs_batch_transfer, file_list_summary,
+    file_meta_hash, hash_file, FILE_TRANSFER_LIMIT_MESSAGE, MAX_BATCH_BYTES,
+    SYNC_NOT_CONNECTED_MESSAGE,
+};
 use crate::clipboard::image::{format_byte_size, INLINE_IMAGE_BYTES, MAX_IMAGE_BYTES};
 use crate::clipboard::monitor::ClipboardMonitor;
 use crate::clipboard::types::{ClipboardEvent, ClipboardFileItem, ClipboardSnapshot};
@@ -17,6 +21,7 @@ use crate::network::direct::{ConnectionEvent, DirectConnection};
 use crate::network::protocol::SignalMessage;
 use crate::network::signalling;
 use crate::sync::activity::{emit_sync_activity, notify_sync_failure, TransferProgressReporter};
+use crate::storage::staging;
 use crate::sync::dedup::DedupStore;
 use crate::sync::transfer::{
     cancel_transfer_ack, max_file_bytes_to_mb, peer_file_too_large_message,
@@ -186,7 +191,7 @@ impl ConnectionHandle {
             }
         }
 
-        let batch_id = if files.len() > 1 {
+        let batch_id = if file_list_needs_batch_transfer(&files) {
             Some(uuid::Uuid::new_v4().to_string())
         } else {
             None
@@ -412,23 +417,17 @@ async fn finalize_received_file(
     _app_handle: Option<&AppHandle>,
     pending_paths: Option<Vec<PathBuf>>,
 ) {
-    let paths = pending_paths.unwrap_or_else(|| vec![completed.path.clone()]);
-    let files = paths
+    let received_paths = pending_paths.unwrap_or_else(|| vec![completed.path.clone()]);
+    let clipboard_paths = if let Some(batch_id) = completed.batch_id.as_deref() {
+        let batch_dir = staging::batch_dir(batch_id);
+        clipboard_hdrop_paths(&batch_dir, &received_paths)
+    } else {
+        received_paths.clone()
+    };
+
+    let files = clipboard_paths
         .iter()
-        .filter_map(|path| {
-            let metadata = std::fs::metadata(path).ok()?;
-            let content_hash = crate::clipboard::file::hash_file(path).ok()?;
-            Some(ClipboardFileItem {
-                file_name: path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or(&completed.file_name)
-                    .to_string(),
-                size_bytes: metadata.len(),
-                content_hash,
-                source_path: Some(path.clone()),
-            })
-        })
+        .filter_map(|path| clipboard_file_item_from_path(path))
         .collect::<Vec<_>>();
 
     if files.is_empty() {
@@ -450,10 +449,34 @@ async fn finalize_received_file(
         format_byte_size(files.iter().map(|file| file.size_bytes).sum::<u64>() as usize)
     );
 
-    ClipboardMonitor::write_clipboard_files(&paths);
+    ClipboardMonitor::write_clipboard_files(&clipboard_paths);
 
     let snapshot = ClipboardSnapshot::FileList { files };
     let _ = clip_tx.send(ClipboardEvent::remote(snapshot, peer_name.to_string()));
+}
+
+fn clipboard_file_item_from_path(path: &std::path::Path) -> Option<ClipboardFileItem> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("file")
+        .to_string();
+    if metadata.is_dir() {
+        return Some(ClipboardFileItem {
+            file_name: file_name.clone(),
+            size_bytes: 0,
+            content_hash: file_meta_hash(&file_name, 0),
+            source_path: Some(path.to_path_buf()),
+        });
+    }
+    let content_hash = hash_file(path).ok()?;
+    Some(ClipboardFileItem {
+        file_name,
+        size_bytes: metadata.len(),
+        content_hash,
+        source_path: Some(path.to_path_buf()),
+    })
 }
 
 async fn finalize_received_image(

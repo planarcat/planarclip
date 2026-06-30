@@ -9,7 +9,8 @@ use tokio::sync::{broadcast, mpsc, Mutex as AsyncMutex};
 
 use crate::clipboard::file::{
     file_list_as_sync_text, file_list_hash, is_user_limit_error, snapshot_from_file_paths,
-    snapshot_from_file_paths_meta, DEFAULT_MAX_FILE_BYTES, MAX_BATCH_BYTES,
+    snapshot_from_file_paths_meta, EMPTY_FOLDER_SYNC_MESSAGE, DEFAULT_MAX_FILE_BYTES,
+    MAX_BATCH_BYTES,
 };
 use crate::sync::activity::notify_sync_failure;
 use crate::clipboard::image::{encode_rgba_to_png, snapshot_from_png_bytes};
@@ -214,6 +215,24 @@ impl ClipboardMonitor {
             Err(error) => {
                 if is_user_limit_error(&error) {
                     self.note_observed_clipboard_sequence();
+                    if error == EMPTY_FOLDER_SYNC_MESSAGE {
+                        if let Some(paths) = crate::platform::clipboard::read_file_paths() {
+                            if let Ok(ClipboardSnapshot::FileList { files }) =
+                                snapshot_from_file_paths_meta(paths)
+                            {
+                                if !files.is_empty() {
+                                    let hash = ClipboardSnapshot::FileList { files: files.clone() }
+                                        .content_hash();
+                                    if self.should_emit_clipboard_change(hash) {
+                                        self.track_clipboard_state(hash);
+                                        let _ = self.tx.send(ClipboardEvent::local(
+                                            ClipboardSnapshot::FileList { files },
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if self.last_read_error.as_deref() != Some(error.as_str()) {
                         self.last_read_error = Some(error.clone());
                         notify_sync_failure(self.app_handle.as_ref(), &error);
@@ -397,13 +416,22 @@ impl ClipboardMonitor {
             .iter()
             .filter_map(|path| {
                 let metadata = std::fs::metadata(path).ok()?;
+                let file_name = path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("file")
+                    .to_string();
+                if metadata.is_dir() {
+                    return Some(crate::clipboard::types::ClipboardFileItem {
+                        file_name: file_name.clone(),
+                        size_bytes: 0,
+                        content_hash: crate::clipboard::file::file_meta_hash(&file_name, 0),
+                        source_path: Some(path.clone()),
+                    });
+                }
                 let content_hash = crate::clipboard::file::hash_file(path).ok()?;
                 Some(crate::clipboard::types::ClipboardFileItem {
-                    file_name: path
-                        .file_name()
-                        .and_then(|value| value.to_str())
-                        .unwrap_or("file")
-                        .to_string(),
+                    file_name,
                     size_bytes: metadata.len(),
                     content_hash,
                     source_path: Some(path.clone()),

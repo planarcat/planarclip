@@ -72,8 +72,28 @@ pub fn finalize_staged_file(
         }
         None => staging_root(),
     };
-    let final_name = resolve_unique_name(&target_dir, file_name);
-    let final_path = target_dir.join(final_name);
+    let relative = sanitize_relative_path(Path::new(file_name));
+    let final_path = if relative.components().count() > 1 {
+        let parent = relative
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new(""));
+        let leaf = relative
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("file");
+        let parent_dir = target_dir.join(parent);
+        fs::create_dir_all(&parent_dir)
+            .map_err(|error| format!("create nested staging dir failed: {error}"))?;
+        let unique_leaf = resolve_unique_name(&parent_dir, leaf);
+        parent_dir.join(unique_leaf)
+    } else {
+        let leaf = relative
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("file");
+        target_dir.join(resolve_unique_name(&target_dir, leaf))
+    };
     fs::rename(temp_path, &final_path)
         .map_err(|error| format!("move staged file failed: {error}"))?;
     Ok(final_path)
@@ -153,7 +173,28 @@ fn sanitize_file_name(name: &str) -> String {
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("file");
-    let sanitized: String = file_name
+    sanitize_path_segment(file_name)
+}
+
+fn sanitize_relative_path(path: &Path) -> PathBuf {
+    let mut cleaned = PathBuf::new();
+    for component in path.components() {
+        if let std::path::Component::Normal(segment) = component {
+            let safe = sanitize_path_segment(&segment.to_string_lossy());
+            if !safe.is_empty() {
+                cleaned.push(safe);
+            }
+        }
+    }
+    if cleaned.as_os_str().is_empty() {
+        PathBuf::from("file")
+    } else {
+        cleaned
+    }
+}
+
+fn sanitize_path_segment(segment: &str) -> String {
+    let sanitized: String = segment
         .chars()
         .map(|ch| {
             if matches!(ch, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
