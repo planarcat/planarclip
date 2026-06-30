@@ -151,9 +151,9 @@ impl TransferProgressReporter {
         batch_bytes_total: u64,
         bytes_completed: u64,
     ) -> Self {
-        let batch = batch_total.filter(|total| *total > 1).map(|batch_total| BatchSendContext {
+        let batch = batch_total.map(|batch_total| BatchSendContext {
             batch_total,
-            batch_bytes_total,
+            batch_bytes_total: batch_bytes_total.max(1),
             bytes_completed,
         });
         Self {
@@ -175,9 +175,9 @@ impl TransferProgressReporter {
         batch_bytes_total: u64,
         bytes_completed: u64,
     ) -> Self {
-        let batch = batch_total.filter(|total| *total > 1).map(|batch_total| BatchSendContext {
+        let batch = batch_total.map(|batch_total| BatchSendContext {
             batch_total,
-            batch_bytes_total,
+            batch_bytes_total: batch_bytes_total.max(1),
             bytes_completed,
         });
         Self {
@@ -229,6 +229,21 @@ impl TransferProgressReporter {
 
     pub fn set_label(&mut self, label: String) {
         self.label = label;
+    }
+
+    pub fn update_batch_progress(
+        &mut self,
+        batch_index: Option<u32>,
+        batch_total: u32,
+        batch_bytes_total: u64,
+        bytes_completed: u64,
+    ) {
+        self.batch_index = batch_index;
+        self.batch = Some(BatchSendContext {
+            batch_total,
+            batch_bytes_total: batch_bytes_total.max(1),
+            bytes_completed,
+        });
     }
 
     pub fn report_bytes(&mut self, bytes_done: u64, bytes_total: u64, force: bool) {
@@ -340,7 +355,7 @@ pub fn format_transfer_message(
     let pct_suffix = progress_pct
         .map(|pct| format!(" {pct}%"))
         .unwrap_or_default();
-    if let Some(batch_total) = batch_total.filter(|total| *total > 1) {
+    if let Some(batch_total) = batch_total.filter(|total| *total >= 1) {
         format!("正在{verb} {label} 等 {batch_total} 个文件…{pct_suffix}")
     } else {
         format!("正在{verb} {label}…{pct_suffix}")

@@ -44,6 +44,8 @@ pub enum SignalMessage {
         batch_id: Option<String>,
         batch_index: Option<u32>,
         batch_total: Option<u32>,
+        #[serde(default)]
+        batch_bytes_total: Option<u64>,
     },
 
     #[serde(rename = "clipboard_file_end")]

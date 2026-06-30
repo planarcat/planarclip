@@ -8,9 +8,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{broadcast, mpsc, Mutex};
 
 use crate::clipboard::file::{
-    clipboard_hdrop_paths, file_list_hash, file_list_needs_batch_transfer, file_list_summary,
-    file_meta_hash, hash_file, FILE_TRANSFER_LIMIT_MESSAGE, MAX_BATCH_BYTES,
-    SYNC_NOT_CONNECTED_MESSAGE,
+    clipboard_hdrop_paths, file_items_from_received_paths, file_list_hash,
+    file_list_needs_batch_transfer, file_list_summary, file_meta_hash, hash_file,
+    FILE_TRANSFER_LIMIT_MESSAGE, MAX_BATCH_BYTES, SYNC_NOT_CONNECTED_MESSAGE,
 };
 use crate::clipboard::image::{format_byte_size, INLINE_IMAGE_BYTES, MAX_IMAGE_BYTES};
 use crate::clipboard::monitor::ClipboardMonitor;
@@ -242,6 +242,7 @@ impl ConnectionHandle {
                 batch_id.clone(),
                 batch_id.as_ref().map(|_| index as u32),
                 batch_id.as_ref().map(|_| batch_total),
+                batch_id.as_ref().map(|_| batch_bytes),
                 Some(progress_sink),
             )
             .await;
@@ -418,17 +419,23 @@ async fn finalize_received_file(
     pending_paths: Option<Vec<PathBuf>>,
 ) {
     let received_paths = pending_paths.unwrap_or_else(|| vec![completed.path.clone()]);
-    let clipboard_paths = if let Some(batch_id) = completed.batch_id.as_deref() {
-        let batch_dir = staging::batch_dir(batch_id);
-        clipboard_hdrop_paths(&batch_dir, &received_paths)
+    let batch_dir = completed
+        .batch_id
+        .as_deref()
+        .map(staging::batch_dir);
+    let clipboard_paths = if let Some(ref batch_dir) = batch_dir {
+        clipboard_hdrop_paths(batch_dir, &received_paths)
     } else {
         received_paths.clone()
     };
 
-    let files = clipboard_paths
-        .iter()
-        .filter_map(|path| clipboard_file_item_from_path(path))
-        .collect::<Vec<_>>();
+    let mut files = file_items_from_received_paths(batch_dir.as_deref(), &received_paths);
+    if files.is_empty() {
+        files = clipboard_paths
+            .iter()
+            .filter_map(|path| clipboard_file_item_from_path(path))
+            .collect();
+    }
 
     if files.is_empty() {
         return;
@@ -665,6 +672,7 @@ async fn handle_incoming_signal(
             batch_id,
             batch_index,
             batch_total,
+            batch_bytes_total,
         } => {
             let hash_bytes = match decode_hash(&hash) {
                 Some(value) => value,
@@ -721,19 +729,45 @@ async fn handle_incoming_signal(
                 total_bytes,
                 chunk_size,
                 batch_id.clone(),
+                batch_bytes_total,
                 max_file_bytes,
             ) {
                 Ok(()) => {
-                    *file_progress = app_handle.cloned().map(|app| {
-                        TransferProgressReporter::file_receive(
-                            Some(app),
-                            file_name.clone(),
-                            batch_index,
-                            batch_total,
-                            0,
-                            0,
-                        )
-                    });
+                    if let Some(app) = app_handle.map(|handle| handle.clone()) {
+                        if let Some((batch_count, batch_bytes, bytes_done)) =
+                            file_session.batch_transfer_totals()
+                        {
+                            if let Some(reporter) = file_progress.as_mut() {
+                                reporter.update_batch_progress(
+                                    batch_index,
+                                    batch_count,
+                                    batch_bytes,
+                                    bytes_done,
+                                );
+                                reporter.set_label(file_name.clone());
+                            } else {
+                                *file_progress = Some(TransferProgressReporter::file_receive(
+                                    Some(app),
+                                    file_name.clone(),
+                                    batch_index,
+                                    Some(batch_count),
+                                    batch_bytes,
+                                    bytes_done,
+                                ));
+                            }
+                        } else if file_progress.is_none() {
+                            *file_progress = Some(TransferProgressReporter::file_receive(
+                                Some(app),
+                                file_name.clone(),
+                                batch_index,
+                                batch_total,
+                                total_bytes,
+                                0,
+                            ));
+                        } else if let Some(reporter) = file_progress.as_mut() {
+                            reporter.set_label(file_name.clone());
+                        }
+                    }
                 }
                 Err(reason) => {
                     tracing::warn!("File receive begin failed for {file_name}: {reason}");
@@ -759,6 +793,9 @@ async fn handle_incoming_signal(
                 if let Some(batch_id) = completed.batch_id.clone() {
                     file_session.mark_file_completed_in_batch(Some(&batch_id), file_bytes);
                     file_session.push_batch_file(&batch_id, completed.path.clone());
+                    if let Some(reporter) = file_progress.as_mut() {
+                        reporter.complete_file_in_batch(file_bytes);
+                    }
                 } else {
                     if let Some(reporter) = file_progress.as_mut() {
                         reporter.finish("文件已同步");

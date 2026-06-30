@@ -357,6 +357,38 @@ pub fn file_list_size_label(files: &[ClipboardFileItem]) -> String {
     format_byte_size(total as usize)
 }
 
+pub fn file_items_from_received_paths(
+    batch_dir: Option<&Path>,
+    received_paths: &[PathBuf],
+) -> Vec<ClipboardFileItem> {
+    received_paths
+        .iter()
+        .filter_map(|path| {
+            let metadata = std::fs::metadata(path).ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
+            let file_name = if let Some(batch_dir) = batch_dir {
+                path.strip_prefix(batch_dir)
+                    .ok()
+                    .and_then(|relative| relative.to_str())
+                    .map(|value| value.replace('\\', "/"))?
+            } else {
+                path.file_name()
+                    .and_then(|value| value.to_str())
+                    .map(str::to_string)?
+            };
+            let content_hash = hash_file(path).ok()?;
+            Some(ClipboardFileItem {
+                file_name,
+                size_bytes: metadata.len(),
+                content_hash,
+                source_path: Some(path.clone()),
+            })
+        })
+        .collect()
+}
+
 pub fn file_names_for_history(files: &[ClipboardFileItem]) -> Vec<String> {
     files
         .iter()
