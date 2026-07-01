@@ -32,6 +32,39 @@ pnpm preview:web     # 预览前端构建结果
 
 命名约定：`pnpm <动作>` 表示完整应用流程，`pnpm <动作>:web` 表示仅执行前端 Web 流程。前端开发服务器端口为 1420，HMR 端口为 1421。`tauri.conf.json` 通过 `beforeDevCommand` / `beforeBuildCommand` 调用 `pnpm dev:web` 与 `pnpm build:web`（在 `Apps/` 目录上下文中执行）。
 
+## 工作区命令：手动 vs 载入自动
+
+配置：`.vscode/tasks.json`（`runOn: folderOpen`）、`.vscode/settings.json`（`task.allowAutomaticTasks: on`）。需信任工作区；必要时 **Tasks: Manage Automatic Tasks** 允许自动任务。
+
+### 手动模式（工作区根目录终端）
+
+| 命令 | 行为 |
+| --- | --- |
+| `pnpm dev` | 启动完整 Tauri 应用 |
+| `pnpm check:watch` | 前端 `tsc --watch` + Rust `cargo watch check` |
+| `pnpm pull` | pull `origin/master`（有未提交改动会先 stash），成功后 `pnpm analyze` |
+| `pnpm pull:only` | 只 pull，不 analyze |
+| `pnpm analyze` | WSL 内 GitNexus `analyze --embeddings`（不 pull） |
+| `pnpm analyze:planarclip` | 同上（单仓别名） |
+
+`gitnexus:analyze` 为 `pnpm analyze` 别名。pull 分支见 `scripts/workspace-repos.mjs`。
+
+### 自动模式（载入 PlanarClip 工作区）
+
+每个命令 **独占一个终端**（`panel: dedicated`）：
+
+| 终端 | 命令 |
+| --- | --- |
+| dev | `pnpm dev` |
+| check:watch | `pnpm check:watch` |
+| pull | `pnpm pull:open` → pull 成功 → **同终端** `pnpm analyze` |
+
+手动复现自动 pull：**Tasks: Run Task** → **PlanarClip: pull（自动模式 · 分终端）**。
+
+GitNexus 在 WSL 执行，`HF_ENDPOINT=https://hf-mirror.com`。无 WSL / gitnexus 时 pull 仍可用，analyze 会失败；可单独 `pnpm pull:only` 或在本机按 [execution-plan.md](./execution-plan.md) 配置 WSL 索引。
+
+- 依赖异常时，在根目录执行 `pnpm install --config.confirmModulesPurge=false` 修复。
+
 ## 技术栈
 
 - **桌面框架**: Tauri 2（Rust 后端 + WebView 前端）
@@ -121,7 +154,7 @@ planarclip/                  # 仓库根目录（pnpm workspace）
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **planarclip** (3387 symbols, 6469 relationships, 288 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **planarclip** (3583 symbols, 6789 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

@@ -52,6 +52,8 @@ PlanarClip 是一个基于 **Tauri 2 + React 18 + TypeScript + Rust** 构建的�
 
 项目默认使用 **pnpm** 作为包管理器。仓库根目录为 **pnpm workspace**，应用主体位于 `Apps/`（workspace 包名 `planarclip`）。推荐在根目录执行 `pnpm install` 与 `pnpm dev` 等命令。前端开发服务器默认端口为 `1420`，HMR 端口为 `1421`。
 
+工作区载入自动任务与 pull / GitNexus 脚本说明见 [AGENTS.md](./AGENTS.md#工作区命令手动-vs-载入自动)。
+
 ## 安装与运行
 
 在仓库**根目录**执行：

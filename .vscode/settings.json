@@ -1,5 +1,6 @@
 {
   "rust-analyzer.linkedProjects": [
     "Apps/src-tauri/Cargo.toml"
-  ]
+  ],
+  "task.allowAutomaticTasks": "on"
 }
