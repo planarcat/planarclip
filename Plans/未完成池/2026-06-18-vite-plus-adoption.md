@@ -1,8 +1,8 @@
 # 未完成摘要
 
-> 来源主题: 2026-06-21-[LOCKED]-ui-refresh-figma-integration
-> 锁定时间: 2026-06-22 00:00
-> 原路径: Plans/2026-06-21-[LOCKED]-ui-refresh-figma-integration/
+> 来源主题: 2026-06-18-vite-plus-adoption
+> 归档时间: 2026-06-18
+> 归档路径: Plans/归档/2026-06-18-vite-plus-adoption/
 
 ## 仍待处理
 

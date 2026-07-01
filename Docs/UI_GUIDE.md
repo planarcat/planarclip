@@ -303,7 +303,7 @@ app/components/
 - MCP 权限配置在 IDE 的 MCP 设置中，不依赖本文档路径。
 - **关系**：Figma Design → 视觉与结构对照；`Apps` → 运行宿主与真实能力；日常改 UI 以本文 + `index.css` 为准。
 
-历史主题：[`Plans/2026-06-21-[LOCKED]-ui-refresh-figma-integration`](../Plans/2026-06-21-[LOCKED]-ui-refresh-figma-integration/)。
+历史主题：[`Plans/归档/2026-06-21-ui-refresh-figma-integration`](../Plans/归档/2026-06-21-ui-refresh-figma-integration/)。
 
 ---
 

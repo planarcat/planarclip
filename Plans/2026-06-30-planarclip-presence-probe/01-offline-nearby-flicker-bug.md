@@ -61,9 +61,9 @@ mDNS 陈旧 Added 或 auto_connect 触发 → 正在尝试连接
 ## 相关图片
 
 - 图 1：连接概览仍显示 planarcat-win11「最近活跃 5秒前」，但设备页显示 0/0 已配对
-  ![图 1：连接概览仍显示 planarcat-win11「最近活跃 5秒前」](./assets/01-image-01.png)
+  ![图 1：连接概览仍显示 planarcat-win11「最近活跃 5秒前」](./附件/01-image-01.png)
 - 图 2：设备页离线区显示 planarcat-win11，右下角「正在尝试连接」
-  ![图 2：设备页离线区与正在尝试连接提示](./assets/01-image-02.png)
+  ![图 2：设备页离线区与正在尝试连接提示](./附件/01-image-02.png)
 
 ## 本轮要点
 

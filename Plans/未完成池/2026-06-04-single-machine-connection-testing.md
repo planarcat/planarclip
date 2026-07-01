@@ -1,8 +1,8 @@
 # 未完成摘要
 
-> 来源主题: 2026-06-04-[LOCKED]-single-machine-connection-testing
-> 锁定时间: 2026-06-18 18:29
-> 原路径: Plans/2026-06-04-[LOCKED]-single-machine-connection-testing/
+> 来源主题: 2026-06-04-single-machine-connection-testing
+> 归档时间: 2026-06-18
+> 归档路径: Plans/归档/2026-06-04-single-machine-connection-testing/
 
 ## 仍待处理
 

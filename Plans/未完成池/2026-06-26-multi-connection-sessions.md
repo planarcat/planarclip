@@ -1,8 +1,8 @@
 # 未完成摘要
 
 > 来源主题: 2026-06-26-multi-connection-sessions
-> 锁定时间: 2026-06-26
-> 原路径: Plans/2026-06-26-multi-connection-sessions/
+> 归档时间: 2026-06-26
+> 归档路径: Plans/归档/2026-06-26-multi-connection-sessions/
 
 ## 仍待处理
 
