@@ -16,11 +16,23 @@ pub struct AppConfig {
     pub clipboard_history: Option<Vec<ClipboardHistoryEntry>>,
     pub launch_at_startup: Option<bool>,
     pub silent_start: Option<bool>,
+    /// When true (default), show OS toasts for connection/sync events.
+    pub system_notifications_enabled: Option<bool>,
+    /// `"tray"` (default) or `"exit"` when the user closes the main window.
+    pub close_window_action: Option<String>,
     pub auto_connect_trusted: Option<bool>,
+    /// When true (default), local clipboard changes are synced automatically.
+    pub auto_sync_clipboard: Option<bool>,
     pub sync_images: Option<bool>,
     pub sync_files: Option<bool>,
+    /// When true, received synced files are copied to `sync_files_save_dir` (or Downloads).
+    pub sync_files_save_enabled: Option<bool>,
+    /// Custom directory for received synced files; `None` uses the system Downloads folder.
+    pub sync_files_save_dir: Option<String>,
     pub max_file_bytes: Option<u64>,
     pub clipboard_history_limit: Option<usize>,
+    /// Clipboard history UI layout: `"list"` or `"grid"` (default grid when unset).
+    pub clipboard_view_mode: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

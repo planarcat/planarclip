@@ -81,6 +81,13 @@ impl ClipboardMonitor {
         SELF_WRITING.load(Ordering::SeqCst)
     }
 
+    pub fn read_current_snapshot(
+        max_file_bytes: u64,
+        sync_files: bool,
+    ) -> Result<ClipboardSnapshot, String> {
+        Self::read_clipboard(max_file_bytes, sync_files)
+    }
+
     pub fn capture_dedup_baseline(max_file_bytes: u64, sync_files: bool) -> ClipboardDedupBaseline {
         let last_hash = match Self::read_clipboard(max_file_bytes, sync_files) {
             Ok(snapshot) if !snapshot.is_empty() => snapshot.content_hash(),

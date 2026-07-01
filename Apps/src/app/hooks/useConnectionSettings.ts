@@ -63,6 +63,7 @@ export function useConnectionSettings({
         return;
       }
 
+      setAutoConnectTrusted(enabled);
       setIsSaving(true);
       try {
         const saved = await callCommand<ConnectionSettingsPayload>("save_connection_settings", {

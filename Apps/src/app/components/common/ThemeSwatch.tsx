@@ -1,11 +1,13 @@
 import type { ThemeColor } from "../../types";
+import type { ThemePickOrigin } from "../../utils/themeTransition";
+import { SURFACE_REVEAL_BG } from "../../constants/surfaceReveal";
 
 type ThemeSwatchProps = {
   currentTheme: ThemeColor;
   selectedTheme: ThemeColor;
   isDark: boolean;
   size?: "md" | "lg";
-  onChange: (theme: ThemeColor) => void;
+  onChange: (theme: ThemeColor, origin: ThemePickOrigin) => void;
 };
 
 export function ThemeSwatch({ currentTheme, selectedTheme, isDark, size = "md", onChange }: ThemeSwatchProps) {
@@ -17,8 +19,14 @@ export function ThemeSwatch({ currentTheme, selectedTheme, isDark, size = "md", 
   return (
     <button
       aria-label={currentTheme.label}
-      onClick={() => onChange(currentTheme)}
-      className={`group flex ${buttonSizeClassName} items-center justify-center rounded-md`}
+      onClick={(event) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        onChange(currentTheme, {
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        });
+      }}
+      className={`group flex ${buttonSizeClassName} items-center justify-center rounded-md ${SURFACE_REVEAL_BG} hover:bg-secondary/50`}
       title={currentTheme.label}
       type="button"
     >

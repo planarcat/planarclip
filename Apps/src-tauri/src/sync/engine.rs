@@ -44,7 +44,7 @@ impl SyncEngine {
                         continue;
                     }
 
-                    let (sync_images, sync_files, max_file_bytes) = {
+                    let (sync_images, sync_files, max_file_bytes, auto_sync_clipboard) = {
                         let config = self.config.lock().await;
                         (
                             config.sync_images.unwrap_or(true),
@@ -52,8 +52,13 @@ impl SyncEngine {
                             config
                                 .max_file_bytes
                                 .unwrap_or(DEFAULT_MAX_FILE_BYTES),
+                            config.auto_sync_clipboard.unwrap_or(true),
                         )
                     };
+
+                    if !auto_sync_clipboard && !event.skip_history_merge {
+                        continue;
+                    }
 
                     let handles = {
                         let registry = self.connections.lock().await;

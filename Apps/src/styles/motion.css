@@ -1,0 +1,192 @@
+@keyframes overlay-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes overlay-fade-out {  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes overlay-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.94);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes overlay-panel-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+@keyframes notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes notice-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateX(22px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes page-exit {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(-14px);
+  }
+}
+
+.overlay-backdrop-enter {
+  animation: overlay-fade-in var(--motion-enter) var(--ease-out) both;
+}
+
+.overlay-backdrop-exit {
+  animation: overlay-fade-out var(--motion-exit) var(--ease-in) both;
+}
+
+.overlay-panel-enter {
+  animation: overlay-panel-in var(--motion-enter) var(--ease-out) both;
+}
+
+.overlay-panel-exit {
+  animation: overlay-panel-out var(--motion-exit) var(--ease-in) both;
+}
+
+.notice-enter {
+  animation: notice-in var(--motion-enter) var(--ease-out) both;
+}
+
+.notice-exit {
+  animation: notice-out var(--motion-exit) var(--ease-in) both;
+}
+
+.page-enter {
+  animation: page-enter var(--motion-page-enter, 380ms) var(--ease-out) both;
+}
+
+.page-exit {
+  animation: page-exit calc(var(--motion-page-enter, 380ms) * 0.45) var(--ease-in) both;
+}
+
+@keyframes clip-history-view-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes clip-history-view-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.99);
+  }
+}
+
+.clip-history-view-enter {
+  animation: clip-history-view-in var(--motion-enter) var(--ease-out) both;
+}
+
+.clip-history-view-exit {
+  animation: clip-history-view-out var(--motion-exit) var(--ease-in) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .connection-attempt-flow {
+    animation: none;
+    opacity: 0.65;
+  }
+
+  .page-enter {
+    animation: none;
+  }
+
+  .clip-history-view-enter,
+  .clip-history-view-exit {
+    animation: none;
+  }
+
+  .app-scrollbar-intro::-webkit-scrollbar-thumb,
+  .app-scrollbar-visible:not(.app-scrollbar-hiding)::-webkit-scrollbar-thumb,
+  .app-scrollbar-hiding::-webkit-scrollbar-thumb {
+    animation: none;
+  }
+
+  .app-scrollbar-visible:not(.app-scrollbar-hiding)::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+  }
+
+  .app-scrollbar-hiding::-webkit-scrollbar-thumb {
+    background-color: transparent;
+  }
+}

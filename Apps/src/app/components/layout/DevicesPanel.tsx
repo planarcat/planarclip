@@ -1,11 +1,13 @@
 import { Zap } from "lucide-react";
 import { useMemo } from "react";
 import { MAX_CONNECTIONS } from "../../constants/connection";
+import { SURFACE_REVEAL_BG } from "../../constants/surfaceReveal";
 import { useRelativeTicker } from "../../hooks/useRelativeTicker";
 import type { AppConnectionStatus, Device } from "../../types";
 import { relativeTime } from "../../utils/time";
 import { DisconnectIconButton } from "../common/DisconnectIconButton";
 import { OsIcon } from "../common/OsIcon";
+import { ScrollArea } from "../ui/ScrollArea";
 
 type DevicesPanelProps = {
   devices: Device[];
@@ -48,7 +50,7 @@ export function DevicesPanel({
   const onlineDevices = useMemo(() => devices.filter((device) => device.status !== "offline"), [devices]);
 
   return (
-    <aside className="h-full w-60 shrink-0 overflow-y-auto border-l border-border bg-card xl:w-64">
+    <ScrollArea as="aside" className="h-full w-60 shrink-0 overflow-y-auto border-l border-border bg-card xl:w-64">
       <div className="border-b border-border px-4 pb-3 pt-5">
         <p className="text-sm font-semibold text-primary">连接概览</p>
         <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">局域网发现与直连状态</p>
@@ -99,7 +101,7 @@ export function DevicesPanel({
                       disabled={connectAction.disabled}
                       title={connectAction.title}
                       onClick={() => onConnectDevice(device)}
-                      className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                      className={`inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md text-muted-foreground ${SURFACE_REVEAL_BG} hover:bg-secondary hover:text-primary disabled:cursor-not-allowed disabled:opacity-40`}
                     >
                       <Zap size={13} aria-hidden="true" />
                     </button>
@@ -134,6 +136,6 @@ export function DevicesPanel({
           </div>
         )}
       </div>
-    </aside>
+    </ScrollArea>
   );
 }

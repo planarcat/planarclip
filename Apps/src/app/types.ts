@@ -77,6 +77,13 @@ export type StartupSettingsPayload = {
   silent_start: boolean;
 };
 
+export type CloseWindowAction = "tray" | "exit";
+
+export type AppBehaviorSettingsPayload = {
+  system_notifications_enabled: boolean;
+  close_window_action: CloseWindowAction;
+};
+
 export type ConnectionSettingsPayload = {
   auto_connect_trusted: boolean;
 };
@@ -85,10 +92,15 @@ export type SyncSettingsPayload = {
   sync_images: boolean;
   sync_files: boolean;
   max_file_mb: number;
+  auto_sync_clipboard: boolean;
+  sync_files_save_enabled: boolean;
+  sync_files_save_dir: string;
+  sync_files_save_dir_is_default: boolean;
 };
 
 export type ClipboardSettingsPayload = {
   history_limit: number;
+  view_mode: ViewMode;
 };
 
 export type ConnectedPeerPayload = {

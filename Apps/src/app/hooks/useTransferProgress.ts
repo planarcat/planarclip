@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { shouldShowTransferProgressCard } from "../utils/transfer";
 
 export type TransferProgressState = {
   active: boolean;
@@ -71,6 +72,10 @@ export function useTransferProgress() {
           setTransferProgress(null);
           dismissTimerRef.current = null;
         }, COMPLETE_DISMISS_MS);
+        return;
+      }
+
+      if (!shouldShowTransferProgressCard(payload)) {
         return;
       }
 

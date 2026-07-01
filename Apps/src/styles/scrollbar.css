@@ -1,0 +1,61 @@
+/* Unlayered: WebView2 / Chromium must not nest these inside @layer base (Tailwind v4). */
+
+.app-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb-idle) transparent;
+  transition: scrollbar-color var(--scrollbar-fade-out) var(--scrollbar-ease-out);
+}
+
+.app-scrollbar.app-scrollbar-engaged {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  transition: scrollbar-color var(--scrollbar-fade-in) var(--scrollbar-ease-in);
+}
+
+.app-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.app-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.app-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-scrollbar::-webkit-scrollbar-thumb {
+  --surface-reveal-from: var(--scrollbar-thumb-idle);
+  --surface-reveal-to: var(--scrollbar-thumb);
+  background-color: var(--scrollbar-thumb-idle);
+  border: 2px solid transparent;
+  border-radius: 9999px;
+  background-clip: padding-box;
+}
+
+.app-scrollbar.app-scrollbar-engaged:not(.app-scrollbar-leaving)::-webkit-scrollbar-thumb {
+  animation: surface-reveal-to-active var(--scrollbar-fade-in) var(--scrollbar-ease-in) forwards;
+}
+
+.app-scrollbar.app-scrollbar-leaving::-webkit-scrollbar-thumb {
+  animation: surface-reveal-to-idle var(--scrollbar-fade-out) var(--scrollbar-ease-out) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-scrollbar.app-scrollbar-engaged:not(.app-scrollbar-leaving)::-webkit-scrollbar-thumb,
+  .app-scrollbar.app-scrollbar-leaving::-webkit-scrollbar-thumb {
+    animation: none;
+  }
+
+  .app-scrollbar.app-scrollbar-engaged::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+  }
+
+  .app-scrollbar::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb-idle);
+  }
+
+  .app-scrollbar {
+    transition: none;
+  }
+}

@@ -86,6 +86,7 @@ export function useStartupSettings({
 
   const handleLaunchAtStartupChange = useCallback(
     (enabled: boolean) => {
+      setLaunchAtStartup(enabled);
       void persistStartupSettings(
         enabled,
         silentStart,
@@ -97,6 +98,7 @@ export function useStartupSettings({
 
   const handleSilentStartChange = useCallback(
     (enabled: boolean) => {
+      setSilentStart(enabled);
       void persistStartupSettings(
         launchAtStartup,
         enabled,

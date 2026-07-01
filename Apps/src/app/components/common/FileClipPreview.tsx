@@ -2,6 +2,7 @@ import { ChevronDown, ChevronUp, File } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ClipEntry } from "../../types";
 import { resolveHistoryThumbnailUrl } from "../../utils/clipboard";
+import { SURFACE_REVEAL_BG } from "../../constants/surfaceReveal";
 import { ClipTypeIcon } from "./ClipTypeIcon";
 
 type FileClipPreviewProps = {
@@ -132,7 +133,7 @@ export function FileClipPreview({ clip, variant = "list" }: FileClipPreviewProps
             <button
               type="button"
               onClick={() => setExpanded((value) => !value)}
-              className="inline-flex items-center gap-1 text-[12px] font-medium text-primary transition-colors hover:text-primary/80"
+              className={`inline-flex items-center gap-1 rounded px-1 py-0.5 text-[12px] font-medium text-primary ${SURFACE_REVEAL_BG} hover:bg-primary/10 hover:text-primary/80`}
             >
               {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               {expanded ? "收起列表" : "展开文件列表"}

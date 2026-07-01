@@ -1,0 +1,48 @@
+/* Shared enter/leave background motion (scrollbar thumb + interactive buttons). Unlayered for WebView2. */
+
+@keyframes surface-reveal-to-active {
+  from {
+    background-color: var(--surface-reveal-from, transparent);
+  }
+
+  to {
+    background-color: var(--surface-reveal-to);
+  }
+}
+
+@keyframes surface-reveal-to-idle {
+  from {
+    background-color: var(--surface-reveal-to);
+  }
+
+  to {
+    background-color: var(--surface-reveal-from, transparent);
+  }
+}
+
+.app-surface-reveal-bg {
+  transition-property: background-color, color, border-color;
+  transition-duration: var(--surface-reveal-fade-out);
+  transition-timing-function: var(--surface-reveal-ease-out);
+}
+
+.app-surface-reveal-bg:hover:not(:disabled),
+.app-surface-reveal-bg:focus:not(:disabled),
+.app-surface-reveal-bg:focus-visible:not(:disabled) {
+  transition-duration: var(--surface-reveal-fade-in);
+  transition-timing-function: var(--surface-reveal-ease-in);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-surface-reveal-bg {
+    transition: none;
+  }
+
+  .app-surface-reveal-switch-thumb {
+    transition: none;
+  }
+}
+
+.app-surface-reveal-switch-thumb {
+  transition: left var(--surface-reveal-fade-in) var(--surface-reveal-ease-in);
+}

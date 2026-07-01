@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -98,6 +99,30 @@ struct StartupSettingsPayload {
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
+struct AppBehaviorSettingsPayload {
+    system_notifications_enabled: bool,
+    close_window_action: String,
+}
+
+const DEFAULT_CLOSE_WINDOW_ACTION: &str = "tray";
+
+fn normalized_close_window_action(value: Option<&str>) -> &'static str {
+    match value {
+        Some("exit") => "exit",
+        Some("tray") => "tray",
+        _ => DEFAULT_CLOSE_WINDOW_ACTION,
+    }
+}
+
+fn app_behavior_from_config(config: &storage_json::AppConfig) -> AppBehaviorSettingsPayload {
+    AppBehaviorSettingsPayload {
+        system_notifications_enabled: config.system_notifications_enabled.unwrap_or(true),
+        close_window_action: normalized_close_window_action(config.close_window_action.as_deref())
+            .to_string(),
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
 struct ConnectionSettingsPayload {
     auto_connect_trusted: bool,
 }
@@ -107,12 +132,19 @@ struct SyncSettingsPayload {
     sync_images: bool,
     sync_files: bool,
     max_file_mb: u32,
+    auto_sync_clipboard: bool,
+    sync_files_save_enabled: bool,
+    sync_files_save_dir: String,
+    sync_files_save_dir_is_default: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
 struct ClipboardSettingsPayload {
     history_limit: usize,
+    view_mode: String,
 }
+
+const DEFAULT_CLIPBOARD_VIEW_MODE: &str = "grid";
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct ConnectedPeerPayload {
@@ -655,6 +687,14 @@ fn validate_max_file_mb(mb: u32) -> Result<u32, String> {
 }
 
 fn sync_settings_from_config(config: &AppConfig) -> SyncSettingsPayload {
+    let custom = config.sync_files_save_dir.as_deref();
+    let is_default = custom.map(|value| value.trim().is_empty()).unwrap_or(true);
+    let save_dir = storage::sync_save::resolve_sync_files_save_dir(if is_default {
+        None
+    } else {
+        custom
+    })
+    .unwrap_or_else(|_| PathBuf::from(""));
     SyncSettingsPayload {
         sync_images: config.sync_images.unwrap_or(true),
         sync_files: config.sync_files.unwrap_or(true),
@@ -663,6 +703,10 @@ fn sync_settings_from_config(config: &AppConfig) -> SyncSettingsPayload {
                 .max_file_bytes
                 .unwrap_or(DEFAULT_MAX_FILE_BYTES),
         ),
+        sync_files_save_enabled: config.sync_files_save_enabled.unwrap_or(false),
+        sync_files_save_dir: save_dir.to_string_lossy().into_owned(),
+        sync_files_save_dir_is_default: is_default,
+        auto_sync_clipboard: config.auto_sync_clipboard.unwrap_or(true),
     }
 }
 
@@ -681,9 +725,25 @@ fn validate_clipboard_history_limit(value: usize) -> Result<usize, String> {
     }
 }
 
+fn normalized_clipboard_view_mode(value: Option<&str>) -> &'static str {
+    match value {
+        Some("list") => "list",
+        _ => DEFAULT_CLIPBOARD_VIEW_MODE,
+    }
+}
+
+fn validate_clipboard_view_mode(value: &str) -> Result<String, String> {
+    match value {
+        "list" => Ok("list".to_string()),
+        "grid" => Ok("grid".to_string()),
+        _ => Err("视图模式无效，请重新选择后再试。".to_string()),
+    }
+}
+
 fn clipboard_settings_from_config(config: &AppConfig) -> ClipboardSettingsPayload {
     ClipboardSettingsPayload {
         history_limit: normalized_clipboard_history_limit(config.clipboard_history_limit),
+        view_mode: normalized_clipboard_view_mode(config.clipboard_view_mode.as_deref()).to_string(),
     }
 }
 
@@ -1031,6 +1091,83 @@ fn merge_clipboard_history(
     }
 }
 
+fn snapshot_from_history_entry(entry: &ClipboardHistoryEntry) -> Result<clipboard::types::ClipboardSnapshot, String> {
+    match entry.clip_type.as_str() {
+        "text" => {
+            let content = entry.content.trim();
+            if content.is_empty() {
+                return Err("该条历史内容为空，无法操作。".to_string());
+            }
+            Ok(clipboard::types::ClipboardSnapshot::Text(content.to_string()))
+        }
+        "image" => {
+            let data_url = entry
+                .image_data_url
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "无法读取该图片的历史数据，请重新复制后再试。".to_string())?;
+            let png_bytes = clipboard::image::png_bytes_from_data_url(data_url)?;
+            clipboard::image::snapshot_from_png_bytes(png_bytes)
+                .ok_or_else(|| "该图片过大或格式无效，无法操作。".to_string())
+        }
+        "file" => Err("文件类历史暂不支持从这里重新写入剪贴板，请在资源管理器中重新复制文件。".to_string()),
+        _ => Err("不支持的历史类型。".to_string()),
+    }
+}
+
+fn write_history_snapshot_to_clipboard(snapshot: &clipboard::types::ClipboardSnapshot) {
+    match snapshot {
+        clipboard::types::ClipboardSnapshot::Text(text) => ClipboardMonitor::write_clipboard(text),
+        clipboard::types::ClipboardSnapshot::Image {
+            png_bytes,
+            width,
+            height,
+        } => ClipboardMonitor::write_clipboard_image(png_bytes, *width, *height),
+        clipboard::types::ClipboardSnapshot::FileList { .. } | clipboard::types::ClipboardSnapshot::Empty => {}
+    }
+}
+
+fn fresh_promoted_history_id(entry: &ClipboardHistoryEntry, timestamp_ms: u64) -> String {
+    let hash = hex::encode(
+        blake3::hash(format!("promote:{}:{}", entry.id, timestamp_ms).as_bytes()).as_bytes(),
+    );
+    format!("{}-{}", timestamp_ms, &hash[..8])
+}
+
+fn promote_history_entry_clone(
+    history: &mut Vec<ClipboardHistoryEntry>,
+    entry_id: &str,
+    limit: usize,
+) -> Result<(), String> {
+    if history.first().map(|item| item.id.as_str()) == Some(entry_id) {
+        return Ok(());
+    }
+
+    let index = history
+        .iter()
+        .position(|item| item.id == entry_id)
+        .ok_or_else(|| "找不到这条剪贴板历史，可能已被清空。".to_string())?;
+
+    let mut promoted = history[index].clone();
+    promoted.timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(promoted.timestamp_ms);
+    promoted.id = fresh_promoted_history_id(&promoted, promoted.timestamp_ms);
+    history.insert(0, promoted);
+
+    if history.len() > limit {
+        let removed: Vec<ClipboardHistoryEntry> = history.drain(limit..).collect();
+        for item in removed {
+            if let Some(thumbnail_ref) = item.thumbnail_ref {
+                let _ = storage::history_thumbs::delete_by_ref(&thumbnail_ref);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn single_file_preview_source(
     event: &ClipboardEvent,
     entry: &ClipboardHistoryEntry,
@@ -1294,6 +1431,32 @@ async fn save_startup_settings(
 }
 
 #[tauri::command]
+async fn get_app_behavior_settings(
+    state: tauri::State<'_, AppState>,
+) -> Result<AppBehaviorSettingsPayload, String> {
+    let config = state.config.lock().await;
+    Ok(app_behavior_from_config(&config))
+}
+
+#[tauri::command]
+async fn save_app_behavior_settings(
+    state: tauri::State<'_, AppState>,
+    system_notifications_enabled: bool,
+    close_window_action: String,
+) -> Result<AppBehaviorSettingsPayload, String> {
+    let action = normalized_close_window_action(Some(close_window_action.as_str()));
+    {
+        let mut config = state.config.lock().await;
+        config.system_notifications_enabled = Some(system_notifications_enabled);
+        config.close_window_action = Some(action.to_string());
+        storage_json::save_config(&config);
+    }
+
+    let config = state.config.lock().await;
+    Ok(app_behavior_from_config(&config))
+}
+
+#[tauri::command]
 async fn get_connection_settings(
     state: tauri::State<'_, AppState>,
 ) -> Result<ConnectionSettingsPayload, String> {
@@ -1328,6 +1491,8 @@ async fn save_sync_settings(
     sync_images: bool,
     sync_files: Option<bool>,
     max_file_mb: Option<u32>,
+    sync_files_save_enabled: Option<bool>,
+    auto_sync_clipboard: Option<bool>,
 ) -> Result<SyncSettingsPayload, String> {
     {
         let mut config = state.config.lock().await;
@@ -1335,11 +1500,49 @@ async fn save_sync_settings(
         if let Some(sync_files) = sync_files {
             config.sync_files = Some(sync_files);
         }
+        if let Some(sync_files_save_enabled) = sync_files_save_enabled {
+            config.sync_files_save_enabled = Some(sync_files_save_enabled);
+        }
+        if let Some(auto_sync_clipboard) = auto_sync_clipboard {
+            config.auto_sync_clipboard = Some(auto_sync_clipboard);
+        }
         if let Some(max_file_mb) = max_file_mb {
             config.max_file_bytes = Some(max_file_mb_to_bytes(validate_max_file_mb(max_file_mb)?));
         } else if config.max_file_bytes.is_none() {
             config.max_file_bytes = Some(DEFAULT_MAX_FILE_BYTES);
         }
+        storage_json::save_config(&config);
+    }
+
+    let config = state.config.lock().await;
+    Ok(sync_settings_from_config(&config))
+}
+
+#[tauri::command]
+async fn pick_sync_files_save_dir() -> Result<String, String> {
+    let picked = tokio::task::spawn_blocking(|| rfd::FileDialog::new().pick_folder())
+        .await
+        .map_err(|_| "打开文件夹选择窗口失败，请稍后再试。".to_string())?;
+    picked
+        .map(|path| path.to_string_lossy().into_owned())
+        .ok_or_else(|| "未选择文件夹。".to_string())
+}
+
+#[tauri::command]
+async fn save_sync_files_save_dir(
+    state: tauri::State<'_, AppState>,
+    path: Option<String>,
+) -> Result<SyncSettingsPayload, String> {
+    {
+        let mut config = state.config.lock().await;
+        config.sync_files_save_dir = match path {
+            Some(value) if value.trim().is_empty() => None,
+            Some(value) => {
+                storage::sync_save::resolve_sync_files_save_dir(Some(value.trim()))?;
+                Some(value.trim().to_string())
+            }
+            None => None,
+        };
         storage_json::save_config(&config);
     }
 
@@ -1406,23 +1609,39 @@ async fn get_clipboard_settings(
 async fn save_clipboard_settings(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
-    history_limit: usize,
+    history_limit: Option<usize>,
+    view_mode: Option<String>,
 ) -> Result<ClipboardSettingsPayload, String> {
-    let history_limit = validate_clipboard_history_limit(history_limit)?;
+    if history_limit.is_none() && view_mode.is_none() {
+        return Err("没有可保存的剪贴板设置。".to_string());
+    }
+
+    let validated_limit = history_limit.map(validate_clipboard_history_limit).transpose()?;
+    let validated_view_mode = view_mode
+        .as_deref()
+        .map(validate_clipboard_view_mode)
+        .transpose()?;
 
     {
         let mut config = state.config.lock().await;
-        config.clipboard_history_limit = Some(history_limit);
+        if let Some(limit) = validated_limit {
+            config.clipboard_history_limit = Some(limit);
+        }
+        if let Some(mode) = validated_view_mode {
+            config.clipboard_view_mode = Some(mode);
+        }
         storage_json::save_config(&config);
     }
 
-    let updated_history = {
-        let mut history = state.clipboard_history.lock().await;
-        history.truncate(history_limit);
-        history.clone()
-    };
-    persist_clipboard_history(&state.config, &updated_history).await;
-    let _ = app.emit("clipboard-history-changed", updated_history);
+    if let Some(limit) = validated_limit {
+        let updated_history = {
+            let mut history = state.clipboard_history.lock().await;
+            history.truncate(limit);
+            history.clone()
+        };
+        persist_clipboard_history(&state.config, &updated_history).await;
+        let _ = app.emit("clipboard-history-changed", updated_history);
+    }
 
     let config = state.config.lock().await;
     Ok(clipboard_settings_from_config(&config))
@@ -1480,6 +1699,92 @@ async fn get_clipboard_history(
 ) -> Result<Vec<ClipboardHistoryEntry>, String> {
     let history = state.clipboard_history.lock().await.clone();
     Ok(history)
+}
+
+#[tauri::command]
+async fn copy_clipboard_history_entry(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+) -> Result<(), String> {
+    let entry = {
+        let history = state.clipboard_history.lock().await;
+        history
+            .iter()
+            .find(|item| item.id == entry_id)
+            .cloned()
+            .ok_or_else(|| "找不到这条剪贴板历史，可能已被清空。".to_string())?
+    };
+
+    let snapshot = snapshot_from_history_entry(&entry)?;
+    write_history_snapshot_to_clipboard(&snapshot);
+    Ok(())
+}
+
+#[tauri::command]
+async fn send_clipboard_history_entry(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    entry_id: String,
+) -> Result<(), String> {
+    let (entry, index) = {
+        let history = state.clipboard_history.lock().await;
+        let index = history
+            .iter()
+            .position(|item| item.id == entry_id)
+            .ok_or_else(|| "找不到这条剪贴板历史，可能已被清空。".to_string())?;
+        (history[index].clone(), index)
+    };
+
+    let snapshot = if entry.clip_type == "file" {
+        let (sync_files, max_file_bytes) = {
+            let config = state.config.lock().await;
+            (
+                config.sync_files.unwrap_or(true),
+                config
+                    .max_file_bytes
+                    .unwrap_or(DEFAULT_MAX_FILE_BYTES),
+            )
+        };
+        if !sync_files {
+            return Err("文件同步已关闭，请先在设置中开启同步文件。".to_string());
+        }
+        let snapshot =
+            ClipboardMonitor::read_current_snapshot(max_file_bytes, sync_files)?;
+        match &snapshot {
+            clipboard::types::ClipboardSnapshot::FileList { files } if !files.is_empty() => {
+                snapshot
+            }
+            _ => {
+                return Err(
+                    "剪贴板里没有可同步的文件，请在资源管理器中重新复制后再发送。".to_string(),
+                );
+            }
+        }
+    } else {
+        let snapshot = snapshot_from_history_entry(&entry)?;
+        write_history_snapshot_to_clipboard(&snapshot);
+        snapshot
+    };
+
+    if index > 0 {
+        let updated_history = {
+            let limit = {
+                let cfg = state.config.lock().await;
+                normalized_clipboard_history_limit(cfg.clipboard_history_limit)
+            };
+            let mut history = state.clipboard_history.lock().await;
+            promote_history_entry_clone(&mut history, &entry_id, limit)?;
+            history.clone()
+        };
+        persist_clipboard_history(&state.config, &updated_history).await;
+        let _ = app.emit("clipboard-history-changed", updated_history);
+    }
+
+    let _ = state
+        .clip_tx
+        .send(ClipboardEvent::local_sync_only(snapshot));
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -2443,10 +2748,6 @@ pub fn run() {
                 window::attach_main_window_close_handler(app.handle().clone(), win);
             }
 
-            if startup.silent_start {
-                window::destroy_main_window(app.handle());
-            }
-
             let toggle = MenuItemBuilder::with_id("toggle", format!("打开 {APP_DISPLAY_NAME}")).build(app)?;
             let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
             let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
@@ -2480,6 +2781,10 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
+
+            if startup.silent_start {
+                window::destroy_main_window(app.handle());
+            }
 
             let app_key_pair = app.state::<AppState>().key_pair.clone();
             let app_handle = app.handle().clone();
@@ -2713,6 +3018,9 @@ pub fn run() {
 
                 tauri::async_runtime::spawn(async move {
                     while let Ok(event) = clip_history_rx.recv().await {
+                        if event.skip_history_merge {
+                            continue;
+                        }
                         if let Some(entry) = build_clipboard_history_entry(&event) {
                             let preview_source = single_file_preview_source(&event, &entry);
                             let updated_history = {
@@ -2828,13 +3136,19 @@ pub fn run() {
             get_ui_settings,
             get_startup_settings,
             save_startup_settings,
+            get_app_behavior_settings,
+            save_app_behavior_settings,
             get_connection_settings,
             save_connection_settings,
             get_sync_settings,
             save_sync_settings,
+            pick_sync_files_save_dir,
+            save_sync_files_save_dir,
             get_clipboard_settings,
             save_clipboard_settings,
             get_clipboard_history,
+            copy_clipboard_history_entry,
+            send_clipboard_history_entry,
             clear_clipboard_history,
             resolve_history_thumbnail,
             get_pending_connection_request,
@@ -2854,6 +3168,14 @@ pub fn run() {
             disconnect,
             disconnect_peer,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                // Keep tray-only mode alive when the last WebView is destroyed (silent start / close to tray).
+                if code.is_none() {
+                    api.prevent_exit();
+                }
+            }
+        });
 }

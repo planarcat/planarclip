@@ -11,6 +11,12 @@
     "check:web": "pnpm --filter planarclip check:web",
     "check:watch": "pnpm --filter planarclip check:watch",
     "preview:web": "pnpm --filter planarclip preview:web",
-    "tauri": "pnpm --filter planarclip tauri"
+    "tauri": "pnpm --filter planarclip tauri",
+    "pull": "node scripts/workspace-git-pull.mjs planarclip --analyze",
+    "pull:only": "node scripts/workspace-git-pull.mjs planarclip",
+    "pull:open": "node scripts/workspace-git-pull.mjs planarclip --analyze",
+    "analyze": "node scripts/gitnexus-analyze-repo.mjs --all",
+    "analyze:planarclip": "node scripts/gitnexus-analyze-repo.mjs planarclip",
+    "gitnexus:analyze": "node scripts/gitnexus-analyze-repo.mjs --all"
   }
 }

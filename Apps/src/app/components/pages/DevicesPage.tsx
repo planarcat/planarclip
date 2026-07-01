@@ -12,9 +12,11 @@ import {
 import type { ReactNode } from "react";
 import type { AppConnectionStatus, Device } from "../../types";
 import { MAX_CONNECTIONS } from "../../constants/connection";
+import { SURFACE_REVEAL_BG } from "../../constants/surfaceReveal";
 import { categorizeDevices } from "../../utils/device";
 import { relativeTime } from "../../utils/time";
 import { DisconnectIconButton } from "../common/DisconnectIconButton";
+import { ScrollArea } from "../ui/ScrollArea";
 import { OsIcon } from "../common/OsIcon";
 
 type DevicesPageProps = {
@@ -104,7 +106,7 @@ function DeviceSectionHeader({ accent, action, count, icon, title }: DeviceSecti
       <div className="flex min-w-0 items-center gap-2">
         <span className={accentClassName}>{icon}</span>
         <p className="text-[13px] font-medium text-primary">{title}</p>
-        <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground">{count}</span>
+        <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-muted-foreground">{count}</span>
       </div>
       <div className="flex shrink-0 items-center gap-3">
         {action}
@@ -129,7 +131,7 @@ function HoverTooltip({ children, content }: { children: ReactNode; content: str
       {children}
       <span
         role="tooltip"
-        className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-20 w-max max-w-[240px] -translate-y-1/2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[11px] font-medium leading-snug text-muted-foreground opacity-0 shadow-md transition-opacity group-hover/tooltip:opacity-100 group-focus-within/tooltip:opacity-100"
+        className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-20 w-max max-w-[240px] -translate-y-1/2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium leading-snug text-muted-foreground opacity-0 shadow-md transition-opacity group-hover/tooltip:opacity-100 group-focus-within/tooltip:opacity-100"
       >
         <span
           aria-hidden="true"
@@ -162,7 +164,7 @@ function TrustShieldButton({
         aria-label={label}
         aria-pressed={autoAccept}
         onClick={() => onSetPeerAutoAccept(device, !autoAccept)}
-        className="inline-flex shrink-0 items-center justify-center rounded-md p-0.5 transition-colors hover:bg-secondary/60"
+        className={`inline-flex shrink-0 items-center justify-center rounded-md p-0.5 ${SURFACE_REVEAL_BG} hover:bg-secondary/60`}
       >
         {autoAccept ? (
           <Shield size={13} className="text-primary" fill="currentColor" aria-hidden="true" />
@@ -222,7 +224,7 @@ function DeviceIconButton({
       disabled={disabled}
       onClick={onClick}
       title={title}
-      className={`inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[5.5px] text-muted-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+      className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground ${SURFACE_REVEAL_BG} hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-40 ${
         hoverDestructive ? "hover:text-destructive" : "hover:text-foreground"
       }`}
     >
@@ -285,12 +287,12 @@ function KnownDeviceCard({
       {(activityMeta || device.latencyMs != null) && (
         <div className="flex items-center justify-between gap-4 border-t border-border bg-secondary/20 px-4 py-2.5">
           {activityMeta ? (
-            <p className="min-w-0 text-[11px] font-medium text-muted-foreground">{activityMeta}</p>
+            <p className="min-w-0 text-xs font-medium text-muted-foreground">{activityMeta}</p>
           ) : (
             <span />
           )}
           {device.latencyMs != null && (
-            <p className="shrink-0 font-mono text-[11px] font-medium text-emerald-400">{device.latencyMs}ms</p>
+            <p className="shrink-0 font-mono text-xs font-medium text-emerald-400">{device.latencyMs}ms</p>
           )}
         </div>
       )}
@@ -375,7 +377,7 @@ function OfflineDeviceCard({ device, onRemoveTrustedPeer, onSetPeerAutoAccept }:
 
       {lastOnlineLabel && (
         <div className="border-t border-border bg-secondary/20 px-4 py-2">
-          <p className="text-[11px] font-medium text-muted-foreground">{lastOnlineLabel}</p>
+          <p className="text-xs font-medium text-muted-foreground">{lastOnlineLabel}</p>
         </div>
       )}
     </article>
@@ -415,7 +417,7 @@ export function DevicesPage({
   };
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 pt-6 md:px-6 md:pt-8 xl:px-8">
+    <ScrollArea className="flex-1 overflow-y-auto px-4 pb-8 pt-6 md:px-6 md:pb-10 md:pt-8 xl:px-8">
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h2 className="mb-1 text-base font-semibold text-primary">设备管理</h2>
@@ -425,7 +427,7 @@ export function DevicesPage({
           onClick={() => onShowPairing()}
           disabled={busyConnecting || atConnectionLimit}
           aria-label={busyConnecting ? "正在连接新设备" : atConnectionLimit ? "已超出连接上限" : "连接新设备"}
-          className="ml-4 shrink-0 rounded-lg bg-primary p-2 text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+          className={`ml-4 shrink-0 rounded-lg bg-primary p-2 text-primary-foreground ${SURFACE_REVEAL_BG} hover:bg-[var(--button-primary-hover-bg)] disabled:opacity-40`}
           title={busyConnecting ? "正在连接新设备" : atConnectionLimit ? "已超出连接上限" : "连接新设备"}
           type="button"
         >
@@ -469,7 +471,7 @@ export function DevicesPage({
                 onClick={onRefreshDevices}
                 disabled={isRefreshingDevices}
                 aria-label="刷新附近设备"
-                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40"
+                className={`rounded-md p-1.5 text-muted-foreground ${SURFACE_REVEAL_BG} hover:bg-secondary hover:text-foreground disabled:opacity-40`}
                 title="刷新附近设备"
                 type="button"
               >
@@ -536,7 +538,7 @@ export function DevicesPage({
           )}
         </section>
       </div>
-    </div>
+    </ScrollArea>
   );
 }
 

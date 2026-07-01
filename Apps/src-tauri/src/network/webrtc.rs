@@ -22,6 +22,7 @@ use crate::network::protocol::SignalMessage;
 use crate::network::signalling;
 use crate::sync::activity::{emit_sync_activity, notify_sync_failure, TransferProgressReporter};
 use crate::storage::staging;
+use crate::storage::sync_save;
 use crate::sync::dedup::DedupStore;
 use crate::sync::transfer::{
     cancel_transfer_ack, max_file_bytes_to_mb, peer_file_too_large_message,
@@ -415,7 +416,7 @@ async fn finalize_received_file(
     dedup: &Arc<Mutex<DedupStore>>,
     clip_tx: &broadcast::Sender<ClipboardEvent>,
     peer_name: &str,
-    _app_handle: Option<&AppHandle>,
+    app_handle: Option<&AppHandle>,
     pending_paths: Option<Vec<PathBuf>>,
 ) {
     let received_paths = pending_paths.unwrap_or_else(|| vec![completed.path.clone()]);
@@ -423,13 +424,43 @@ async fn finalize_received_file(
         .batch_id
         .as_deref()
         .map(staging::batch_dir);
-    let clipboard_paths = if let Some(ref batch_dir) = batch_dir {
+
+    let mut export_used = false;
+    let mut clipboard_paths = if let Some(ref batch_dir) = batch_dir {
         clipboard_hdrop_paths(batch_dir, &received_paths)
     } else {
         received_paths.clone()
     };
+    let mut paths_for_items = received_paths.clone();
 
-    let mut files = file_items_from_received_paths(batch_dir.as_deref(), &received_paths);
+    if read_sync_files_enabled(app_handle).await && read_sync_files_save_enabled(app_handle).await {
+        if let Some(save_root) = read_sync_files_save_dir(app_handle).await {
+            match sync_save::export_received_files_to_save_dir(
+                batch_dir.as_deref(),
+                &received_paths,
+                &save_root,
+            ) {
+                Ok(exported) => {
+                    export_used = true;
+                    clipboard_paths = exported.clipboard_paths;
+                    paths_for_items = exported.file_paths;
+                }
+                Err(reason) => {
+                    tracing::warn!("Failed to save synced files under {:?}: {reason}", save_root);
+                    notify_sync_failure(app_handle, &reason);
+                }
+            }
+        }
+    }
+
+    let mut files = file_items_from_received_paths(
+        if export_used {
+            None
+        } else {
+            batch_dir.as_deref()
+        },
+        &paths_for_items,
+    );
     if files.is_empty() {
         files = clipboard_paths
             .iter()
@@ -974,6 +1005,31 @@ async fn read_sync_files_enabled(app_handle: Option<&AppHandle>) -> bool {
     let state = app_handle.state::<crate::AppState>();
     let sync_files = state.config.lock().await.sync_files.unwrap_or(true);
     sync_files
+}
+
+async fn read_sync_files_save_enabled(app_handle: Option<&AppHandle>) -> bool {
+    let Some(app_handle) = app_handle else {
+        return false;
+    };
+    let state = app_handle.state::<crate::AppState>();
+    let enabled = state.config.lock().await.sync_files_save_enabled.unwrap_or(false);
+    enabled
+}
+
+async fn read_sync_files_save_dir(app_handle: Option<&AppHandle>) -> Option<PathBuf> {
+    let app_handle = app_handle?;
+    let state = app_handle.state::<crate::AppState>();
+    let custom = state.config.lock().await.sync_files_save_dir.clone();
+    let is_default = custom
+        .as_deref()
+        .map(|value| value.trim().is_empty())
+        .unwrap_or(true);
+    sync_save::resolve_sync_files_save_dir(if is_default {
+        None
+    } else {
+        custom.as_deref()
+    })
+    .ok()
 }
 
 fn new_handle(

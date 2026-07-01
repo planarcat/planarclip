@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useMemo, useState } from "react";
+import { ThemeTransitionOverlay } from "./components/overlays/ThemeTransitionOverlay";
 import { DevicesPanel } from "./components/layout/DevicesPanel";
 import { Sidebar } from "./components/layout/Sidebar";
 import { ConnectionAttemptCard } from "./components/overlays/ConnectionAttemptCard";
@@ -17,8 +18,10 @@ import { useTransferProgress } from "./hooks/useTransferProgress";
 import { useConnectionSettings } from "./hooks/useConnectionSettings";
 import { useSyncSettings } from "./hooks/useSyncSettings";
 import { usePairingFlow } from "./hooks/usePairingFlow";
+import { useAppBehaviorSettings } from "./hooks/useAppBehaviorSettings";
 import { useStartupSettings } from "./hooks/useStartupSettings";
 import { useUiTheme } from "./hooks/useUiTheme";
+import { useThemeTransition } from "./hooks/useThemeTransition";
 import type {
   AppConnectionStatus,
   ClipEntry,
@@ -34,11 +37,12 @@ import type {
   PairingStage,
   ThemeColor,
   TrustedPeerPayload,
-  ViewMode,
 } from "./types";
 import { buildDevices } from "./utils/device";
 import { MSG_PAIRING_CODE_REFRESHED, normalizeUserMessage } from "./utils/message";
 import { loadPreviewUiSettings } from "./utils/settings";
+import type { ThemePickOrigin } from "./utils/themeTransition";
+import { isColorSchemeDark } from "./utils/themeTransition";
 
 const TAURI_AVAILABLE = isTauri();
 const EMPTY_CLIPS: ClipEntry[] = [];
@@ -55,11 +59,10 @@ export default function App() {
   const previewUiSettings = useMemo(() => loadPreviewUiSettings(), []);
   const [activeNav, setActiveNav] = useState<NavId>("clipboard");
   const [clips, setClips] = useState<ClipEntry[]>(EMPTY_CLIPS);
-  const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [theme, setTheme] = useState<ThemeColor>(() => getThemeById(previewUiSettings.theme_color));
   const [colorScheme, setColorScheme] = useState<ColorScheme>(() => normalizeColorScheme(previewUiSettings.color_scheme));
   const [deviceName, setDeviceName] = useState(previewUiSettings.device_name);
-  const [isDark, setIsDark] = useState(true);
+  const [, setIsDark] = useState(true);
   const [, setSettingsMessage] = useState(
     TAURI_AVAILABLE ? "正在同步桌面端设置…" : "当前是浏览器预览模式，外观设置会暂存到浏览器本地。",
   );
@@ -96,13 +99,15 @@ export default function App() {
 
   const { transferProgress, applySyncActivity, clearTransferProgress } = useTransferProgress();
 
+  const { transitionState, playBackgroundTransition, playThemeTransition, handleRevealEnd, handleBackgroundCircleEnd, appearanceTransitionActive } =
+    useThemeTransition();
+
   const {
-    handleColorSchemeChange,
-    handleThemeChange,
     handleDeviceNameChange,
     handleDeviceNameSave,
     applyDesktopUiSettings,
     applyUiSettingsFallback,
+    persistAppearanceSettings,
   } = useUiTheme({
     tauriAvailable: TAURI_AVAILABLE,
     callCommand,
@@ -115,7 +120,36 @@ export default function App() {
     setIsDark,
     setSettingsMessage,
     setIsSavingSettings,
+    suspendThemeSync: appearanceTransitionActive,
   });
+
+  const appearanceIsDark = isColorSchemeDark(colorScheme);
+
+  const onColorSchemeChange = useCallback(
+    (nextScheme: ColorScheme) => {
+      if (nextScheme === colorScheme) {
+        return;
+      }
+      setColorScheme(nextScheme);
+      setIsDark(isColorSchemeDark(nextScheme));
+      playBackgroundTransition(nextScheme, theme, () => persistAppearanceSettings(nextScheme, theme));
+    },
+    [colorScheme, persistAppearanceSettings, playBackgroundTransition, setColorScheme, setIsDark, theme],
+  );
+
+  const onThemeChange = useCallback(
+    (nextTheme: ThemeColor, origin?: ThemePickOrigin) => {
+      if (nextTheme.id === theme.id) {
+        return;
+      }
+      const point = origin ?? { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+      setTheme(nextTheme);
+      playThemeTransition(nextTheme, colorScheme, isColorSchemeDark(colorScheme), point, () =>
+        persistAppearanceSettings(colorScheme, nextTheme),
+      );
+    },
+    [colorScheme, persistAppearanceSettings, playThemeTransition, setTheme, theme.id],
+  );
 
   const {
     launchAtStartup,
@@ -125,6 +159,19 @@ export default function App() {
     handleLaunchAtStartupChange,
     handleSilentStartChange,
   } = useStartupSettings({
+    tauriAvailable: TAURI_AVAILABLE,
+    callCommand,
+    setLastMessage,
+  });
+
+  const {
+    systemNotificationsEnabled,
+    closeWindowAction,
+    isSavingAppBehaviorSettings,
+    appBehaviorSettingsLoaded,
+    handleSystemNotificationsChange,
+    handleCloseWindowActionChange,
+  } = useAppBehaviorSettings({
     tauriAvailable: TAURI_AVAILABLE,
     callCommand,
     setLastMessage,
@@ -145,11 +192,19 @@ export default function App() {
     syncImages,
     syncFiles,
     maxFileMb,
+    syncFilesSaveEnabled,
+    syncFilesSaveDir,
+    syncFilesSaveDirIsDefault,
     isSavingSyncSettings,
     syncSettingsLoaded,
     handleSyncImagesChange,
     handleSyncFilesChange,
+    handleSyncFilesSaveEnabledChange,
     handleMaxFileMbChange,
+    handlePickSyncFilesSaveDir,
+    handleResetSyncFilesSaveDir,
+    autoSyncClipboard,
+    handleAutoSyncClipboardChange,
   } = useSyncSettings({
     tauriAvailable: TAURI_AVAILABLE,
     callCommand,
@@ -158,10 +213,12 @@ export default function App() {
 
   const {
     historyLimit,
+    viewMode,
     isSavingClipboardSettings,
     clipboardSettingsLoaded,
     isClearingClipboardHistory,
     handleHistoryLimitChange,
+    handleViewModeChange,
     handleClearHistory,
   } = useClipboardSettings({
     tauriAvailable: TAURI_AVAILABLE,
@@ -366,6 +423,11 @@ export default function App() {
     onPairingCodeRotated: handlePairingCodeRotated,
   });
 
+  const showIncomingPrompt =
+    incomingRequest != null &&
+    (pairingStage === "incoming_request" || pairingStage === "incoming_accepting");
+  const showBottomStatusStack = showConnectionAttemptCard || transferProgress != null;
+
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
       <Sidebar
@@ -374,29 +436,32 @@ export default function App() {
         connectedDeviceCount={connectedCount}
         onlineDeviceCount={onlineDeviceCount}
         colorScheme={colorScheme}
-        setColorScheme={handleColorSchemeChange}
+        setColorScheme={onColorSchemeChange}
         theme={theme}
-        isDark={isDark}
+        isDark={appearanceIsDark}
         isSavingDeviceName={isSavingSettings}
-        onThemeChange={handleThemeChange}
+        onThemeChange={onThemeChange}
         onNavigate={setActiveNav}
         onDeviceNameChange={handleDeviceNameChange}
         onDeviceNameSave={handleDeviceNameSave}
       />
 
       <main className="flex h-full min-w-0 flex-1 overflow-hidden">
+        <div key={activeNav} className="page-enter flex h-full min-w-0 flex-1 overflow-hidden">
         {activeNav === "clipboard" && (
           <>
             <ClipboardPage
               clips={clips}
               viewMode={viewMode}
-              setViewMode={setViewMode}
+              setViewMode={handleViewModeChange}
               status={status}
               statusMessage={lastMessage}
               isClearingHistory={isClearingClipboardHistory}
               onClearHistory={() => {
                 void handleClearHistory();
               }}
+              onActionMessage={setLastMessage}
+              showManualSync={!autoSyncClipboard}
             />
             <DevicesPanel
               devices={devices}
@@ -439,19 +504,25 @@ export default function App() {
           <SettingsPage
             colorScheme={colorScheme}
             deviceName={deviceName}
-            isDark={isDark}
+            isDark={appearanceIsDark}
             theme={theme}
             isSaving={isSavingSettings}
             launchAtStartup={launchAtStartup}
             silentStart={silentStart}
             isSavingStartupSettings={isSavingStartupSettings}
             startupSettingsLoaded={startupSettingsLoaded}
-            onSchemeChange={handleColorSchemeChange}
-            onThemeChange={handleThemeChange}
+            onSchemeChange={onColorSchemeChange}
+            onThemeChange={onThemeChange}
             onDeviceNameChange={handleDeviceNameChange}
             onDeviceNameSave={handleDeviceNameSave}
             onLaunchAtStartupChange={handleLaunchAtStartupChange}
             onSilentStartChange={handleSilentStartChange}
+            systemNotificationsEnabled={systemNotificationsEnabled}
+            closeWindowAction={closeWindowAction}
+            isSavingAppBehaviorSettings={isSavingAppBehaviorSettings}
+            appBehaviorSettingsLoaded={appBehaviorSettingsLoaded}
+            onSystemNotificationsChange={handleSystemNotificationsChange}
+            onCloseWindowActionChange={handleCloseWindowActionChange}
             autoConnectTrusted={autoConnectTrusted}
             isSavingConnectionSettings={isSavingConnectionSettings}
             connectionSettingsLoaded={connectionSettingsLoaded}
@@ -462,9 +533,21 @@ export default function App() {
             isSavingSyncSettings={isSavingSyncSettings}
             syncSettingsLoaded={syncSettingsLoaded}
             onSyncImagesChange={handleSyncImagesChange}
+            autoSyncClipboard={autoSyncClipboard}
+            onAutoSyncClipboardChange={handleAutoSyncClipboardChange}
             onSyncFilesChange={handleSyncFilesChange}
+            syncFilesSaveEnabled={syncFilesSaveEnabled}
+            onSyncFilesSaveEnabledChange={handleSyncFilesSaveEnabledChange}
             onMaxFileMbChange={(mb) => {
               void handleMaxFileMbChange(mb);
+            }}
+            syncFilesSaveDir={syncFilesSaveDir}
+            syncFilesSaveDirIsDefault={syncFilesSaveDirIsDefault}
+            onPickSyncFilesSaveDir={() => {
+              void handlePickSyncFilesSaveDir();
+            }}
+            onResetSyncFilesSaveDir={() => {
+              void handleResetSyncFilesSaveDir();
             }}
             clipboardHistoryLimit={historyLimit}
             isSavingClipboardSettings={isSavingClipboardSettings}
@@ -474,11 +557,12 @@ export default function App() {
             }}
           />
         )}
+        </div>
       </main>
 
-      {incomingRequest &&
-        (pairingStage === "incoming_request" || pairingStage === "incoming_accepting") && (
+      {incomingRequest && (
         <IncomingConnectionPrompt
+          open={showIncomingPrompt}
           request={incomingRequest}
           accepting={pairingStage === "incoming_accepting"}
           onAccept={() => {
@@ -493,44 +577,54 @@ export default function App() {
         />
       )}
 
-      {showPairingModal && (
-        <PairingModal
-          initialTarget={pairingTarget}
-          allDiscoverable={discoveredDevices}
-          pairingCode={pairingCode.padEnd(6, "•").slice(0, 6)}
-          input={pairingInput}
-          stage={pairingStage}
-          helperText={pairingHelperText}
-          errorMessage={pairingError}
-          rotationHint={pairingRotationHint}
-          connectionLocked={connectionLocked}
-          onClose={() => {
-            void closePairingModal();
-          }}
-          onInputChange={setPairingInput}
-          onSelectDevice={(device) => {
-            void switchPairingTarget(device);
-          }}
-          onSubmitPairingCode={() => {
-            void handleSubmitPairingCode();
-          }}
-          onRotatePairingCode={() => {
-            void handleRotatePairingCode();
-          }}
-        />
+      <PairingModal
+        open={showPairingModal}
+        initialTarget={pairingTarget}
+        allDiscoverable={discoveredDevices}
+        pairingCode={pairingCode.padEnd(6, "•").slice(0, 6)}
+        input={pairingInput}
+        stage={pairingStage}
+        helperText={pairingHelperText}
+        errorMessage={pairingError}
+        rotationHint={pairingRotationHint}
+        connectionLocked={connectionLocked}
+        onClose={() => {
+          void closePairingModal();
+        }}
+        onInputChange={setPairingInput}
+        onSelectDevice={(device) => {
+          void switchPairingTarget(device);
+        }}
+        onSubmitPairingCode={() => {
+          void handleSubmitPairingCode();
+        }}
+        onRotatePairingCode={() => {
+          void handleRotatePairingCode();
+        }}
+      />
+
+      {showBottomStatusStack && (
+        <div className="pointer-events-none fixed right-6 bottom-6 z-[70] flex flex-col items-end gap-3">
+          {showConnectionAttemptCard && pairingTarget && (
+            <ConnectionAttemptCard deviceName={pairingTarget.name} />
+          )}
+          {transferProgress && (
+            <TransferProgressCard progress={transferProgress} onDismiss={clearTransferProgress} />
+          )}
+        </div>
       )}
 
-      {showConnectionAttemptCard && pairingTarget && (
-        <ConnectionAttemptCard deviceName={pairingTarget.name} />
-      )}
+      <StatusNotice
+        open={noticeMessage != null}
+        message={noticeMessage ?? ""}
+        onDismiss={() => setNoticeMessage(null)}
+      />
 
-      {transferProgress && !showConnectionAttemptCard && (
-        <TransferProgressCard progress={transferProgress} onDismiss={clearTransferProgress} />
-      )}
-
-      {noticeMessage && (
-        <StatusNotice message={noticeMessage} onDismiss={() => setNoticeMessage(null)} />
-      )}
+      <ThemeTransitionOverlay
+        state={transitionState}
+        onRevealEnd={handleRevealEnd}
+        onBackgroundCircleEnd={handleBackgroundCircleEnd}
+      />
     </div>
   );
 }

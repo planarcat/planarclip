@@ -1,70 +1,63 @@
 import { Clipboard, LayoutGrid, LayoutList, Trash2 } from "lucide-react";
 
 import { useRelativeTicker } from "../../hooks/useRelativeTicker";
+import { useViewModeTransition } from "../../hooks/useViewModeTransition";
 
 import type { AppConnectionStatus, ClipEntry, ViewMode } from "../../types";
 
 import { relativeTime } from "../../utils/time";
+import { SURFACE_REVEAL_BG } from "../../constants/surfaceReveal";
+import { CLIP_LIST_PREVIEW_SURFACE } from "../../constants/clipPreviewSurface";
 
 import { ClipTypeIcon } from "../common/ClipTypeIcon";
 
-import { CopyButton } from "../common/CopyButton";
+import { ClipHistoryActions } from "../common/ClipHistoryActions";
 
 import { FileClipPreview } from "../common/FileClipPreview";
+import { ClipImagePreview, ClipTextPreview } from "../common/ClipTextPreview";
+import { ScrollArea } from "../ui/ScrollArea";
 
 
 
-function ClipPreview({ clip }: { clip: ClipEntry }) {
-
-  if (clip.type === "file") {
-
-    return <FileClipPreview clip={clip} variant="list" />;
-
+function ClipPreview({
+  clip,
+  onActionMessage,
+  showManualSync,
+}: {
+  clip: ClipEntry;
+  onActionMessage?: (message: string) => void;
+  showManualSync?: boolean;
+}) {
+  if (clip.type === "image" && clip.imagePreviewUrl) {
+    return (
+      <ClipImagePreview
+        clip={clip}
+        variant="list"
+        onActionMessage={onActionMessage}
+        showManualSync={showManualSync}
+      />
+    );
   }
 
-
-
-  if (clip.type === "image" && clip.imagePreviewUrl) {
-
-    return (
-
-      <div className="overflow-hidden rounded-lg border border-border bg-secondary/30">
-
-        <img
-
-          src={clip.imagePreviewUrl}
-
-          alt={clip.content}
-
-          className="max-h-56 w-full object-contain"
-
-          loading="lazy"
-
-        />
-
-      </div>
-
+  const body =
+    clip.type === "file" ? (
+      <FileClipPreview clip={clip} variant="list" />
+    ) : (
+      <ClipTextPreview clip={clip} lineClamp={3} onActionMessage={onActionMessage} showManualSync={showManualSync} />
     );
 
-  }
-
-
-
-  return (
-
-    <p className="line-clamp-3 whitespace-pre-wrap break-all text-sm leading-relaxed text-foreground/90">
-
-      {clip.content}
-
-    </p>
-
-  );
-
+  return <div className={`p-3 ${CLIP_LIST_PREVIEW_SURFACE}`}>{body}</div>;
 }
 
 
 
-function ClipPreviewGrid({ clip }: { clip: ClipEntry }) {
+function ClipPreviewGrid({
+  clip,
+  onActionMessage,
+}: {
+  clip: ClipEntry;
+  onActionMessage?: (message: string) => void;
+}) {
 
   if (clip.type === "file") {
 
@@ -75,40 +68,12 @@ function ClipPreviewGrid({ clip }: { clip: ClipEntry }) {
 
 
   if (clip.type === "image" && clip.imagePreviewUrl) {
-
-    return (
-
-      <div className="flex flex-1 overflow-hidden rounded-lg border border-border bg-secondary/30">
-
-        <img
-
-          src={clip.imagePreviewUrl}
-
-          alt={clip.content}
-
-          className="max-h-48 w-full object-contain"
-
-          loading="lazy"
-
-        />
-
-      </div>
-
-    );
-
+    return <ClipImagePreview clip={clip} variant="grid" onActionMessage={onActionMessage} />;
   }
 
 
 
-  return (
-
-    <p className="line-clamp-4 flex-1 whitespace-pre-wrap break-all text-sm leading-relaxed text-foreground/90">
-
-      {clip.content}
-
-    </p>
-
-  );
+  return <ClipTextPreview clip={clip} lineClamp={4} className="flex-1" onActionMessage={onActionMessage} />;
 
 }
 
@@ -130,6 +95,10 @@ type ClipboardPageProps = {
 
   onClearHistory: () => void;
 
+  onActionMessage?: (message: string) => void;
+
+  showManualSync?: boolean;
+
 };
 
 
@@ -148,15 +117,21 @@ export function ClipboardPage({
 
   onClearHistory,
 
+  onActionMessage,
+
+  showManualSync = false,
+
 }: ClipboardPageProps) {
 
   useRelativeTicker();
+
+  const { displayMode, contentClass } = useViewModeTransition(viewMode);
 
 
 
   return (
 
-    <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+    <ScrollArea className="flex min-w-0 flex-1 flex-col overflow-y-auto">
 
       <div className="flex shrink-0 items-center justify-between border-b border-border px-4 pb-3 pt-5 md:px-6">
 
@@ -182,7 +157,7 @@ export function ClipboardPage({
 
               disabled={isClearingHistory}
 
-              className="rounded-md p-1.5 text-secondary-foreground transition-colors hover:bg-secondary hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+              className={`rounded-md p-1.5 text-secondary-foreground ${SURFACE_REVEAL_BG} hover:bg-secondary hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50`}
 
               title={isClearingHistory ? "正在清空" : "清空剪贴板历史"}
 
@@ -202,7 +177,7 @@ export function ClipboardPage({
 
               onClick={() => setViewMode("list")}
 
-              className={`rounded p-1.5 transition-colors ${viewMode === "list" ? "bg-card text-primary shadow-sm" : "text-secondary-foreground hover:text-primary"}`}
+              className={`rounded p-1.5 ${SURFACE_REVEAL_BG} ${viewMode === "list" ? "bg-card text-primary shadow-sm" : "text-secondary-foreground hover:bg-secondary/70 hover:text-primary"}`}
 
               title="列表视图"
 
@@ -218,7 +193,7 @@ export function ClipboardPage({
 
               onClick={() => setViewMode("grid")}
 
-              className={`rounded p-1.5 transition-colors ${viewMode === "grid" ? "bg-card text-primary shadow-sm" : "text-secondary-foreground hover:text-primary"}`}
+              className={`rounded p-1.5 ${SURFACE_REVEAL_BG} ${viewMode === "grid" ? "bg-card text-primary shadow-sm" : "text-secondary-foreground hover:bg-secondary/70 hover:text-primary"}`}
 
               title="网格视图"
 
@@ -260,7 +235,11 @@ export function ClipboardPage({
 
         </div>
 
-      ) : viewMode === "list" ? (
+      ) : (
+
+        <div className={`min-h-0 flex-1 ${contentClass}`}>
+
+      {displayMode === "list" ? (
 
         <div className="flex-1">
 
@@ -268,45 +247,39 @@ export function ClipboardPage({
 
             const sourceLine = clip.direction === "received" ? `来自 ${clip.sourceLabel}` : `从 ${clip.sourceLabel} 发出`;
 
-            const showTypeIcon = clip.type !== "file";
-
-
-
             return (
 
-              <div key={clip.id} className="group border-b border-border px-4 py-4 transition-colors last:border-0 hover:bg-secondary/40 md:px-6">
+              <div key={clip.id} className="group border-b border-border px-4 py-4 last:border-0 md:px-6">
 
-                <div className="flex items-start gap-3">
+                <div className="mb-1.5 flex items-center gap-3">
 
-                  {showTypeIcon ? <ClipTypeIcon type={clip.type} /> : null}
+                  <ClipTypeIcon type={clip.type} />
 
-                  <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
 
-                    <div className="mb-1.5 flex items-center gap-2">
+                    <span className="truncate text-[13px] font-medium text-primary">{sourceLine}</span>
 
-                      <span className="text-[13px] font-medium text-primary">{sourceLine}</span>
+                    <span className="ml-auto shrink-0 text-[13px] font-medium text-muted-foreground">{relativeTime(clip.timestamp)}</span>
 
-                      <span className="ml-auto shrink-0 text-[13px] font-medium text-muted-foreground">{relativeTime(clip.timestamp)}</span>
+                    {clip.type !== "file" ? (
 
-                      {clip.type !== "file" ? (
+                      <span className="shrink-0 font-mono text-[13px] font-medium text-secondary-foreground">{clip.size}</span>
 
-                        <span className="shrink-0 font-mono text-[13px] font-medium text-secondary-foreground">{clip.size}</span>
+                    ) : null}
 
-                      ) : null}
-
-                      <div className="opacity-0 transition-opacity group-hover:opacity-100">
-
-                        {clip.type === "text" ? <CopyButton text={clip.content} /> : null}
-
-                      </div>
-
+                    <div className="opacity-0 transition-opacity group-hover:opacity-100">
+                      <ClipHistoryActions
+                        clip={clip}
+                        showSendButton={showManualSync}
+                        onActionMessage={onActionMessage}
+                      />
                     </div>
-
-                    <ClipPreview clip={clip} />
 
                   </div>
 
                 </div>
+
+                <ClipPreview clip={clip} onActionMessage={onActionMessage} showManualSync={showManualSync} />
 
               </div>
 
@@ -341,14 +314,16 @@ export function ClipboardPage({
                     <span className="truncate text-[13px] font-medium text-primary">{sourceLine}</span>
 
                     <div className="ml-auto opacity-0 transition-opacity group-hover:opacity-100">
-
-                      {clip.type === "text" ? <CopyButton text={clip.content} /> : null}
-
+                      <ClipHistoryActions
+                        clip={clip}
+                        showSendButton={showManualSync}
+                        onActionMessage={onActionMessage}
+                      />
                     </div>
 
                   </div>
 
-                  <ClipPreviewGrid clip={clip} />
+                  <ClipPreviewGrid clip={clip} onActionMessage={onActionMessage} />
 
                   <div className="mt-auto flex items-center justify-between border-t border-border pt-2">
 
@@ -370,10 +345,12 @@ export function ClipboardPage({
 
       )}
 
-    </div>
+        </div>
+
+      )}
+
+    </ScrollArea>
 
   );
 
 }
-
-

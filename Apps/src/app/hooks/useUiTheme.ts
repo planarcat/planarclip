@@ -1,7 +1,9 @@
 import { useCallback, useEffect } from "react";
 import { getThemeById, normalizeColorScheme } from "../constants/theme";
 import type { ColorScheme, CommandExecutor, ThemeColor, UiSettingsPayload } from "../types";
+import { mirrorUiSettingsForBootstrap } from "../utils/appearanceBootstrap";
 import {
+  applyAppearanceFromUiSettings,
   applyColorScheme,
   applyThemeColor,
   isDarkActive,
@@ -27,6 +29,8 @@ type UseUiThemeOptions = {
   setIsDark: (isDark: boolean) => void;
   setSettingsMessage: (message: string) => void;
   setIsSavingSettings: (saving: boolean) => void;
+  /** Skip DOM theme apply while a visual transition is driving tokens. */
+  suspendThemeSync?: boolean;
 };
 
 /**
@@ -46,6 +50,7 @@ export function useUiTheme({
   setIsDark,
   setSettingsMessage,
   setIsSavingSettings,
+  suspendThemeSync = false,
 }: UseUiThemeOptions) {
   const syncTheme = useCallback(
     (nextTheme: ThemeColor, nextScheme: ColorScheme) => {
@@ -84,6 +89,11 @@ export function useUiTheme({
           deviceName: normalizedName,
         });
         setDeviceName(normalizeDeviceName(savedSettings.device_name));
+        mirrorUiSettingsForBootstrap({
+          color_scheme: nextScheme,
+          theme_color: nextTheme.id,
+          device_name: normalizeDeviceName(savedSettings.device_name),
+        });
         setSettingsMessage(message.desktop);
       } catch (error) {
         setSettingsMessage(normalizeUserMessage(error, "这次没有保存成功，请稍后再试。"));
@@ -116,6 +126,16 @@ export function useUiTheme({
     [colorScheme, deviceName, persistUiSettings, setTheme],
   );
 
+  const persistAppearanceSettings = useCallback(
+    (nextScheme: ColorScheme, nextTheme: ThemeColor) => {
+      void persistUiSettings(nextScheme, nextTheme, deviceName, {
+        desktop: "外观设置已保存，下次打开桌面应用时会继续保留。",
+        preview: "当前是浏览器预览模式，外观设置已暂存到浏览器本地。",
+      });
+    },
+    [deviceName, persistUiSettings],
+  );
+
   const handleDeviceNameChange = useCallback(
     (nextDeviceName: string) => {
       setDeviceName(nextDeviceName.slice(0, 24));
@@ -137,12 +157,17 @@ export function useUiTheme({
 
   const applyDesktopUiSettings = useCallback(
     (uiSettings: UiSettingsPayload) => {
-      setColorScheme(normalizeColorScheme(uiSettings.color_scheme));
-      setTheme(getThemeById(uiSettings.theme_color));
+      const scheme = normalizeColorScheme(uiSettings.color_scheme);
+      const nextTheme = getThemeById(uiSettings.theme_color);
+      applyAppearanceFromUiSettings(uiSettings);
+      mirrorUiSettingsForBootstrap(uiSettings);
+      setColorScheme(scheme);
+      setTheme(nextTheme);
       setDeviceName(normalizeDeviceName(uiSettings.device_name));
+      setIsDark(isDarkActive());
       setSettingsMessage("桌面端设置已同步，可直接继续调整外观与设备名称。");
     },
-    [setColorScheme, setDeviceName, setSettingsMessage, setTheme],
+    [setColorScheme, setDeviceName, setIsDark, setSettingsMessage, setTheme],
   );
 
   const applyUiSettingsFallback = useCallback(() => {
@@ -150,12 +175,18 @@ export function useUiTheme({
   }, [setSettingsMessage]);
 
   useEffect(() => {
+    if (suspendThemeSync) {
+      return;
+    }
     syncTheme(theme, colorScheme);
-  }, [colorScheme, syncTheme, theme]);
+  }, [colorScheme, suspendThemeSync, syncTheme, theme]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleChange = () => {
+      if (suspendThemeSync) {
+        return;
+      }
       if (colorScheme === "system") {
         syncTheme(theme, "system");
       }
@@ -163,7 +194,7 @@ export function useUiTheme({
 
     mediaQuery.addEventListener("change", handleChange);
     return () => mediaQuery.removeEventListener("change", handleChange);
-  }, [colorScheme, syncTheme, theme]);
+  }, [colorScheme, suspendThemeSync, syncTheme, theme]);
 
   return {
     handleColorSchemeChange,
@@ -172,5 +203,6 @@ export function useUiTheme({
     handleDeviceNameSave,
     applyDesktopUiSettings,
     applyUiSettingsFallback,
+    persistAppearanceSettings,
   };
 }

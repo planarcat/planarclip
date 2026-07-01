@@ -1,10 +1,16 @@
 import { Loader2, PlugZap, Wifi, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { usePairingCountdown } from "../../hooks/usePairingCountdown";
 import type { Device, PairingStage } from "../../types";
 import { OsIcon } from "../common/OsIcon";
+import { EmptyState } from "../ui/EmptyState";
+import { IconButton } from "../ui/IconButton";
+import { ModalShell } from "../ui/ModalShell";
+import { PrimaryButton } from "../ui/PrimaryButton";
+import { SURFACE_REVEAL_BG, SURFACE_REVEAL_CODE_FIELD } from "../../constants/surfaceReveal";
 
 type PairingModalProps = {
+  open: boolean;
   initialTarget?: Device | null;
   allDiscoverable: Device[];
   pairingCode: string;
@@ -22,11 +28,15 @@ type PairingModalProps = {
 };
 
 function PairingModalHeader({
+  titleId,
+  subtitleId,
   stage,
   selectedDevice,
   onClose,
   closeLabel,
 }: {
+  titleId: string;
+  subtitleId: string;
   stage: PairingStage;
   selectedDevice: Device | null;
   onClose: () => void;
@@ -49,17 +59,16 @@ function PairingModalHeader({
   return (
     <div className="flex items-center justify-between border-b border-border px-5 pb-4 pt-5">
       <div className="min-w-0 pr-3">
-        <p className="truncate text-sm font-semibold text-foreground">{title}</p>
-        <p className="mt-0.5 text-[11px] font-medium text-muted-foreground">{subtitle}</p>
+        <p id={titleId} className="truncate text-sm font-semibold text-foreground">
+          {title}
+        </p>
+        <p id={subtitleId} className="mt-0.5 text-xs font-medium text-muted-foreground">
+          {subtitle}
+        </p>
       </div>
-      <button
-        onClick={onClose}
-        title={closeLabel}
-        className="shrink-0 rounded-lg p-1.5 text-secondary-foreground transition-colors hover:bg-secondary hover:text-foreground"
-        type="button"
-      >
+      <IconButton onClick={onClose} title={closeLabel} aria-label={closeLabel}>
         <X size={15} />
-      </button>
+      </IconButton>
     </div>
   );
 }
@@ -72,8 +81,8 @@ function SelectedDeviceCard({ device }: { device: Device }) {
           <OsIcon os={device.os} size={15} />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[11px] font-medium text-foreground">{device.name}</p>
-          <p className="truncate font-mono text-[10px] font-medium text-muted-foreground">{device.address}</p>
+          <p className="truncate text-xs font-medium text-foreground">{device.name}</p>
+          <p className="truncate font-mono text-xs font-medium text-muted-foreground">{device.address}</p>
         </div>
       </div>
     </div>
@@ -108,7 +117,7 @@ function PairingStatusBar({ stage }: { stage: PairingStage }) {
       ) : (
         <Wifi size={13} className="shrink-0 text-muted-foreground" />
       )}
-      <span className="text-[11px] font-medium text-muted-foreground">{text}</span>
+      <span className="text-xs font-medium text-muted-foreground">{text}</span>
     </div>
   );
 }
@@ -130,7 +139,7 @@ function LocalPairingCodeSection({
 
   return (
     <div className="text-center">
-      <p className="mb-3 text-[11px] font-medium text-muted-foreground">本机配对码</p>
+      <p className="mb-3 text-xs font-medium text-muted-foreground">本机配对码</p>
       <div className="mb-3 flex items-center justify-center gap-1.5">
         {digits.map((digit, index) => (
           <span
@@ -154,8 +163,8 @@ function LocalPairingCodeSection({
 function SelectDeviceHint() {
   return (
     <div className="rounded-xl border border-dashed border-border bg-secondary/20 px-4 py-6 text-center">
-      <p className="text-[13px] font-medium text-foreground">请先从下方列表选择要连接的设备</p>
-      <p className="mt-1 text-[11px] font-medium text-muted-foreground">选中后将向该设备发起连接请求</p>
+      <p className="text-sm font-medium text-foreground">请先从下方列表选择要连接的设备</p>
+      <p className="mt-1 text-xs font-medium text-muted-foreground">选中后将向该设备发起连接请求</p>
     </div>
   );
 }
@@ -172,8 +181,8 @@ function SwitchableDeviceList({
   return (
     <div>
       <div className="mb-2 flex items-center justify-between">
-        <p className="text-[11px] font-medium text-foreground">设备列表</p>
-        <span className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+        <p className="text-xs font-medium text-foreground">设备列表</p>
+        <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
           <Wifi size={10} />
           自动发现
         </span>
@@ -186,22 +195,20 @@ function SwitchableDeviceList({
               type="button"
               disabled={disabled}
               onClick={() => onSelectDevice(device)}
-              className="flex w-full items-center gap-3 rounded-xl border border-border bg-secondary/30 p-3 text-left transition-colors hover:border-primary/30 disabled:pointer-events-none disabled:opacity-40"
+              className={`flex w-full items-center gap-3 rounded-xl border border-border bg-secondary/30 p-3 text-left ${SURFACE_REVEAL_BG} hover:bg-secondary/50 hover:border-primary/30 disabled:pointer-events-none disabled:opacity-40`}
             >
               <div className="rounded-lg bg-secondary p-2 text-muted-foreground">
                 <OsIcon os={device.os} size={15} />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[11px] font-medium text-foreground">{device.name}</p>
-                <p className="truncate font-mono text-[10px] font-medium text-muted-foreground">{device.address}</p>
+                <p className="truncate text-xs font-medium text-foreground">{device.name}</p>
+                <p className="truncate font-mono text-xs font-medium text-muted-foreground">{device.address}</p>
               </div>
               <PlugZap size={14} className="shrink-0 text-muted-foreground" />
             </button>
           ))
         ) : (
-          <div className="rounded-xl border border-dashed border-border px-3 py-5 text-center text-[11px] font-medium text-muted-foreground">
-            暂无发现更多设备
-          </div>
+          <EmptyState className="py-5">暂无发现更多设备</EmptyState>
         )}
       </div>
     </div>
@@ -209,6 +216,7 @@ function SwitchableDeviceList({
 }
 
 export function PairingModal({
+  open,
   initialTarget = null,
   allDiscoverable,
   pairingCode,
@@ -224,6 +232,8 @@ export function PairingModal({
   onSubmitPairingCode,
   onRotatePairingCode,
 }: PairingModalProps) {
+  const titleId = useId();
+  const subtitleId = useId();
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(initialTarget ?? null);
 
   useEffect(() => {
@@ -240,7 +250,7 @@ export function PairingModal({
 
   const pairingCodeCountdownActive = stage === "awaiting_code" || stage === "incoming_pairing";
   const { progress, isUrgent } = usePairingCountdown({
-    active: pairingCodeCountdownActive,
+    active: pairingCodeCountdownActive && open,
     onExpire: onRotatePairingCode,
   });
 
@@ -257,80 +267,77 @@ export function PairingModal({
 
   const closeLabel = connectionLocked || inboundPairing ? "取消这次连接" : "关闭";
   const helperLine = errorMessage ?? rotationHint ?? helperText;
+  const helperClassName = errorMessage
+    ? "text-destructive"
+    : rotationHint
+      ? "text-primary"
+      : "text-muted-foreground";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative mx-4 w-full max-w-[360px] overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
-        <PairingModalHeader
-          stage={stage}
-          selectedDevice={activeTarget}
-          onClose={onClose}
-          closeLabel={closeLabel}
-        />
+    <ModalShell
+      open={open}
+      onBackdropClick={onClose}
+      zIndexClassName="z-50"
+      labelledBy={titleId}
+      describedBy={subtitleId}
+    >
+      <PairingModalHeader
+        titleId={titleId}
+        subtitleId={subtitleId}
+        stage={stage}
+        selectedDevice={activeTarget}
+        onClose={onClose}
+        closeLabel={closeLabel}
+      />
 
-        {activeTarget && !inboundPairing && <SelectedDeviceCard device={activeTarget} />}
+      {activeTarget && !inboundPairing && <SelectedDeviceCard device={activeTarget} />}
 
-        <div className="max-h-[80vh] space-y-5 overflow-y-auto p-5">
-          {!activeTarget && <SelectDeviceHint />}
+      <div className="max-h-[80vh] space-y-5 overflow-y-auto p-5">
+        {!activeTarget && <SelectDeviceHint />}
 
-          <PairingStatusBar stage={stage} />
+        <PairingStatusBar stage={stage} />
 
-          {showLocalPairingCode && (
-            <LocalPairingCodeSection pairingCode={pairingCode} isUrgent={isUrgent} progress={progress} />
-          )}
+        {showLocalPairingCode && (
+          <LocalPairingCodeSection pairingCode={pairingCode} isUrgent={isUrgent} progress={progress} />
+        )}
 
-          {showPairingInput && (
-            <div>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={6}
-                  placeholder="000000"
-                  value={input}
-                  onChange={(event) => onInputChange(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                  disabled={stage === "submitting_code"}
-                  className="flex-1 rounded-lg border border-border bg-secondary px-3 py-2.5 text-center font-mono text-base tracking-[0.2em] text-foreground transition-colors placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none disabled:opacity-50"
-                />
-                <button
-                  onClick={onSubmitPairingCode}
-                  disabled={input.length !== 6 || stage === "submitting_code"}
-                  className="shrink-0 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
-                  type="button"
-                >
-                  {stage === "submitting_code" ? <Loader2 size={15} className="animate-spin" /> : "验证"}
-                </button>
-              </div>
-              <p
-                className={`mt-2 text-[11px] font-medium ${
-                  errorMessage ? "text-destructive" : rotationHint ? "text-primary" : "text-muted-foreground"
-                }`}
+        {showPairingInput && (
+          <div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="000000"
+                value={input}
+                onChange={(event) => onInputChange(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                disabled={stage === "submitting_code"}
+                className={`flex-1 ${SURFACE_REVEAL_CODE_FIELD}`}
+              />
+              <PrimaryButton
+                onClick={onSubmitPairingCode}
+                disabled={input.length !== 6 || stage === "submitting_code"}
+                className="shrink-0 px-4"
               >
-                {helperLine}
-              </p>
+                {stage === "submitting_code" ? <Loader2 size={15} className="animate-spin" /> : "验证"}
+              </PrimaryButton>
             </div>
-          )}
+            <p className={`mt-2 text-xs font-medium ${helperClassName}`}>{helperLine}</p>
+          </div>
+        )}
 
-          {!showPairingInput && !inMutualPairing && (
-            <p
-              className={`text-[11px] font-medium ${
-                errorMessage ? "text-destructive" : rotationHint ? "text-primary" : "text-muted-foreground"
-              }`}
-            >
-              {helperLine}
-            </p>
-          )}
+        {!showPairingInput && !inMutualPairing && (
+          <p className={`text-xs font-medium ${helperClassName}`}>{helperLine}</p>
+        )}
 
-          {!inboundPairing && (
-            <SwitchableDeviceList
-              devices={listDevices}
-              disabled={connectionLocked}
-              onSelectDevice={selectFromList}
-            />
-          )}
-        </div>
+        {!inboundPairing && (
+          <SwitchableDeviceList
+            devices={listDevices}
+            disabled={connectionLocked}
+            onSelectDevice={selectFromList}
+          />
+        )}
       </div>
-    </div>
+    </ModalShell>
   );
 }

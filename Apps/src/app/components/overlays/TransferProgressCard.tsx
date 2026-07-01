@@ -23,6 +23,7 @@ export function TransferProgressCard({ progress, onDismiss }: TransferProgressCa
       title={progress.message}
       subtitle={subtitle}
       onDismiss={!progress.active ? onDismiss : undefined}
+      anchored={false}
       track={
         <ProgressTrack
           mode={hasDeterminateProgress ? "determinate" : "indeterminate"}

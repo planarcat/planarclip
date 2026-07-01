@@ -1,0 +1,62 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "PlanarClip workspace: pnpm dev",
+			"type": "shell",
+			"command": "pnpm dev",
+			"options": {
+				"cwd": "${workspaceFolder}",
+				"env": {
+					"npm_config_confirmModulesPurge": "false"
+				}
+			},
+			"runOptions": { "runOn": "folderOpen" },
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"focus": false,
+				"clear": false
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "PlanarClip workspace: pnpm check:watch",
+			"type": "shell",
+			"command": "pnpm check:watch",
+			"options": {
+				"cwd": "${workspaceFolder}",
+				"env": {
+					"npm_config_confirmModulesPurge": "false"
+				}
+			},
+			"runOptions": { "runOn": "folderOpen" },
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"focus": false,
+				"clear": false
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "PlanarClip workspace: pull",
+			"type": "shell",
+			"command": "pnpm pull:open",
+			"options": { "cwd": "${workspaceFolder}" },
+			"runOptions": { "runOn": "folderOpen" },
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"focus": false,
+				"clear": false
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "PlanarClip: pull（自动模式 · 分终端）",
+			"dependsOn": ["PlanarClip workspace: pull"],
+			"problemMatcher": []
+		}
+	]
+}

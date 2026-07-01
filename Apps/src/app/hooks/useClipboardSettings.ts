@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { DEFAULT_CLIPBOARD_HISTORY_LIMIT } from "../constants/clipboard";
-import type { ClipEntry, CommandExecutor, ClipboardSettingsPayload } from "../types";
+import {
+  DEFAULT_CLIPBOARD_HISTORY_LIMIT,
+  DEFAULT_CLIPBOARD_VIEW_MODE,
+  loadPreviewClipboardViewMode,
+  normalizeClipboardViewMode,
+  savePreviewClipboardViewMode,
+} from "../constants/clipboard";
+import type { ClipEntry, CommandExecutor, ClipboardSettingsPayload, ViewMode } from "../types";
 import { normalizeUserMessage } from "../utils/message";
 
 type UseClipboardSettingsOptions = {
@@ -17,6 +23,9 @@ export function useClipboardSettings({
   setClips,
 }: UseClipboardSettingsOptions) {
   const [historyLimit, setHistoryLimit] = useState(DEFAULT_CLIPBOARD_HISTORY_LIMIT);
+  const [viewMode, setViewMode] = useState<ViewMode>(() =>
+    tauriAvailable ? DEFAULT_CLIPBOARD_VIEW_MODE : loadPreviewClipboardViewMode(),
+  );
   const [isSaving, setIsSaving] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [loaded, setLoaded] = useState(!tauriAvailable);
@@ -35,9 +44,11 @@ export function useClipboardSettings({
           return;
         }
         setHistoryLimit(settings.history_limit);
+        setViewMode(normalizeClipboardViewMode(settings.view_mode));
       } catch {
         if (!disposed) {
           setHistoryLimit(DEFAULT_CLIPBOARD_HISTORY_LIMIT);
+          setViewMode(DEFAULT_CLIPBOARD_VIEW_MODE);
         }
       } finally {
         if (!disposed) {
@@ -67,11 +78,33 @@ export function useClipboardSettings({
           historyLimit: limit,
         });
         setHistoryLimit(saved.history_limit);
+        setViewMode(normalizeClipboardViewMode(saved.view_mode));
         setLastMessage(`已更新展示上限为 ${saved.history_limit} 条。`);
       } catch (error) {
         setLastMessage(normalizeUserMessage(error, "这次没有保存成功，请稍后再试。"));
       } finally {
         setIsSaving(false);
+      }
+    },
+    [callCommand, setLastMessage, tauriAvailable],
+  );
+
+  const handleViewModeChange = useCallback(
+    async (mode: ViewMode) => {
+      setViewMode(mode);
+
+      if (!tauriAvailable) {
+        savePreviewClipboardViewMode(mode);
+        return;
+      }
+
+      try {
+        const saved = await callCommand<ClipboardSettingsPayload>("save_clipboard_settings", {
+          viewMode: mode,
+        });
+        setViewMode(normalizeClipboardViewMode(saved.view_mode));
+      } catch (error) {
+        setLastMessage(normalizeUserMessage(error, "视图设置没有保存成功，请稍后再试。"));
       }
     },
     [callCommand, setLastMessage, tauriAvailable],
@@ -98,10 +131,12 @@ export function useClipboardSettings({
 
   return {
     historyLimit,
+    viewMode,
     isSavingClipboardSettings: isSaving,
     clipboardSettingsLoaded: loaded,
     isClearingClipboardHistory: isClearing,
     handleHistoryLimitChange,
+    handleViewModeChange,
     handleClearHistory,
   };
 }

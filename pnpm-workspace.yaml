@@ -1,5 +1,5 @@
 packages:
-  - "Apps/planarclip"
+  - "Apps"
 
 allowBuilds:
   esbuild: true

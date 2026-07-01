@@ -111,6 +111,18 @@ pub fn png_data_url(png_bytes: &[u8]) -> String {
     format!("data:image/png;base64,{}", BASE64.encode(png_bytes))
 }
 
+pub fn png_bytes_from_data_url(data_url: &str) -> Result<Vec<u8>, String> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+
+    let prefix = "data:image/png;base64,";
+    let encoded = data_url
+        .strip_prefix(prefix)
+        .ok_or_else(|| "无法读取该图片的历史数据。".to_string())?;
+    BASE64
+        .decode(encoded)
+        .map_err(|_| "无法读取该图片的历史数据。".to_string())
+}
+
 pub fn format_byte_size(bytes: usize) -> String {
     if bytes < 1024 {
         format!("{bytes} B")

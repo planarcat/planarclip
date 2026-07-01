@@ -12,6 +12,7 @@ export function ConnectionAttemptCard({ deviceName }: ConnectionAttemptCardProps
     <BottomRightStatusCard
       title={trimmed ? `正在尝试连接 ${trimmed}` : "正在尝试连接…"}
       track={<ProgressTrack mode="indeterminate" />}
+      anchored={false}
     />
   );
 }

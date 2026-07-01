@@ -3,6 +3,10 @@
 @source "../**/*.{js,ts,jsx,tsx}";
 
 @import "tw-animate-css";
+@import "./motion.css";
+@import "./surface-reveal.css";
+@import "./scrollbar.css";
+@import "./theme-transition.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -45,6 +49,27 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  --motion-fast: 120ms;
+  --motion-normal: 180ms;
+  --motion-slow: 240ms;
+  --motion-enter: 220ms;
+  --motion-exit: 160ms;
+  --motion-page-enter: 380ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --success: var(--chart-2);
+  --warning: var(--chart-4);
+  --surface-reveal-fade-in: 380ms;
+  --surface-reveal-fade-out: 520ms;
+  --surface-reveal-ease-in: cubic-bezier(0.4, 0, 0.2, 1);
+  --surface-reveal-ease-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --button-primary-hover-bg: color-mix(in srgb, var(--primary) 88%, black);
+  --scrollbar-thumb-idle: transparent;
+  --scrollbar-thumb: rgba(94, 101, 125, 0.45);
+  --scrollbar-fade-in: var(--surface-reveal-fade-in);
+  --scrollbar-fade-out: var(--surface-reveal-fade-out);
+  --scrollbar-ease-in: var(--surface-reveal-ease-in);
+  --scrollbar-ease-out: var(--surface-reveal-ease-out);
 }
 
 .dark {
@@ -84,6 +109,9 @@
   --sidebar-accent-foreground: #e8eaf0;
   --sidebar-border: rgba(255, 255, 255, 0.07);
   --sidebar-ring: #22d3ee;
+  --scrollbar-thumb-idle: transparent;
+  --scrollbar-thumb: rgba(122, 136, 167, 0.5);
+  --button-primary-hover-bg: color-mix(in srgb, var(--primary) 90%, white);
 }
 
 @theme inline {
@@ -113,6 +141,8 @@
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -134,6 +164,11 @@
 
   html {
     font-size: var(--font-size);
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
   }
 
   body {
@@ -145,6 +180,11 @@
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    background-image: radial-gradient(ellipse 120% 80% at 50% -20%, color-mix(in oklab, var(--primary) 6%, transparent), transparent);
+  }
+
+  .dark body {
+    background-image: radial-gradient(ellipse 120% 80% at 50% -20%, color-mix(in oklab, var(--primary) 8%, transparent), transparent);
   }
 
   #root {
@@ -236,10 +276,4 @@
     transparent 78%,
     transparent 100%
   );
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .connection-attempt-flow {
-    animation-duration: 1.2s;
-  }
 }

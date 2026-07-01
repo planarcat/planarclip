@@ -1,7 +1,13 @@
 import { Clipboard, Moon, Radio, Settings, Sun, SunMoon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { THEME_COLORS } from "../../constants/theme";
+import {
+  SURFACE_REVEAL_BG,
+  SURFACE_REVEAL_NAV_ITEM,
+  SURFACE_REVEAL_TEXT_FIELD_SM,
+} from "../../constants/surfaceReveal";
 import type { ColorScheme, NavId, ThemeColor } from "../../types";
+import type { ThemePickOrigin } from "../../utils/themeTransition";
 import { ThemeSwatch } from "../common/ThemeSwatch";
 
 type SidebarProps = {
@@ -14,7 +20,7 @@ type SidebarProps = {
   theme: ThemeColor;
   isDark: boolean;
   isSavingDeviceName: boolean;
-  onThemeChange: (theme: ThemeColor) => void;
+  onThemeChange: (theme: ThemeColor, origin?: ThemePickOrigin) => void;
   onNavigate: (nav: NavId) => void;
   onDeviceNameChange: (deviceName: string) => void;
   onDeviceNameSave: (deviceName?: string) => void;
@@ -57,7 +63,7 @@ export function Sidebar({
   };
 
   return (
-    <aside className="flex h-full w-52 shrink-0 flex-col border-r border-border bg-card xl:w-56">
+    <aside className="flex h-full w-60 shrink-0 flex-col border-r border-border bg-card xl:w-64">
       <div className="border-b border-border px-4 pb-4 pt-5">
         <div className="flex items-start gap-2.5">
           <div className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-md bg-primary/15">
@@ -93,14 +99,14 @@ export function Sidebar({
                       setIsEditingDeviceName(false);
                     }
                   }}
-                  className="w-full rounded-md border border-border bg-secondary px-2.5 py-1.5 text-[13px] font-medium text-primary transition-colors placeholder:text-primary/45 focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                  className={`w-full ${SURFACE_REVEAL_TEXT_FIELD_SM}`}
                   placeholder="我的设备"
                 />
               ) : (
                 <button
                   onClick={() => setIsEditingDeviceName(true)}
                   aria-label="修改设备名称"
-                  className="block w-full bg-transparent p-0 text-left text-[13px] font-medium text-primary transition-opacity hover:opacity-80"
+                  className={`block w-full rounded-md px-2.5 py-1.5 text-left text-[13px] font-medium text-primary ${SURFACE_REVEAL_BG} hover:bg-secondary/50`}
                   title="点击修改设备名称"
                   type="button"
                 >
@@ -117,14 +123,15 @@ export function Sidebar({
           <button
             key={item.id}
             onClick={() => onNavigate(item.id)}
-            className={`flex w-full items-center gap-2.5 rounded px-2.5 py-2 text-sm font-medium transition-colors ${
+            className={`${SURFACE_REVEAL_NAV_ITEM} ${
               activeNav === item.id
-                ? "bg-primary text-white"
-                : "text-primary/85 hover:bg-secondary hover:text-primary"
+                ? "bg-primary text-white hover:bg-[var(--button-primary-hover-bg)]"
+                : "bg-transparent text-primary/85 hover:bg-secondary hover:text-primary"
             }`}
             type="button"
           >
-            {item.icon}
+            <span className="flex h-[15px] w-[15px] items-center justify-center">{item.icon}</span>
+            <span className="min-w-0 text-left">
             {item.id === "devices" ? (
               <span className="flex min-w-0 items-center gap-2">
                 <span>设备</span>
@@ -160,6 +167,7 @@ export function Sidebar({
             ) : (
               item.label
             )}
+            </span>
           </button>
         ))}
       </nav>
@@ -177,7 +185,7 @@ export function Sidebar({
                 key={option.id}
                 onClick={() => setColorScheme(option.id)}
                 title={option.label}
-                className={`flex h-6 w-6 items-center justify-center rounded transition-colors ${colorScheme === option.id ? "bg-card text-foreground shadow-sm" : "text-secondary-foreground hover:text-foreground"}`}
+                className={`flex h-6 w-6 items-center justify-center rounded ${SURFACE_REVEAL_BG} ${colorScheme === option.id ? "bg-card text-foreground shadow-sm" : "text-secondary-foreground hover:bg-secondary/70 hover:text-foreground"}`}
                 type="button"
               >
                 {option.icon}

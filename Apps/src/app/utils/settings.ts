@@ -74,6 +74,13 @@ export function savePreviewUiSettings(settings: UiSettingsPayload) {
   }
 }
 
+export function applyAppearanceFromUiSettings(settings: Pick<UiSettingsPayload, "color_scheme" | "theme_color">) {
+  const scheme = normalizeColorScheme(settings.color_scheme);
+  const theme = getThemeById(settings.theme_color);
+  applyColorScheme(scheme);
+  applyThemeColor(theme);
+}
+
 export function isDarkActive() {
   return document.documentElement.classList.contains("dark");
 }

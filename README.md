@@ -50,7 +50,9 @@ PlanarClip 是一个基于 **Tauri 2 + React 18 + TypeScript + Rust** 构建的�
 - Rust stable
 - Tauri 2 对应平台依赖
 
-项目默认使用 **pnpm** 作为包管理器。仓库根目录为 **pnpm workspace**，应用主体位于 `Apps/planarclip/`。推荐在根目录执行 `pnpm install` 与 `pnpm dev` 等命令。前端开发服务器默认端口为 `1420`，HMR 端口为 `1421`。
+项目默认使用 **pnpm** 作为包管理器。仓库根目录为 **pnpm workspace**，应用主体位于 `Apps/`（workspace 包名 `planarclip`）。推荐在根目录执行 `pnpm install` 与 `pnpm dev` 等命令。前端开发服务器默认端口为 `1420`，HMR 端口为 `1421`。
+
+工作区载入自动任务与 pull / GitNexus 脚本说明见 [AGENTS.md](./AGENTS.md#工作区命令手动-vs-载入自动)。
 
 ## 安装与运行
 
@@ -60,7 +62,7 @@ PlanarClip 是一个基于 **Tauri 2 + React 18 + TypeScript + Rust** 构建的�
 pnpm install
 ```
 
-首次切换到 workspace 布局后，若根目录尚无 `pnpm-lock.yaml`，上述命令会生成根级锁文件。也可进入 `Apps/planarclip/` 执行同名脚本，但安装依赖仍建议在根目录完成。
+首次切换到 workspace 布局后，若根目录尚无 `pnpm-lock.yaml`，上述命令会生成根级锁文件。也可进入 `Apps/` 执行同名脚本，但安装依赖仍建议在根目录完成。
 
 ### 开发模式
 
@@ -137,33 +139,34 @@ planarclip/
 ├── package.json             # workspace 根：转发脚本
 ├── pnpm-workspace.yaml
 ├── pnpm-lock.yaml
-├── Apps/planarclip/
+├── Apps/
+│   ├── package.json
+│   ├── index.html
 │   ├── src/
-│   ├── app/
-│   │   ├── components/
-│   │   │   ├── common/      # 通用小组件
-│   │   │   ├── layout/      # 侧栏与右侧概览面板
-│   │   │   ├── overlays/    # 配对弹层、入站连接确认
-│   │   │   └── pages/       # 剪贴板 / 设备 / 设置页面
-│   │   ├── constants/       # 主题常量
-│   │   ├── hooks/           # 桌面桥接、配对流程、主题状态
-│   │   ├── utils/           # 消息、设备、时间、设置等工具
-│   │   ├── App.tsx          # 前端主装配
-│   │   └── types.ts         # 前端类型定义
-│   ├── styles/              # 全局样式、主题样式
-│   └── main.tsx             # React 入口
-├── src-tauri/
-│   ├── src/
-│   │   ├── clipboard/       # 剪贴板监听与历史摘要
-│   │   ├── crypto/          # 密钥生成与指纹能力
-│   │   ├── network/         # 局域网发现、连接与传输
-│   │   ├── storage/         # 本地 JSON 配置持久化
-│   │   ├── sync/            # 同步引擎
-│   │   ├── tray/            # 托盘菜单与行为
-│   │   ├── lib.rs           # Tauri 命令、状态管理、应用装配
-│   │   └── main.rs          # Rust 入口
-│   └── tauri.conf.json      # Tauri 窗口与打包配置
-└── package.json
+│   │   ├── main.tsx
+│   │   ├── app/
+│   │   │   ├── components/
+│   │   │   │   ├── common/      # 通用小组件
+│   │   │   │   ├── layout/      # 侧栏与右侧概览面板
+│   │   │   │   ├── overlays/    # 配对弹层、入站连接确认
+│   │   │   │   └── pages/       # 剪贴板 / 设备 / 设置页面
+│   │   │   ├── constants/       # 主题常量
+│   │   │   ├── hooks/           # 桌面桥接、配对流程、主题状态
+│   │   │   ├── utils/           # 消息、设备、时间、设置等工具
+│   │   │   ├── App.tsx          # 前端主装配
+│   │   │   └── types.ts         # 前端类型定义
+│   │   └── styles/              # 全局样式、主题样式
+│   └── src-tauri/
+│       ├── src/
+│       │   ├── clipboard/       # 剪贴板监听与历史摘要
+│       │   ├── crypto/          # 密钥生成与指纹能力
+│       │   ├── network/         # 局域网发现、连接与传输
+│       │   ├── storage/         # 本地 JSON 配置持久化
+│       │   ├── sync/            # 同步引擎
+│       │   ├── tray/            # 托盘菜单与行为
+│       │   ├── lib.rs           # Tauri 命令、状态管理、应用装配
+│       │   └── main.rs          # Rust 入口
+│       └── tauri.conf.json      # Tauri 窗口与打包配置
 ```
 
 ## 配置文件
@@ -206,7 +209,8 @@ planarclip/
 | 文件 | 用途 |
 |------|------|
 | [`README.md`](./README.md) | 产品介绍、安装运行、能力边界与配置文件说明（面向开发者与用户） |
-| [`AGENTS.md`](./AGENTS.md) | 统一编码代理说明：协作约定、构建命令、UI 规范、GitNexus 与 MCP 约定（面向 Cursor / Claude Code 等 AI 工具） |
+| [`docs/UI_GUIDE.md`](./docs/UI_GUIDE.md) | **项目级 UI 规范**：文案与交互、设计令牌、组件模式、动画、浮层与 Figma 对照 |
+| [`AGENTS.md`](./AGENTS.md) | 统一编码代理说明：协作约定、构建命令、UI 摘要与链接、GitNexus 与 MCP 约定（面向 Cursor / Claude Code 等 AI 工具） |
 | [`CLAUDE.md`](./CLAUDE.md) | 指向 `AGENTS.md` 的 Claude Code 入口（内容已合并，不再单独维护） |
 | [`Plans/`](./Plans/) | 功能方案讨论与执行记录 |
 
@@ -214,4 +218,4 @@ planarclip/
 
 - 项目当前以桌面端体验为主，若只运行 Web 预览，连接相关能力会显示为预览态提示。
 - 若需要体验完整链路，请使用 `pnpm dev` 启动 Tauri 桌面应用。
-- 使用 AI 编码工具协作时，请优先阅读 [`AGENTS.md`](./AGENTS.md)。
+- 使用 AI 编码工具协作时，请优先阅读 [`AGENTS.md`](./AGENTS.md)；做前端 UI 改动时另读 [`docs/UI_GUIDE.md`](./docs/UI_GUIDE.md)。

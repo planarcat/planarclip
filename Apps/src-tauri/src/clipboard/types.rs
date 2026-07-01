@@ -53,6 +53,8 @@ pub struct ClipboardEvent {
     pub snapshot: ClipboardSnapshot,
     pub origin: ClipboardOrigin,
     pub timestamp_ms: u64,
+    /// When true, history merge is skipped (e.g. manual send already updated history).
+    pub skip_history_merge: bool,
 }
 
 impl ClipboardEvent {
@@ -61,6 +63,16 @@ impl ClipboardEvent {
             snapshot,
             origin: ClipboardOrigin::Local,
             timestamp_ms: now_ms(),
+            skip_history_merge: false,
+        }
+    }
+
+    pub fn local_sync_only(snapshot: ClipboardSnapshot) -> Self {
+        Self {
+            snapshot,
+            origin: ClipboardOrigin::Local,
+            timestamp_ms: now_ms(),
+            skip_history_merge: true,
         }
     }
 
@@ -69,6 +81,7 @@ impl ClipboardEvent {
             snapshot,
             origin: ClipboardOrigin::Remote { peer_name },
             timestamp_ms: now_ms(),
+            skip_history_merge: false,
         }
     }
 
