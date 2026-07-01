@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::clipboard::file::single_folder_hdrop_root;
+use crate::clipboard::file::{clipboard_hdrop_paths, single_folder_hdrop_root};
 use crate::storage::staging;
 
 /// Resolved save location for inbound synced files (custom path or system Downloads).
@@ -91,7 +91,7 @@ pub fn export_received_files_to_save_dir(
         }
 
         return Ok(ExportedSyncFiles {
-            clipboard_paths: file_paths.clone(),
+            clipboard_paths: clipboard_hdrop_paths(save_root, &file_paths),
             file_paths,
         });
     }

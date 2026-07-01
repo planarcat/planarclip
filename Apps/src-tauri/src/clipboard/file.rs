@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read};
 use std::path::{Path, PathBuf};
@@ -275,13 +276,59 @@ pub fn file_list_needs_batch_transfer(files: &[ClipboardFileItem]) -> bool {
         })
 }
 
-/// When received files live under one folder inside a batch dir, paste the folder path like Explorer.
+/// Build CF_HDROP / file-URL roots so paste keeps Explorer-style top-level items (files + folders).
 pub fn clipboard_hdrop_paths(batch_dir: &Path, received: &[PathBuf]) -> Vec<PathBuf> {
-    if let Some(root) = single_folder_hdrop_root(batch_dir, received) {
-        vec![root]
-    } else {
-        received.to_vec()
+    if received.is_empty() {
+        return Vec::new();
     }
+    if let Some(root) = single_folder_hdrop_root(batch_dir, received) {
+        return vec![root];
+    }
+    hdrop_roots_by_top_level(batch_dir, received)
+}
+
+/// Group staged paths by first path segment; nested groups paste as a folder, not loose files.
+fn hdrop_roots_by_top_level(batch_dir: &Path, received: &[PathBuf]) -> Vec<PathBuf> {
+    let mut groups: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+    for path in received {
+        let relative = match path.strip_prefix(batch_dir) {
+            Ok(value) => value,
+            Err(_) => return received.to_vec(),
+        };
+        let mut components = relative.components();
+        let first = match components.next() {
+            Some(component) => component.as_os_str().to_string_lossy().to_string(),
+            None => continue,
+        };
+        groups.entry(first).or_default().push(path.clone());
+    }
+
+    let mut roots = Vec::with_capacity(groups.len());
+    for (first_name, group_paths) in groups {
+        let candidate_dir = batch_dir.join(&first_name);
+        let single_top_level_file = group_paths.len() == 1
+            && group_paths[0]
+                .strip_prefix(batch_dir)
+                .map(|relative| relative.components().count() == 1)
+                .unwrap_or(false)
+            && candidate_dir.is_file();
+        let nested_under_name = group_paths.iter().any(|path| {
+            path.strip_prefix(batch_dir)
+                .map(|relative| relative.components().count() > 1)
+                .unwrap_or(false)
+        });
+
+        if single_top_level_file {
+            roots.push(group_paths[0].clone());
+        } else if nested_under_name && candidate_dir.is_dir() {
+            roots.push(candidate_dir);
+        } else if candidate_dir.is_dir() {
+            roots.push(candidate_dir);
+        } else {
+            roots.extend(group_paths);
+        }
+    }
+    roots
 }
 
 fn common_folder_root_label(files: &[ClipboardFileItem]) -> Option<String> {
@@ -514,6 +561,38 @@ mod tests {
         let received = vec![file_path];
         let hdrop = clipboard_hdrop_paths(&batch_dir, &received);
         assert_eq!(hdrop, vec![folder]);
+
+        let _ = fs::remove_dir_all(&batch_dir);
+    }
+
+    #[test]
+    fn clipboard_hdrop_paths_preserves_folders_in_mixed_batch() {
+        let batch_dir = std::env::temp_dir().join(format!(
+            "planarclip-mixed-hdrop-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let scripts = batch_dir.join("scripts");
+        fs::create_dir_all(scripts.clone()).unwrap();
+        fs::write(scripts.join("a.mjs"), b"a").unwrap();
+        fs::write(scripts.join("b.mjs"), b"b").unwrap();
+        fs::write(batch_dir.join("AGENTS.md"), b"#").unwrap();
+        fs::write(batch_dir.join("package.json"), b"{}").unwrap();
+
+        let received = vec![
+            batch_dir.join("AGENTS.md"),
+            batch_dir.join("package.json"),
+            scripts.join("a.mjs"),
+            scripts.join("b.mjs"),
+        ];
+        let hdrop = clipboard_hdrop_paths(&batch_dir, &received);
+        assert_eq!(
+            hdrop,
+            vec![
+                batch_dir.join("AGENTS.md"),
+                batch_dir.join("package.json"),
+                scripts,
+            ]
+        );
 
         let _ = fs::remove_dir_all(&batch_dir);
     }
