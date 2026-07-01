@@ -1,0 +1,201 @@
+export type OS = "windows" | "macos";
+export type NavId = "clipboard" | "devices" | "settings";
+export type DeviceStatus = "connected" | "idle" | "offline";
+export type ViewMode = "list" | "grid";
+export type ColorScheme = "light" | "dark" | "system";
+export type ClipType = "text" | "image" | "file";
+export type AppConnectionStatus = "offline" | "connecting" | "online";
+export type PairingStage =
+  | "idle"
+  | "manual_pairing"
+  | "requesting_device"
+  | "awaiting_code"
+  | "submitting_code"
+  | "incoming_request"
+  | "incoming_pairing"
+  | "incoming_accepting"
+  | "error";
+
+export type Device = {
+  id: string;
+  name: string;
+  os: OS;
+  host?: string;
+  hostName?: string;
+  port?: number;
+  peerId?: string;
+  address: string;
+  status: DeviceStatus;
+  lastSeen?: Date;
+  lastPresenceAt?: Date;
+  pairedAt?: Date;
+  latencyMs?: number;
+  source: "discovery" | "connected" | "trusted";
+  isTrusted?: boolean;
+  autoAccept?: boolean;
+  discoveredOnLan?: boolean;
+  lastIp?: string | null;
+};
+
+export type DeviceBuckets = {
+  paired: Device[];
+  nearbyFamiliar: Device[];
+  nearbyStranger: Device[];
+  offline: Device[];
+};
+
+export type ClipEntry = {
+  id: string;
+  type: ClipType;
+  content: string;
+  sourceLabel: string;
+  direction: "sent" | "received";
+  size: string;
+  timestamp: Date;
+  imagePreviewUrl?: string;
+  fileCount?: number;
+  fileNames?: string[];
+  previewKind?: "thumbnail" | "icon";
+  thumbnailRef?: string;
+};
+
+export type ThemeColor = {
+  id: string;
+  label: string;
+  dark: { primary: string; accent: string; ring: string };
+  light: { primary: string; accent: string; ring: string };
+};
+
+export type UiSettingsPayload = {
+  color_scheme: ColorScheme;
+  theme_color: string;
+  device_name: string;
+};
+
+export type StartupSettingsPayload = {
+  launch_at_startup: boolean;
+  silent_start: boolean;
+};
+
+export type CloseWindowAction = "tray" | "exit";
+
+export type AppBehaviorSettingsPayload = {
+  system_notifications_enabled: boolean;
+  close_window_action: CloseWindowAction;
+};
+
+export type ConnectionSettingsPayload = {
+  auto_connect_trusted: boolean;
+};
+
+export type SyncSettingsPayload = {
+  sync_images: boolean;
+  sync_files: boolean;
+  max_file_mb: number;
+  auto_sync_clipboard: boolean;
+  sync_files_save_enabled: boolean;
+  sync_files_save_dir: string;
+  sync_files_save_dir_is_default: boolean;
+};
+
+export type ClipboardSettingsPayload = {
+  history_limit: number;
+  view_mode: ViewMode;
+};
+
+export type ConnectedPeerPayload = {
+  peer_name: string;
+  peer_id: string;
+};
+
+export type SettingAvailability = "editable" | "managed" | "planned";
+
+export type ClipboardHistoryPayload = {
+  id: string;
+  content: string;
+  clip_type?: ClipType;
+  source_label: string;
+  direction: "sent" | "received";
+  timestamp_ms: number;
+  size_label?: string | null;
+  image_data_url?: string | null;
+  file_count?: number | null;
+  file_names?: string[] | null;
+  preview_kind?: string | null;
+  thumbnail_ref?: string | null;
+};
+
+export type LanDevicePayload = {
+  name: string;
+  peer_id: string;
+  ip: string;
+  host_name: string;
+  port: number;
+  last_presence_at?: number | null;
+};
+
+export type TrustedPeerPayload = {
+  name: string;
+  peer_id: string;
+  last_ip?: string | null;
+  auto_accept: boolean;
+};
+
+export type ConnectionRequestPayload = {
+  device_name: string;
+  peer_id: string;
+  requires_pairing?: boolean;
+};
+
+export type ConnectionEstablishedPayload = {
+  peer_name: string;
+  peer_id: string;
+  is_reconnect: boolean;
+};
+
+export type ConnectionFailedPayload = {
+  kind?: string;
+  message?: string;
+};
+
+export type OutboundConnectionPendingPayload = {
+  peer_id: string;
+  peer_name: string;
+  peer_ip: string;
+  peer_port: number;
+  source?: string;
+};
+
+export type OutboundConnectionSettledPayload = {
+  peer_id: string;
+};
+
+export type PairingCodeNeededPayload = {
+  peer_ip: string;
+  peer_id?: string;
+  peer_name?: string;
+  peer_port?: number;
+  source?: string;
+};
+
+export type ConnectionEndedPayload = {
+  kind?: string;
+  message?: string;
+  peer_name?: string;
+  peer_id?: string;
+};
+
+export type PairingCodeRotatedPayload = {
+  code: string;
+  expires_at_ms: number;
+};
+
+export type ConnectedPeer = {
+  name: string;
+  peerId?: string;
+  address: string;
+  os: OS;
+  source: "lan" | "pair";
+};
+
+export type CommandExecutor = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;

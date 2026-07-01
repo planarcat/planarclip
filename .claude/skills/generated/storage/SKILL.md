@@ -17,27 +17,27 @@ description: "Skill for the Storage area of planarclip. 5 symbols across 2 files
 
 | File | Symbols |
 |------|---------|
-| `Apps/planarclip/src-tauri/src/storage/json.rs` | config_path, dirs_next, load_config, save_config |
-| `Apps/planarclip/src-tauri/src/lib.rs` | run |
+| `Apps/src-tauri/src/storage/json.rs` | config_path, dirs_next, load_config, save_config |
+| `Apps/src-tauri/src/lib.rs` | run |
 
 ## Entry Points
 
 Start here when exploring this area:
 
-- **`run`** (Function) — `Apps/planarclip/src-tauri/src/lib.rs:122`
-- **`config_path`** (Function) — `Apps/planarclip/src-tauri/src/storage/json.rs:22`
-- **`load_config`** (Function) — `Apps/planarclip/src-tauri/src/storage/json.rs:43`
-- **`save_config`** (Function) — `Apps/planarclip/src-tauri/src/storage/json.rs:55`
+- **`run`** (Function) — `Apps/src-tauri/src/lib.rs:122`
+- **`config_path`** (Function) — `Apps/src-tauri/src/storage/json.rs:22`
+- **`load_config`** (Function) — `Apps/src-tauri/src/storage/json.rs:43`
+- **`save_config`** (Function) — `Apps/src-tauri/src/storage/json.rs:55`
 
 ## Key Symbols
 
 | Symbol | Type | File | Line |
 |--------|------|------|------|
-| `run` | Function | `Apps/planarclip/src-tauri/src/lib.rs` | 122 |
-| `config_path` | Function | `Apps/planarclip/src-tauri/src/storage/json.rs` | 22 |
-| `load_config` | Function | `Apps/planarclip/src-tauri/src/storage/json.rs` | 43 |
-| `save_config` | Function | `Apps/planarclip/src-tauri/src/storage/json.rs` | 55 |
-| `dirs_next` | Function | `Apps/planarclip/src-tauri/src/storage/json.rs` | 28 |
+| `run` | Function | `Apps/src-tauri/src/lib.rs` | 122 |
+| `config_path` | Function | `Apps/src-tauri/src/storage/json.rs` | 22 |
+| `load_config` | Function | `Apps/src-tauri/src/storage/json.rs` | 43 |
+| `save_config` | Function | `Apps/src-tauri/src/storage/json.rs` | 55 |
+| `dirs_next` | Function | `Apps/src-tauri/src/storage/json.rs` | 28 |
 
 ## Execution Flows
 

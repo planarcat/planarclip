@@ -1,5 +1,5 @@
 {
   "rust-analyzer.linkedProjects": [
-    "Apps/planarclip/src-tauri/Cargo.toml"
+    "Apps/src-tauri/Cargo.toml"
   ]
 }

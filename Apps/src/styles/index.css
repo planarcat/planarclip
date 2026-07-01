@@ -1,0 +1,279 @@
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+@import "tailwindcss" source(none);
+@source "../**/*.{js,ts,jsx,tsx}";
+
+@import "tw-animate-css";
+@import "./motion.css";
+@import "./surface-reveal.css";
+@import "./scrollbar.css";
+@import "./theme-transition.css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --font-size: 15px;
+  --background: #f0f4f9;
+  --foreground: #0d1117;
+  --card: #ffffff;
+  --card-foreground: #0d1117;
+  --popover: #ffffff;
+  --popover-foreground: #0d1117;
+  --primary: #0891b2;
+  --primary-foreground: #ffffff;
+  --secondary: #e4eaf3;
+  --secondary-foreground: #334155;
+  --muted: #e8edf5;
+  --muted-foreground: #55657d;
+  --accent: #e0f2fe;
+  --accent-foreground: #0c4a6e;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --border: rgba(0, 0, 0, 0.08);
+  --input: #e4eaf3;
+  --input-background: #e4eaf3;
+  --switch-background: #cbd5e1;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: #0891b2;
+  --chart-1: #0891b2;
+  --chart-2: #10b981;
+  --chart-3: #8b5cf6;
+  --chart-4: #f59e0b;
+  --chart-5: #f87171;
+  --radius: 0.5rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: #030213;
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+  --motion-fast: 120ms;
+  --motion-normal: 180ms;
+  --motion-slow: 240ms;
+  --motion-enter: 220ms;
+  --motion-exit: 160ms;
+  --motion-page-enter: 380ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --success: var(--chart-2);
+  --warning: var(--chart-4);
+  --surface-reveal-fade-in: 380ms;
+  --surface-reveal-fade-out: 520ms;
+  --surface-reveal-ease-in: cubic-bezier(0.4, 0, 0.2, 1);
+  --surface-reveal-ease-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --button-primary-hover-bg: color-mix(in srgb, var(--primary) 88%, black);
+  --scrollbar-thumb-idle: transparent;
+  --scrollbar-thumb: rgba(94, 101, 125, 0.45);
+  --scrollbar-fade-in: var(--surface-reveal-fade-in);
+  --scrollbar-fade-out: var(--surface-reveal-fade-out);
+  --scrollbar-ease-in: var(--surface-reveal-ease-in);
+  --scrollbar-ease-out: var(--surface-reveal-ease-out);
+}
+
+.dark {
+  --background: #090c14;
+  --foreground: #e8eaf0;
+  --card: #0f1220;
+  --card-foreground: #e8eaf0;
+  --popover: #0f1220;
+  --popover-foreground: #e8eaf0;
+  --primary: #22d3ee;
+  --primary-foreground: #030b10;
+  --secondary: #161b2e;
+  --secondary-foreground: #a8b0c8;
+  --muted: #141826;
+  --muted-foreground: #7a88a7;
+  --accent: #0e7490;
+  --accent-foreground: #e8eaf0;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: rgba(255, 255, 255, 0.07);
+  --input: #161b2e;
+  --input-background: #161b2e;
+  --switch-background: #2d3654;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: #22d3ee;
+  --chart-1: #22d3ee;
+  --chart-2: #34d399;
+  --chart-3: #a78bfa;
+  --chart-4: #f59e0b;
+  --chart-5: #f87171;
+  --sidebar: #0f1220;
+  --sidebar-foreground: #e8eaf0;
+  --sidebar-primary: #22d3ee;
+  --sidebar-primary-foreground: #030b10;
+  --sidebar-accent: #161b2e;
+  --sidebar-accent-foreground: #e8eaf0;
+  --sidebar-border: rgba(255, 255, 255, 0.07);
+  --sidebar-ring: #22d3ee;
+  --scrollbar-thumb-idle: transparent;
+  --scrollbar-thumb: rgba(122, 136, 167, 0.5);
+  --button-primary-hover-bg: color-mix(in srgb, var(--primary) 90%, white);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-input-background: var(--input-background);
+  --color-switch-background: var(--switch-background);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    font-size: var(--font-size);
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    margin: 0;
+    min-width: 100vw;
+    min-height: 100vh;
+    font-family: "Plus Jakarta Sans", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", sans-serif;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-image: radial-gradient(ellipse 120% 80% at 50% -20%, color-mix(in oklab, var(--primary) 6%, transparent), transparent);
+  }
+
+  .dark body {
+    background-image: radial-gradient(ellipse 120% 80% at 50% -20%, color-mix(in oklab, var(--primary) 8%, transparent), transparent);
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+
+  h1 {
+    font-size: var(--text-2xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h2 {
+    font-size: var(--text-xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h3 {
+    font-size: var(--text-lg);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h4 {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  label {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+  }
+
+  button,
+  [role="button"],
+  input[type="button"],
+  input[type="submit"] {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  input[type="button"]:disabled,
+  input[type="submit"]:disabled {
+    cursor: not-allowed;
+  }
+}
+
+@keyframes connection-attempt-marquee {
+  0% {
+    transform: translate3d(-50%, 0, 0);
+  }
+
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.connection-attempt-track {
+  position: relative;
+  height: 0.375rem;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--primary) 8%, var(--secondary));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--primary) 14%, transparent);
+}
+
+.connection-attempt-flow {
+  display: flex;
+  width: 200%;
+  height: 100%;
+  will-change: transform;
+  animation: connection-attempt-marquee 0.85s linear infinite;
+}
+
+.connection-attempt-segment {
+  flex: 0 0 50%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 14%,
+    color-mix(in oklab, var(--primary) 45%, transparent) 28%,
+    var(--primary) 38%,
+    color-mix(in oklab, #ffffff 40%, var(--primary)) 46%,
+    var(--chart-2) 54%,
+    color-mix(in oklab, var(--chart-3) 65%, var(--primary)) 62%,
+    transparent 78%,
+    transparent 100%
+  );
+}

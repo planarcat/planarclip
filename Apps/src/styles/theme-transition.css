@@ -1,0 +1,89 @@
+/* Unlayered transition overlays (WebView2). */
+
+:root {
+  --theme-transition-expand: 1s;
+  --theme-transition-expand-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --theme-transition-icon-enter: 350ms;
+  --theme-transition-icon-exit: 350ms;
+}
+
+@keyframes theme-transition-icon-enter {
+  from {
+    opacity: 0;
+    transform: translate(28px, -28px) scale(0.55);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+@keyframes theme-transition-circle-reveal {
+  from {
+    transform: translate(-50%, -50%) scale(0);
+    opacity: 1;
+  }
+
+  to {
+    transform: translate(-50%, -50%) scale(var(--theme-transition-cover-scale, 1));
+    opacity: 0;
+  }
+}
+
+@keyframes theme-transition-icon-exit {
+  from {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: translate(28px, -28px) scale(0.55);
+  }
+}
+
+.theme-transition-icon-enter {
+  animation: theme-transition-icon-enter var(--theme-transition-icon-enter, 350ms) var(--theme-transition-expand-ease) forwards;
+}
+
+.theme-transition-icon-held {
+  opacity: 1;
+  transform: translate(0, 0) scale(1);
+}
+
+.theme-transition-icon-exit {
+  animation: theme-transition-icon-exit var(--theme-transition-icon-exit, 350ms) var(--theme-transition-expand-ease) forwards;
+}
+
+.theme-transition-icon-layer {
+  z-index: 2;
+  pointer-events: none;
+}
+
+.theme-transition-circle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 400vmax;
+  height: 400vmax;
+  border-radius: 9999px;
+  transform: translate(-50%, -50%) scale(0);
+  opacity: 1;
+  animation: theme-transition-circle-reveal var(--theme-transition-expand) var(--theme-transition-expand-ease) forwards;
+  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-transition-icon-enter,
+  .theme-transition-circle {
+    animation: none;
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0;
+  }
+}
+
+html.theme-token-blending .app-surface-reveal-bg,
+html.theme-token-blending .app-surface-reveal-switch-thumb {
+  transition-property: none !important;
+}

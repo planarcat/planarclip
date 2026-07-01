@@ -17,30 +17,30 @@ description: "Skill for the Crypto area of planarclip. 7 symbols across 3 files.
 
 | File | Symbols |
 |------|---------|
-| `Apps/planarclip/src-tauri/src/crypto/keys.rs` | fingerprint, generate, public_bytes |
-| `Apps/planarclip/src-tauri/src/lib.rs` | get_pairing_code, pair, load_or_create_key_pair |
-| `Apps/planarclip/src-tauri/src/network/webrtc.rs` | connect |
+| `Apps/src-tauri/src/crypto/keys.rs` | fingerprint, generate, public_bytes |
+| `Apps/src-tauri/src/lib.rs` | get_pairing_code, pair, load_or_create_key_pair |
+| `Apps/src-tauri/src/network/webrtc.rs` | connect |
 
 ## Entry Points
 
 Start here when exploring this area:
 
-- **`fingerprint`** (Function) — `Apps/planarclip/src-tauri/src/crypto/keys.rs:19`
-- **`connect`** (Function) — `Apps/planarclip/src-tauri/src/network/webrtc.rs:58`
-- **`generate`** (Function) — `Apps/planarclip/src-tauri/src/crypto/keys.rs:9`
-- **`public_bytes`** (Function) — `Apps/planarclip/src-tauri/src/crypto/keys.rs:15`
+- **`fingerprint`** (Function) — `Apps/src-tauri/src/crypto/keys.rs:19`
+- **`connect`** (Function) — `Apps/src-tauri/src/network/webrtc.rs:58`
+- **`generate`** (Function) — `Apps/src-tauri/src/crypto/keys.rs:9`
+- **`public_bytes`** (Function) — `Apps/src-tauri/src/crypto/keys.rs:15`
 
 ## Key Symbols
 
 | Symbol | Type | File | Line |
 |--------|------|------|------|
-| `fingerprint` | Function | `Apps/planarclip/src-tauri/src/crypto/keys.rs` | 19 |
-| `connect` | Function | `Apps/planarclip/src-tauri/src/network/webrtc.rs` | 58 |
-| `generate` | Function | `Apps/planarclip/src-tauri/src/crypto/keys.rs` | 9 |
-| `public_bytes` | Function | `Apps/planarclip/src-tauri/src/crypto/keys.rs` | 15 |
-| `get_pairing_code` | Function | `Apps/planarclip/src-tauri/src/lib.rs` | 43 |
-| `pair` | Function | `Apps/planarclip/src-tauri/src/lib.rs` | 60 |
-| `load_or_create_key_pair` | Function | `Apps/planarclip/src-tauri/src/lib.rs` | 100 |
+| `fingerprint` | Function | `Apps/src-tauri/src/crypto/keys.rs` | 19 |
+| `connect` | Function | `Apps/src-tauri/src/network/webrtc.rs` | 58 |
+| `generate` | Function | `Apps/src-tauri/src/crypto/keys.rs` | 9 |
+| `public_bytes` | Function | `Apps/src-tauri/src/crypto/keys.rs` | 15 |
+| `get_pairing_code` | Function | `Apps/src-tauri/src/lib.rs` | 43 |
+| `pair` | Function | `Apps/src-tauri/src/lib.rs` | 60 |
+| `load_or_create_key_pair` | Function | `Apps/src-tauri/src/lib.rs` | 100 |
 
 ## Execution Flows
 

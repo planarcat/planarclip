@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件是 PlanarClip 项目的**统一编码代理说明**，供 Cursor、Claude Code 等 AI 编码工具自动加载。原先独立的 `CLAUDE.md` 已合并至本文档；`CLAUDE.md` 仅保留为指向本文件的入口。更完整的产品与开发说明见仓库根目录 [`README.md`](./README.md)。
+本文件是 PlanarClip 项目的**统一编码代理说明**，供 Cursor、Claude Code 等 AI 编码工具自动加载。原先独立的 `CLAUDE.md` 已合并至本文档；`CLAUDE.md` 仅保留为指向本文件的入口。更完整的产品与开发说明见 [`README.md`](./README.md)；前端 UI 与视觉规范见 [`docs/UI_GUIDE.md`](./docs/UI_GUIDE.md)。
 
 ## 基本协作约定
 
@@ -15,7 +15,7 @@
 
 ## 构建与运行
 
-仓库根目录已配置 **pnpm workspace**，推荐在根目录执行以下命令（会转发到 `Apps/planarclip`）：
+仓库根目录已配置 **pnpm workspace**，推荐在根目录执行以下命令（会转发到 workspace 包 `planarclip`，目录为 `Apps/`）：
 
 ```bash
 pnpm install         # 在根目录安装 workspace 依赖（首次或锁文件变更后）
@@ -28,9 +28,9 @@ pnpm build:web       # 仅构建前端产物
 pnpm preview:web     # 预览前端构建结果
 ```
 
-也可进入 `Apps/planarclip/` 直接执行同名脚本（workspace 内仍可用）。
+也可进入 `Apps/` 直接执行同名脚本（workspace 内仍可用）。
 
-命名约定：`pnpm <动作>` 表示完整应用流程，`pnpm <动作>:web` 表示仅执行前端 Web 流程。前端开发服务器端口为 1420，HMR 端口为 1421。`tauri.conf.json` 通过 `beforeDevCommand` / `beforeBuildCommand` 调用 `pnpm dev:web` 与 `pnpm build:web`（在 `Apps/planarclip` 目录上下文中执行）。
+命名约定：`pnpm <动作>` 表示完整应用流程，`pnpm <动作>:web` 表示仅执行前端 Web 流程。前端开发服务器端口为 1420，HMR 端口为 1421。`tauri.conf.json` 通过 `beforeDevCommand` / `beforeBuildCommand` 调用 `pnpm dev:web` 与 `pnpm build:web`（在 `Apps/` 目录上下文中执行）。
 
 ## 技术栈
 
@@ -50,34 +50,36 @@ planarclip/                  # 仓库根目录（pnpm workspace）
 ├── package.json             # workspace 根：转发 dev/build/check 等脚本
 ├── pnpm-workspace.yaml      # workspace 成员与 allowBuilds 配置
 ├── pnpm-lock.yaml           # 锁文件（根目录统一维护）
-├── Apps/planarclip/         # 桌面应用主体
+├── Apps/                    # 桌面应用主体（package.json name: planarclip）
+│   ├── package.json
+│   ├── index.html
 │   ├── src/
-│   ├── app/
-│   │   ├── components/
-│   │   │   ├── common/      # 通用小组件
-│   │   │   ├── layout/      # 侧栏与右侧概览面板
-│   │   │   ├── overlays/    # 配对弹层、入站连接确认
-│   │   │   └── pages/       # 剪贴板 / 设备 / 设置页面
-│   │   ├── constants/       # 主题常量
-│   │   ├── hooks/           # 桌面桥接、配对流程、主题状态
-│   │   ├── utils/           # 消息、设备、时间、设置等工具
-│   │   ├── App.tsx          # 前端主装配
-│   │   └── types.ts         # 前端类型定义
-│   ├── styles/              # 全局样式、主题样式
-│   └── main.tsx             # React 入口
-├── src-tauri/
-│   ├── src/
-│   │   ├── main.rs          # Rust 入口，windows_subsystem = "windows"
-│   │   ├── lib.rs           # Tauri 应用组装：状态管理、Tauri 命令、系统托盘
-│   │   ├── clipboard/       # 剪贴板监听与历史摘要
-│   │   ├── crypto/          # 密钥生成与设备指纹
-│   │   ├── network/         # 局域网发现、连接与传输
-│   │   ├── sync/            # 剪贴板同步引擎与去重逻辑
-│   │   ├── storage/         # 本地 JSON 配置加载/保存
-│   │   └── tray/            # 系统托盘相关实现
-│   ├── tauri.conf.json      # Tauri 配置：窗口 1280×820、默认隐藏、托盘图标
-│   └── capabilities/
-└── index.html               # 前端入口 HTML
+│   │   ├── main.tsx         # React 入口
+│   │   ├── app/
+│   │   │   ├── components/
+│   │   │   │   ├── common/  # 通用小组件
+│   │   │   │   ├── ui/      # UI 规范薄组件（ModalShell、PrimaryButton 等）
+│   │   │   │   ├── layout/  # 侧栏与右侧概览面板
+│   │   │   │   ├── overlays/# 配对弹层、入站连接确认
+│   │   │   │   └── pages/   # 剪贴板 / 设备 / 设置页面
+│   │   │   ├── constants/   # 主题常量
+│   │   │   ├── hooks/       # 桌面桥接、配对流程、主题状态
+│   │   │   ├── utils/       # 消息、设备、时间、设置等工具
+│   │   │   ├── App.tsx      # 前端主装配
+│   │   │   └── types.ts     # 前端类型定义
+│   │   └── styles/          # 全局样式、主题样式
+│   └── src-tauri/
+│       ├── src/
+│       │   ├── main.rs      # Rust 入口，windows_subsystem = "windows"
+│       │   ├── lib.rs       # Tauri 应用组装：状态管理、Tauri 命令、系统托盘
+│       │   ├── clipboard/   # 剪贴板监听与历史摘要
+│       │   ├── crypto/      # 密钥生成与设备指纹
+│       │   ├── network/     # 局域网发现、连接与传输
+│       │   ├── sync/        # 剪贴板同步引擎与去重逻辑
+│       │   ├── storage/     # 本地 JSON 配置加载/保存
+│       │   └── tray/        # 系统托盘相关实现
+│       ├── tauri.conf.json  # Tauri 配置：窗口 1280×820、默认隐藏、托盘图标
+│       └── capabilities/
 ```
 
 ## 当前状态
@@ -88,24 +90,17 @@ planarclip/                  # 仓库根目录（pnpm workspace）
 - 图片与文件剪贴板同步（Windows 局域网直连；2026-06-29 双机验证：大图分块、截图粘贴为文件、文件批次与关同步文件名回退）。
 - 默认局域网直连端口为 `19876`；前端开发服务器端口为 `1420`，HMR 端口为 `1421`。
 
-## UI 文案与交互约定
+## UI 与前端视觉
 
-### 用户侧 UI 文案
+**完整规范**见 [`docs/UI_GUIDE.md`](./docs/UI_GUIDE.md)（用户文案、交互、设计令牌、组件 class 契约、动效、浮层 z-index、Figma 对照、样式入口）。
 
-- 用户可见的界面文本、按钮文案、状态文案、成功提示、警告提示、错误提示，默认全部使用中文。
-- 提示文案必须使用自然语言，优先描述用户当前遇到的问题、系统正在做的事，以及用户下一步可以怎么做。
-- 禁止直接向用户暴露程序术语、底层异常、协议名、库报错、系统调用错误、英文错误原文，除非用户明确进入开发排障场景。
-- 如果底层返回的是技术错误，面向用户展示时必须先转换成自然语言；必要时可附带简短建议，例如检查网络、确认对端已启动、稍后重试。
-- 成功提示应简洁明确，例如“已连接到设备”“配对成功”“已完成同步”；不要使用生硬的工程术语。
-- 警告与失败提示应说明原因和影响，例如“未能连接到对方设备，请确认对方应用已打开”；不要只显示“连接失败”或原始错误对象。
-- 同一类状态提示保持口径一致，避免同一流程里中英混用、术语混乱或一个地方说“配对”另一个地方说“握手”。
-- 如果确实需要保留技术细节用于调试，应将技术细节写入日志或开发者输出，而不是直接展示在用户界面中。
+修改 `Apps/src/app/components` 或 `styles/` 时须遵循该文档。以下为代理须始终记住的摘要：
 
-### 交互与按钮规范
-
-- 设计按钮等交互元素时，优先使用纯图标样式，尤其是刷新、增加、删除这类简单操作。
-- 能用图标准确表达的按钮默认不再附带文字，但必须提供清晰的悬浮提示或无障碍标签。
-- 连接、断开、刷新等高频动作应优先放在列表项右侧或标题操作区，保持就近操作与视觉统一。
+- 用户可见文案**默认中文**、自然语言；不暴露底层错误原文；成功/失败提示说明原因与下一步。
+- 简单操作用**纯图标按钮**，须提供 `title` 或 `aria-label`；连接/断开/刷新放在列表右侧或标题区。
+- 颜色与圆角用 **CSS 变量 / Tailwind 语义色**，禁止硬编码主题 hex；新卡片用 `rounded-xl`，模态用 `rounded-2xl`。
+- 浮层 z-index：配对 `50` → 入站 `60` → 右下卡 `70` → `StatusNotice` `80`。
+- 全局样式只改 **`Apps/src/styles/index.css`**；主题色定义在 `app/constants/theme.ts`。
 
 ## 跨设备隐私与协议
 
@@ -115,12 +110,9 @@ planarclip/                  # 仓库根目录（pnpm workspace）
 - 发送端不得根据他机行为推断其配置并在 UI 中展示；若他机以等效方式处理了内容（如 `peer:handled`），发送端应视为成功。
 - 连接发现等场景可暴露的必要信息限于设备名、局域网地址、端口等达成连接所需字段。
 
-## Figma MCP 约定
+## Figma MCP
 
-- 当前会话可使用 `figma-mcp-go` MCP 读取和操作 Figma 文件；使用前优先通过 `get_metadata` / `get_selection` / `get_design_context` 确认当前文件、页面与选区。
-- 读取设计时优先使用 `get_design_context`，避免直接读取过大的完整文档树；需要精确节点信息时再用 `get_node` 或 `get_nodes_info`。
-- 修改 Figma 前应确认目标节点、页面和操作意图；删除节点、删除页面、覆盖样式、批量重命名、导出文件等操作属于有副作用操作，需谨慎执行。
-- Figma MCP 工具权限白名单应配置在 IDE 的 MCP 设置中（如 `.cursor/mcp.json`、Claude Code 的 `settings.json` / `settings.local.json`），不要只写在本文档中；本文档只记录项目协作约定。
+视觉与 Figma 对照流程见 [`docs/UI_GUIDE.md` §10](./docs/UI_GUIDE.md#10-figma-与设计对照)。使用 `figma-mcp-go` 时优先 `get_design_context`；有副作用的 Figma 操作须先确认；MCP 权限在 IDE 的 MCP 配置中维护。
 
 ## GitNexus — 代码智能
 
@@ -129,7 +121,7 @@ planarclip/                  # 仓库根目录（pnpm workspace）
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **planarclip** (2728 symbols, 5124 relationships, 232 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **planarclip** (3387 symbols, 6469 relationships, 288 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
