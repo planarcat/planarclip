@@ -3,8 +3,9 @@
 	"tasks": [
 		{
 			"label": "PlanarClip workspace: pnpm dev",
-			"type": "shell",
-			"command": "pnpm dev",
+			"type": "process",
+			"command": "pnpm",
+			"args": ["dev"],
 			"options": {
 				"cwd": "${workspaceFolder}",
 				"env": {
@@ -22,8 +23,9 @@
 		},
 		{
 			"label": "PlanarClip workspace: pnpm check:watch",
-			"type": "shell",
-			"command": "pnpm check:watch",
+			"type": "process",
+			"command": "pnpm",
+			"args": ["check:watch"],
 			"options": {
 				"cwd": "${workspaceFolder}",
 				"env": {
@@ -41,8 +43,9 @@
 		},
 		{
 			"label": "PlanarClip workspace: pull",
-			"type": "shell",
-			"command": "pnpm pull:open",
+			"type": "process",
+			"command": "pnpm",
+			"args": ["pull:open"],
 			"options": { "cwd": "${workspaceFolder}" },
 			"runOptions": { "runOn": "folderOpen" },
 			"presentation": {

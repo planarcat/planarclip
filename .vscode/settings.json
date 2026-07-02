@@ -2,5 +2,9 @@
   "rust-analyzer.linkedProjects": [
     "Apps/src-tauri/Cargo.toml"
   ],
-  "task.allowAutomaticTasks": "on"
+  "task.allowAutomaticTasks": "on",
+  "terminal.integrated.automationProfile.windows": {
+    "path": "C:\\Windows\\System32\\cmd.exe",
+    "args": ["/d", "/c"]
+  }
 }
