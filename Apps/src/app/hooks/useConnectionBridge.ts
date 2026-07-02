@@ -16,12 +16,15 @@ import type {
   PairingCodeNeededPayload,
   PairingCodeRotatedPayload,
   PairingStage,
+  ShellBootstrapPayload,
+  ShellDeferredPayload,
   TrustedPeerPayload,
   UiSettingsPayload,
 } from "../types";
 import type { ClipboardSyncActivityPayload } from "./useTransferProgress";
 import { mapClipboardHistory } from "../utils/clipboard";
 import { areLanDevicesEqual, inferOs } from "../utils/device";
+import { scheduleDeferred } from "../utils/scheduleDeferred";
 
 function mapConnectedPeerPayload(payload: ConnectedPeerPayload): ConnectedPeer {
   const peerName = payload.peer_name || "已连接设备";
@@ -83,6 +86,7 @@ type UseConnectionBridgeOptions = {
   onOutboundConnectionSettled: (payload: OutboundConnectionSettledPayload) => void;
   onPairingCodeNeeded: (payload: PairingCodeNeededPayload) => void;
   onBackendConnectionSynced?: (peers: ConnectedPeer[]) => void;
+  onShellDeferred?: (payload: ShellDeferredPayload) => void;
 };
 
 /**
@@ -118,6 +122,7 @@ export function useConnectionBridge({
   onOutboundConnectionSettled,
   onPairingCodeNeeded,
   onBackendConnectionSynced,
+  onShellDeferred,
 }: UseConnectionBridgeOptions) {
   const statusRef = useRef(status);
   const connectedPeersRef = useRef(connectedPeers);
@@ -144,6 +149,7 @@ export function useConnectionBridge({
   const onOutboundConnectionSettledRef = useLatestRef(onOutboundConnectionSettled);
   const onPairingCodeNeededRef = useLatestRef(onPairingCodeNeeded);
   const onBackendConnectionSyncedRef = useLatestRef(onBackendConnectionSynced);
+  const onShellDeferredRef = useLatestRef(onShellDeferred);
 
   useEffect(() => {
     statusRef.current = status;
@@ -260,39 +266,19 @@ export function useConnectionBridge({
       eventCleanup = listeners;
 
       try {
-        const [
-          initialStatus,
-          initialPairingCode,
-          initialLanDevices,
-          initialTrustedPeers,
-          initialUiSettings,
-          initialClipboardHistory,
-          initialConnectedPeers,
-          initialPendingConnectionRequest,
-        ] = await Promise.all([
-          callCommand<string>("get_status"),
-          callCommand<string>("get_pairing_code"),
-          callCommand<LanDevicePayload[]>("get_lan_devices"),
-          callCommand<TrustedPeerPayload[]>("get_trusted_peers"),
-          callCommand<UiSettingsPayload>("get_ui_settings"),
-          callCommand<ClipboardHistoryPayload[]>("get_clipboard_history"),
-          callCommand<ConnectedPeerPayload[]>("get_connected_peers"),
-          callCommand<ConnectionRequestPayload | null>("get_pending_connection_request"),
-        ]);
+        const bootstrap = await callCommand<ShellBootstrapPayload>("get_shell_bootstrap");
 
         if (disposed) {
           return;
         }
 
-        setPairingCodeRef.current(initialPairingCode);
-        setLanDevicesRef.current(initialLanDevices);
-        setTrustedPeersRef.current(initialTrustedPeers);
-        setClipsRef.current(mapClipboardHistory(initialClipboardHistory));
-        applyDesktopUiSettingsRef.current(initialUiSettings);
-        if (initialStatus === "connected") {
+        setPairingCodeRef.current(bootstrap.pairing_code);
+        applyDesktopUiSettingsRef.current(bootstrap.ui_settings);
+
+        if (bootstrap.status === "connected") {
           setStatusRef.current("online");
-          if (initialConnectedPeers.length > 0) {
-            setConnectedPeersRef.current(mapConnectedPeersPayload(initialConnectedPeers));
+          if (bootstrap.connected_peers.length > 0) {
+            setConnectedPeersRef.current(mapConnectedPeersPayload(bootstrap.connected_peers));
           }
           setLastMessageRef.current("已恢复现有连接，可以继续同步剪贴板。");
         } else {
@@ -300,9 +286,33 @@ export function useConnectionBridge({
           setLastMessageRef.current("正在监听设备列表与连接请求。");
         }
 
-        if (initialPendingConnectionRequest) {
-          onConnectionRequestRef.current(initialPendingConnectionRequest);
+        if (bootstrap.pending_connection_request) {
+          onConnectionRequestRef.current(bootstrap.pending_connection_request);
         }
+
+        scheduleDeferred(() => {
+          if (disposed) {
+            return;
+          }
+          void (async () => {
+            try {
+              const deferred = await callCommand<ShellDeferredPayload>("get_shell_deferred");
+              if (disposed) {
+                return;
+              }
+              setLanDevicesRef.current(deferred.lan_devices);
+              setTrustedPeersRef.current(deferred.trusted_peers);
+              setClipsRef.current(mapClipboardHistory(deferred.clipboard_history));
+              onShellDeferredRef.current?.(deferred);
+            } catch (error) {
+              if (!disposed) {
+                setLastMessageRef.current(
+                  toUserMessageRef.current(error, "部分数据加载较慢，请稍后刷新。"),
+                );
+              }
+            }
+          })();
+        });
       } catch (error) {
         if (!disposed) {
           setStatusRef.current("offline");

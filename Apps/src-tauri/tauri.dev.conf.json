@@ -5,7 +5,16 @@
   "app": {
     "windows": [
       {
-        "title": "二向贴（开发）"
+        "label": "main",
+        "title": "二向贴（开发）",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 1040,
+        "minHeight": 680,
+        "visible": false,
+        "focus": false,
+        "create": false,
+        "center": true
       }
     ]
   }

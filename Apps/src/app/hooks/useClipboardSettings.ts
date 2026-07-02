@@ -14,6 +14,8 @@ type UseClipboardSettingsOptions = {
   callCommand: CommandExecutor;
   setLastMessage: (message: string) => void;
   setClips: (clips: ClipEntry[]) => void;
+  /** When false, settings are applied via `applyDesktopClipboardSettings` (e.g. shell deferred bootstrap). */
+  loadOnMount?: boolean;
 };
 
 export function useClipboardSettings({
@@ -21,6 +23,7 @@ export function useClipboardSettings({
   callCommand,
   setLastMessage,
   setClips,
+  loadOnMount = true,
 }: UseClipboardSettingsOptions) {
   const [historyLimit, setHistoryLimit] = useState(DEFAULT_CLIPBOARD_HISTORY_LIMIT);
   const [viewMode, setViewMode] = useState<ViewMode>(() =>
@@ -31,7 +34,7 @@ export function useClipboardSettings({
   const [loaded, setLoaded] = useState(!tauriAvailable);
 
   useEffect(() => {
-    if (!tauriAvailable) {
+    if (!tauriAvailable || !loadOnMount) {
       return;
     }
 
@@ -62,7 +65,13 @@ export function useClipboardSettings({
     return () => {
       disposed = true;
     };
-  }, [callCommand, tauriAvailable]);
+  }, [callCommand, loadOnMount, tauriAvailable]);
+
+  const applyDesktopClipboardSettings = useCallback((settings: ClipboardSettingsPayload) => {
+    setHistoryLimit(settings.history_limit);
+    setViewMode(normalizeClipboardViewMode(settings.view_mode));
+    setLoaded(true);
+  }, []);
 
   const handleHistoryLimitChange = useCallback(
     async (limit: number) => {
@@ -138,5 +147,6 @@ export function useClipboardSettings({
     handleHistoryLimitChange,
     handleViewModeChange,
     handleClearHistory,
+    applyDesktopClipboardSettings,
   };
 }

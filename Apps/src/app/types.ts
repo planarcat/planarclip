@@ -103,6 +103,22 @@ export type ClipboardSettingsPayload = {
   view_mode: ViewMode;
 };
 
+export type ShellBootstrapPayload = {
+  ui_settings: UiSettingsPayload;
+  status: string;
+  pairing_code: string;
+  connected_peers: ConnectedPeerPayload[];
+  pending_connection_request: ConnectionRequestPayload | null;
+};
+
+export type ShellDeferredPayload = {
+  clipboard_history: ClipboardHistoryPayload[];
+  lan_devices: LanDevicePayload[];
+  trusted_peers: TrustedPeerPayload[];
+  clipboard_settings: ClipboardSettingsPayload;
+  auto_sync_clipboard: boolean;
+};
+
 export type ConnectedPeerPayload = {
   peer_name: string;
   peer_id: string;

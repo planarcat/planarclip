@@ -83,6 +83,10 @@ pub struct AppState {
     pub pairing_code_expires_at: Arc<Mutex<Option<i64>>>,
     pub pending_responder_submit_tx:
         Arc<Mutex<Option<mpsc::Sender<(String, oneshot::Sender<Result<(), direct::HandshakeError>>)>>>>,
+    /// Set by the frontend after first paint; used to defer showing a newly built main window.
+    pub main_window_ui_ready: Arc<std::sync::atomic::AtomicBool>,
+    /// When Some, a new main WebView was built and is waiting for UI ready (or timeout) before show.
+    pub main_window_reveal_steal_focus: Arc<std::sync::Mutex<Option<bool>>>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -142,6 +146,24 @@ struct SyncSettingsPayload {
 struct ClipboardSettingsPayload {
     history_limit: usize,
     view_mode: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct ShellBootstrapPayload {
+    ui_settings: UiSettingsPayload,
+    status: String,
+    pairing_code: String,
+    connected_peers: Vec<ConnectedPeerPayload>,
+    pending_connection_request: Option<window::ConnectionRequestPayload>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct ShellDeferredPayload {
+    clipboard_history: Vec<ClipboardHistoryEntry>,
+    lan_devices: Vec<network::discovery::LanDevice>,
+    trusted_peers: Vec<TrustedPeerPayload>,
+    clipboard_settings: ClipboardSettingsPayload,
+    auto_sync_clipboard: bool,
 }
 
 const DEFAULT_CLIPBOARD_VIEW_MODE: &str = "grid";
@@ -1694,6 +1716,83 @@ async fn get_ui_settings(state: tauri::State<'_, AppState>) -> Result<UiSettings
 }
 
 #[tauri::command]
+async fn get_shell_bootstrap(state: tauri::State<'_, AppState>) -> Result<ShellBootstrapPayload, String> {
+    let config = state.config.lock().await;
+    let ui_settings = ui_settings_from_config(&config);
+    drop(config);
+
+    let status = if state.connections.lock().await.is_empty() {
+        "disconnected".to_string()
+    } else {
+        "connected".to_string()
+    };
+
+    let pairing_code = if let Some(code_arc) = state.pairing_session_code.lock().await.as_ref() {
+        code_arc.lock().await.clone()
+    } else {
+        let kp_guard = state.key_pair.lock().await;
+        if let Some(ref kp) = *kp_guard {
+            pairing_code_from_key_pair(kp)
+        } else {
+            return Err("密钥对尚未初始化".into());
+        }
+    };
+
+    let connected_peers = state.connections.lock().await.connected_peers();
+    let pending_connection_request = state.pending_connection_request.lock().await.clone();
+
+    Ok(ShellBootstrapPayload {
+        ui_settings,
+        status,
+        pairing_code,
+        connected_peers,
+        pending_connection_request,
+    })
+}
+
+#[tauri::command]
+async fn get_shell_deferred(state: tauri::State<'_, AppState>) -> Result<ShellDeferredPayload, String> {
+    let (clipboard_settings, auto_sync_clipboard) = {
+        let config = state.config.lock().await;
+        (
+            clipboard_settings_from_config(&config),
+            config.auto_sync_clipboard.unwrap_or(true),
+        )
+    };
+
+    let mut trusted_peers = {
+        let config = state.config.lock().await;
+        config
+            .trusted_peers
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .map(trusted_peer_payload)
+            .collect::<Vec<_>>()
+    };
+    trusted_peers.sort_by(|left, right| left.name.cmp(&right.name));
+
+    let clipboard_history = state.clipboard_history.lock().await.clone();
+    let lan_devices = state.lan_devices.lock().await.clone();
+
+    Ok(ShellDeferredPayload {
+        clipboard_history,
+        lan_devices,
+        trusted_peers,
+        clipboard_settings,
+        auto_sync_clipboard,
+    })
+}
+
+#[tauri::command]
+fn notify_main_ui_ready(state: tauri::State<'_, AppState>, app: tauri::AppHandle) {
+    state
+        .main_window_ui_ready
+        .store(true, std::sync::atomic::Ordering::Release);
+    window::try_reveal_pending_main_window(&app, false);
+}
+
+#[tauri::command]
 async fn get_clipboard_history(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<ClipboardHistoryEntry>, String> {
@@ -2678,12 +2777,13 @@ pub fn run() {
     let key_pair = load_or_create_key_pair(&mut config);
     storage_json::save_config(&config);
 
-    let launch_tray_only = config.silent_start.unwrap_or(false);
+    let silent_tray_startup = config.silent_start.unwrap_or(false);
     let mut context = tauri::generate_context!();
-    for window in context.config_mut().app.windows.iter_mut() {
-        window.create = !launch_tray_only;
-        if launch_tray_only {
+    if silent_tray_startup {
+        for window in context.config_mut().app.windows.iter_mut() {
+            window.create = false;
             window.visible = false;
+            window.focus = false;
         }
     }
 
@@ -2717,6 +2817,8 @@ pub fn run() {
         pairing_session_code: Arc::new(Mutex::new(None)),
         pairing_code_expires_at: Arc::new(Mutex::new(None)),
         pending_responder_submit_tx: Arc::new(Mutex::new(None)),
+        main_window_ui_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        main_window_reveal_steal_focus: Arc::new(std::sync::Mutex::new(None)),
     };
 
     tauri::Builder::default()
@@ -3138,6 +3240,9 @@ pub fn run() {
             end_pairing_session,
             abort_outbound_connection,
             get_ui_settings,
+            get_shell_bootstrap,
+            get_shell_deferred,
+            notify_main_ui_ready,
             get_startup_settings,
             save_startup_settings,
             get_app_behavior_settings,

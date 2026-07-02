@@ -1,5 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useCallback, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { ThemeTransitionOverlay } from "./components/overlays/ThemeTransitionOverlay";
 import { DevicesPanel } from "./components/layout/DevicesPanel";
 import { Sidebar } from "./components/layout/Sidebar";
@@ -9,17 +9,11 @@ import { PairingModal } from "./components/overlays/PairingModal";
 import { StatusNotice } from "./components/overlays/StatusNotice";
 import { TransferProgressCard } from "./components/overlays/TransferProgressCard";
 import { ClipboardPage } from "./components/pages/ClipboardPage";
-import { DevicesPage } from "./components/pages/DevicesPage";
-import { SettingsPage } from "./components/pages/SettingsPage";
 import { getThemeById, normalizeColorScheme } from "./constants/theme";
 import { useClipboardSettings } from "./hooks/useClipboardSettings";
 import { useConnectionBridge } from "./hooks/useConnectionBridge";
 import { useTransferProgress } from "./hooks/useTransferProgress";
-import { useConnectionSettings } from "./hooks/useConnectionSettings";
-import { useSyncSettings } from "./hooks/useSyncSettings";
 import { usePairingFlow } from "./hooks/usePairingFlow";
-import { useAppBehaviorSettings } from "./hooks/useAppBehaviorSettings";
-import { useStartupSettings } from "./hooks/useStartupSettings";
 import { useUiTheme } from "./hooks/useUiTheme";
 import { useThemeTransition } from "./hooks/useThemeTransition";
 import type {
@@ -35,6 +29,7 @@ import type {
   NavId,
   PairingCodeRotatedPayload,
   PairingStage,
+  ShellDeferredPayload,
   ThemeColor,
   TrustedPeerPayload,
 } from "./types";
@@ -43,6 +38,13 @@ import { MSG_PAIRING_CODE_REFRESHED, normalizeUserMessage } from "./utils/messag
 import { loadPreviewUiSettings } from "./utils/settings";
 import type { ThemePickOrigin } from "./utils/themeTransition";
 import { isColorSchemeDark } from "./utils/themeTransition";
+
+const DevicesPage = lazy(() =>
+  import("./components/pages/DevicesPage").then((module) => ({ default: module.DevicesPage })),
+);
+const SettingsPageRoute = lazy(() =>
+  import("./components/routes/SettingsPageRoute").then((module) => ({ default: module.SettingsPageRoute })),
+);
 
 const TAURI_AVAILABLE = isTauri();
 const EMPTY_CLIPS: ClipEntry[] = [];
@@ -85,6 +87,20 @@ export default function App() {
   const [incomingRequest, setIncomingRequest] = useState<ConnectionRequestPayload | null>(null);
   const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
   const [isRefreshingDevices, setIsRefreshingDevices] = useState(false);
+  const [autoSyncClipboard, setAutoSyncClipboard] = useState(true);
+
+  useEffect(() => {
+    if (!TAURI_AVAILABLE) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        void invoke("notify_main_ui_ready").catch(() => {
+          // Web preview or older backend builds.
+        });
+      });
+    });
+  }, []);
 
   const devices = useMemo(() => buildDevices(lanDevices, connectedPeers, trustedPeers), [lanDevices, connectedPeers, trustedPeers]);
   const connectedCount = useMemo(() => devices.filter((device) => device.status === "connected").length, [devices]);
@@ -158,80 +174,26 @@ export default function App() {
   );
 
   const {
-    launchAtStartup,
-    silentStart,
-    isSavingStartupSettings,
-    startupSettingsLoaded,
-    handleLaunchAtStartupChange,
-    handleSilentStartChange,
-  } = useStartupSettings({
-    tauriAvailable: TAURI_AVAILABLE,
-    callCommand,
-    setLastMessage,
-  });
-
-  const {
-    systemNotificationsEnabled,
-    closeWindowAction,
-    isSavingAppBehaviorSettings,
-    appBehaviorSettingsLoaded,
-    handleSystemNotificationsChange,
-    handleCloseWindowActionChange,
-  } = useAppBehaviorSettings({
-    tauriAvailable: TAURI_AVAILABLE,
-    callCommand,
-    setLastMessage,
-  });
-
-  const {
-    autoConnectTrusted,
-    isSavingConnectionSettings,
-    connectionSettingsLoaded,
-    handleAutoConnectTrustedChange,
-  } = useConnectionSettings({
-    tauriAvailable: TAURI_AVAILABLE,
-    callCommand,
-    setLastMessage,
-  });
-
-  const {
-    syncImages,
-    syncFiles,
-    maxFileMb,
-    syncFilesSaveEnabled,
-    syncFilesSaveDir,
-    syncFilesSaveDirIsDefault,
-    isSavingSyncSettings,
-    syncSettingsLoaded,
-    handleSyncImagesChange,
-    handleSyncFilesChange,
-    handleSyncFilesSaveEnabledChange,
-    handleMaxFileMbChange,
-    handlePickSyncFilesSaveDir,
-    handleResetSyncFilesSaveDir,
-    autoSyncClipboard,
-    handleAutoSyncClipboardChange,
-  } = useSyncSettings({
-    tauriAvailable: TAURI_AVAILABLE,
-    callCommand,
-    setLastMessage,
-  });
-
-  const {
-    historyLimit,
     viewMode,
-    isSavingClipboardSettings,
-    clipboardSettingsLoaded,
     isClearingClipboardHistory,
-    handleHistoryLimitChange,
     handleViewModeChange,
     handleClearHistory,
+    applyDesktopClipboardSettings,
   } = useClipboardSettings({
     tauriAvailable: TAURI_AVAILABLE,
     callCommand,
     setLastMessage,
     setClips,
+    loadOnMount: false,
   });
+
+  const handleShellDeferred = useCallback(
+    (deferred: ShellDeferredPayload) => {
+      applyDesktopClipboardSettings(deferred.clipboard_settings);
+      setAutoSyncClipboard(deferred.auto_sync_clipboard);
+    },
+    [applyDesktopClipboardSettings],
+  );
 
   const refreshLanDevicesQuiet = useCallback(async () => {
     if (!TAURI_AVAILABLE) {
@@ -427,6 +389,7 @@ export default function App() {
     onPairingCodeNeeded: handlePairingCodeNeeded,
     onBackendConnectionSynced: syncOutboundAttemptWithBackend,
     onPairingCodeRotated: handlePairingCodeRotated,
+    onShellDeferred: handleShellDeferred,
   });
 
   const showIncomingPrompt =
@@ -485,85 +448,48 @@ export default function App() {
           </>
         )}
         {activeNav === "devices" && (
-          <DevicesPage
-            devices={devices}
-            connectionStatus={status}
-            onShowPairing={openPairingModal}
-            onRefreshDevices={() => {
-              void handleRefreshDevices();
-            }}
-            onConnectDevice={(device) => {
-              void handleConnectLan(device);
-            }}
-            onDisconnect={(device) => {
-              void handleDisconnect(device);
-            }}
-            onRemoveTrustedPeer={(device) => {
-              void handleRemoveTrustedPeer(device);
-            }}
-            onSetPeerAutoAccept={(device, autoAccept) => {
-              void handleSetPeerAutoAccept(device, autoAccept);
-            }}
-            isRefreshingDevices={isRefreshingDevices}
-          />
+          <Suspense fallback={<div className="flex flex-1 items-center justify-center text-secondary-foreground">加载中…</div>}>
+            <DevicesPage
+              devices={devices}
+              connectionStatus={status}
+              onShowPairing={openPairingModal}
+              onRefreshDevices={() => {
+                void handleRefreshDevices();
+              }}
+              onConnectDevice={(device) => {
+                void handleConnectLan(device);
+              }}
+              onDisconnect={(device) => {
+                void handleDisconnect(device);
+              }}
+              onRemoveTrustedPeer={(device) => {
+                void handleRemoveTrustedPeer(device);
+              }}
+              onSetPeerAutoAccept={(device, autoAccept) => {
+                void handleSetPeerAutoAccept(device, autoAccept);
+              }}
+              isRefreshingDevices={isRefreshingDevices}
+            />
+          </Suspense>
         )}
         {activeNav === "settings" && (
-          <SettingsPage
-            colorScheme={colorScheme}
-            deviceName={deviceName}
-            isDark={appearanceIsDark}
-            theme={theme}
-            isSaving={isSavingSettings}
-            launchAtStartup={launchAtStartup}
-            silentStart={silentStart}
-            isSavingStartupSettings={isSavingStartupSettings}
-            startupSettingsLoaded={startupSettingsLoaded}
-            onSchemeChange={onColorSchemeChange}
-            onThemeChange={onThemeChange}
-            appearanceLocked={isTransitioning}
-            onDeviceNameChange={handleDeviceNameChange}
-            onDeviceNameSave={handleDeviceNameSave}
-            onLaunchAtStartupChange={handleLaunchAtStartupChange}
-            onSilentStartChange={handleSilentStartChange}
-            systemNotificationsEnabled={systemNotificationsEnabled}
-            closeWindowAction={closeWindowAction}
-            isSavingAppBehaviorSettings={isSavingAppBehaviorSettings}
-            appBehaviorSettingsLoaded={appBehaviorSettingsLoaded}
-            onSystemNotificationsChange={handleSystemNotificationsChange}
-            onCloseWindowActionChange={handleCloseWindowActionChange}
-            autoConnectTrusted={autoConnectTrusted}
-            isSavingConnectionSettings={isSavingConnectionSettings}
-            connectionSettingsLoaded={connectionSettingsLoaded}
-            onAutoConnectTrustedChange={handleAutoConnectTrustedChange}
-            syncImages={syncImages}
-            syncFiles={syncFiles}
-            maxFileMb={maxFileMb}
-            isSavingSyncSettings={isSavingSyncSettings}
-            syncSettingsLoaded={syncSettingsLoaded}
-            onSyncImagesChange={handleSyncImagesChange}
-            autoSyncClipboard={autoSyncClipboard}
-            onAutoSyncClipboardChange={handleAutoSyncClipboardChange}
-            onSyncFilesChange={handleSyncFilesChange}
-            syncFilesSaveEnabled={syncFilesSaveEnabled}
-            onSyncFilesSaveEnabledChange={handleSyncFilesSaveEnabledChange}
-            onMaxFileMbChange={(mb) => {
-              void handleMaxFileMbChange(mb);
-            }}
-            syncFilesSaveDir={syncFilesSaveDir}
-            syncFilesSaveDirIsDefault={syncFilesSaveDirIsDefault}
-            onPickSyncFilesSaveDir={() => {
-              void handlePickSyncFilesSaveDir();
-            }}
-            onResetSyncFilesSaveDir={() => {
-              void handleResetSyncFilesSaveDir();
-            }}
-            clipboardHistoryLimit={historyLimit}
-            isSavingClipboardSettings={isSavingClipboardSettings}
-            clipboardSettingsLoaded={clipboardSettingsLoaded}
-            onClipboardHistoryLimitChange={(limit) => {
-              void handleHistoryLimitChange(limit);
-            }}
-          />
+          <Suspense fallback={<div className="flex flex-1 items-center justify-center text-secondary-foreground">加载中…</div>}>
+            <SettingsPageRoute
+              tauriAvailable={TAURI_AVAILABLE}
+              callCommand={callCommand}
+              setLastMessage={setLastMessage}
+              colorScheme={colorScheme}
+              deviceName={deviceName}
+              isDark={appearanceIsDark}
+              theme={theme}
+              isSavingDeviceName={isSavingSettings}
+              appearanceLocked={isTransitioning}
+              onSchemeChange={onColorSchemeChange}
+              onThemeChange={onThemeChange}
+              onDeviceNameChange={handleDeviceNameChange}
+              onDeviceNameSave={handleDeviceNameSave}
+            />
+          </Suspense>
         )}
         </div>
       </main>
