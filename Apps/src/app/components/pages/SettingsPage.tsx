@@ -31,6 +31,7 @@ type SettingsPageProps = {
   connectionSettingsLoaded: boolean;
   onSchemeChange: (scheme: ColorScheme) => void;
   onThemeChange: (theme: ThemeColor, origin?: ThemePickOrigin) => void;
+  appearanceLocked?: boolean;
   onDeviceNameChange: (deviceName: string) => void;
   onDeviceNameSave: () => void;
   onLaunchAtStartupChange: (enabled: boolean) => void;
@@ -79,6 +80,7 @@ export function SettingsPage({
   connectionSettingsLoaded,
   onSchemeChange,
   onThemeChange,
+  appearanceLocked = false,
   onDeviceNameChange,
   onDeviceNameSave,
   onLaunchAtStartupChange,
@@ -207,7 +209,9 @@ export function SettingsPage({
                 <button
                   key={item.id}
                   onClick={() => onSchemeChange(item.id)}
-                  className={`flex min-h-[4.5rem] flex-1 flex-col items-center justify-center gap-1.5 rounded-lg border py-3 ${SURFACE_REVEAL_BG} ${
+                  disabled={appearanceLocked}
+                  title={appearanceLocked ? "外观切换中，请稍候" : item.label}
+                  className={`flex min-h-[4.5rem] flex-1 flex-col items-center justify-center gap-1.5 rounded-lg border py-3 ${SURFACE_REVEAL_BG} disabled:cursor-not-allowed disabled:opacity-40 ${
                     colorScheme === item.id
                       ? "border-primary bg-primary text-white hover:bg-[var(--button-primary-hover-bg)]"
                       : "border-border bg-transparent text-secondary-foreground hover:border-primary/40 hover:bg-secondary/40 hover:text-foreground"
@@ -237,6 +241,7 @@ export function SettingsPage({
                   isDark={isDark}
                   size="lg"
                   onChange={onThemeChange}
+                  disabled={appearanceLocked}
                 />
               ))}
             </div>

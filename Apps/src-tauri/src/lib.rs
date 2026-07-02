@@ -2678,6 +2678,15 @@ pub fn run() {
     let key_pair = load_or_create_key_pair(&mut config);
     storage_json::save_config(&config);
 
+    let launch_tray_only = config.silent_start.unwrap_or(false);
+    let mut context = tauri::generate_context!();
+    for window in context.config_mut().app.windows.iter_mut() {
+        window.create = !launch_tray_only;
+        if launch_tray_only {
+            window.visible = false;
+        }
+    }
+
     let tcp_port = config.tcp_port.unwrap_or(app_profile::DEFAULT_TCP_PORT);
     let initial_clipboard_history = load_clipboard_history_from_config(&config);
 
@@ -2734,18 +2743,17 @@ pub fn run() {
                 );
             }
 
+            let startup = startup_settings_from_config(&app.state::<AppState>().config.blocking_lock());
+
             let _ = app.handle().notification().request_permission();
 
-            let startup = startup_settings_from_config(&app.state::<AppState>().config.blocking_lock());
             if let Err(error) = sync_autostart(app.handle(), startup.launch_at_startup) {
                 tracing::warn!("Failed to sync autostart on startup: {}", error);
             }
             if !startup.silent_start {
-                window::ensure_main_window(app.handle().clone());
-            }
-
-            if let Some(win) = app.get_webview_window(window::MAIN_WINDOW_LABEL) {
-                window::attach_main_window_close_handler(app.handle().clone(), win);
+                if let Err(error) = window::bootstrap_main_window(app.handle()) {
+                    tracing::error!("Failed to create main window at startup: {}", error);
+                }
             }
 
             let toggle = MenuItemBuilder::with_id("toggle", format!("打开 {APP_DISPLAY_NAME}")).build(app)?;
@@ -2781,10 +2789,6 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
-
-            if startup.silent_start {
-                window::destroy_main_window(app.handle());
-            }
 
             let app_key_pair = app.state::<AppState>().key_pair.clone();
             let app_handle = app.handle().clone();
@@ -3168,7 +3172,7 @@ pub fn run() {
             disconnect,
             disconnect_peer,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|_app, event| {
             if let tauri::RunEvent::ExitRequested { api, code, .. } = event {

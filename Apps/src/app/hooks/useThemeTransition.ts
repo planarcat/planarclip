@@ -183,7 +183,7 @@ export function useThemeTransition() {
         }
       }, THEME_TRANSITION_ICON_MS + THEME_TRANSITION_EXPAND_MS + THEME_TRANSITION_ICON_EXIT_MS + 80);
     },
-    [clearTimers, finalizeTransition, schedule],
+    [finalizeTransition, schedule],
   );
 
   const playThemeTransition = useCallback(
@@ -220,7 +220,7 @@ export function useThemeTransition() {
         }
       }, THEME_TRANSITION_EXPAND_MS + 80);
     },
-    [clearTimers, finalizeTransition, schedule],
+    [finalizeTransition, schedule],
   );
 
   return {

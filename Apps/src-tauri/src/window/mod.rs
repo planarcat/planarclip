@@ -43,28 +43,23 @@ fn present_main_window(app: AppHandle, steal_focus: bool) {
         return;
     }
 
-    tauri::async_runtime::spawn(async move {
-        if let Err(error) = recreate_main_window(&app, steal_focus).await {
-            tracing::error!("Failed to recreate main window: {}", error);
-        }
-    });
+    if let Err(error) = build_main_window(&app, steal_focus) {
+        tracing::error!("Failed to create main window: {}", error);
+    }
 }
 
-pub fn destroy_main_window(app: &AppHandle) {
+/// Hides the main window but keeps the WebView alive so reopening from the tray is instant.
+pub fn hide_main_window(app: &AppHandle) {
     let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
         return;
     };
 
-    tauri::async_runtime::spawn(async move {
-        if let Err(error) = window.destroy() {
-            tracing::warn!("Failed to destroy main window: {}", error);
-        }
-    });
+    let _ = window.hide();
 }
 
 pub fn toggle_main_window(app: &AppHandle) {
     if is_main_window_visible(app) {
-        destroy_main_window(app);
+        hide_main_window(app);
     } else {
         ensure_main_window(app.clone());
     }
@@ -87,7 +82,7 @@ pub fn attach_main_window_close_handler(app: AppHandle, window: tauri::WebviewWi
                 return;
             }
 
-            destroy_main_window(&app);
+            hide_main_window(&app);
         }
     });
 }
@@ -205,7 +200,19 @@ fn flash_taskbar_attention(window: &tauri::WebviewWindow) {
     }
 }
 
-async fn recreate_main_window(app: &AppHandle, steal_focus: bool) -> Result<(), String> {
+/// Creates or reveals the main window synchronously (used at app startup when not in silent-tray mode).
+pub fn bootstrap_main_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.unminimize();
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    build_main_window(app, true)
+}
+
+fn build_main_window(app: &AppHandle, steal_focus: bool) -> Result<(), String> {
     if app.get_webview_window(MAIN_WINDOW_LABEL).is_some() {
         return Ok(());
     }

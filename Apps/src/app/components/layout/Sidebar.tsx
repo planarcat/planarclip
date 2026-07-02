@@ -21,6 +21,7 @@ type SidebarProps = {
   isDark: boolean;
   isSavingDeviceName: boolean;
   onThemeChange: (theme: ThemeColor, origin?: ThemePickOrigin) => void;
+  appearanceLocked?: boolean;
   onNavigate: (nav: NavId) => void;
   onDeviceNameChange: (deviceName: string) => void;
   onDeviceNameSave: (deviceName?: string) => void;
@@ -37,6 +38,7 @@ export function Sidebar({
   isDark,
   isSavingDeviceName,
   onThemeChange,
+  appearanceLocked = false,
   onNavigate,
   onDeviceNameChange,
   onDeviceNameSave,
@@ -184,8 +186,9 @@ export function Sidebar({
               <button
                 key={option.id}
                 onClick={() => setColorScheme(option.id)}
-                title={option.label}
-                className={`flex h-6 w-6 items-center justify-center rounded ${SURFACE_REVEAL_BG} ${colorScheme === option.id ? "bg-card text-foreground shadow-sm" : "text-secondary-foreground hover:bg-secondary/70 hover:text-foreground"}`}
+                disabled={appearanceLocked}
+                title={appearanceLocked ? "外观切换中，请稍候" : option.label}
+                className={`flex h-6 w-6 items-center justify-center rounded ${SURFACE_REVEAL_BG} disabled:cursor-not-allowed disabled:opacity-40 ${colorScheme === option.id ? "bg-card text-foreground shadow-sm" : "text-secondary-foreground hover:bg-secondary/70 hover:text-foreground"}`}
                 type="button"
               >
                 {option.icon}
@@ -203,6 +206,7 @@ export function Sidebar({
                 selectedTheme={theme}
                 isDark={isDark}
                 onChange={onThemeChange}
+                disabled={appearanceLocked}
               />
             ))}
           </div>

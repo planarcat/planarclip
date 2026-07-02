@@ -99,7 +99,7 @@ export default function App() {
 
   const { transferProgress, applySyncActivity, clearTransferProgress } = useTransferProgress();
 
-  const { transitionState, playBackgroundTransition, playThemeTransition, handleRevealEnd, handleBackgroundCircleEnd, appearanceTransitionActive } =
+  const { transitionState, playBackgroundTransition, playThemeTransition, handleRevealEnd, handleBackgroundCircleEnd, isTransitioning } =
     useThemeTransition();
 
   const {
@@ -120,13 +120,16 @@ export default function App() {
     setIsDark,
     setSettingsMessage,
     setIsSavingSettings,
-    suspendThemeSync: appearanceTransitionActive,
+    suspendThemeSync: isTransitioning,
   });
 
   const appearanceIsDark = isColorSchemeDark(colorScheme);
 
   const onColorSchemeChange = useCallback(
     (nextScheme: ColorScheme) => {
+      if (isTransitioning) {
+        return;
+      }
       if (nextScheme === colorScheme) {
         return;
       }
@@ -134,11 +137,14 @@ export default function App() {
       setIsDark(isColorSchemeDark(nextScheme));
       playBackgroundTransition(nextScheme, theme, () => persistAppearanceSettings(nextScheme, theme));
     },
-    [colorScheme, persistAppearanceSettings, playBackgroundTransition, setColorScheme, setIsDark, theme],
+    [colorScheme, isTransitioning, persistAppearanceSettings, playBackgroundTransition, setColorScheme, setIsDark, theme],
   );
 
   const onThemeChange = useCallback(
     (nextTheme: ThemeColor, origin?: ThemePickOrigin) => {
+      if (isTransitioning) {
+        return;
+      }
       if (nextTheme.id === theme.id) {
         return;
       }
@@ -148,7 +154,7 @@ export default function App() {
         persistAppearanceSettings(colorScheme, nextTheme),
       );
     },
-    [colorScheme, persistAppearanceSettings, playThemeTransition, setTheme, theme.id],
+    [colorScheme, isTransitioning, persistAppearanceSettings, playThemeTransition, setTheme, theme.id],
   );
 
   const {
@@ -441,6 +447,7 @@ export default function App() {
         isDark={appearanceIsDark}
         isSavingDeviceName={isSavingSettings}
         onThemeChange={onThemeChange}
+        appearanceLocked={isTransitioning}
         onNavigate={setActiveNav}
         onDeviceNameChange={handleDeviceNameChange}
         onDeviceNameSave={handleDeviceNameSave}
@@ -513,6 +520,7 @@ export default function App() {
             startupSettingsLoaded={startupSettingsLoaded}
             onSchemeChange={onColorSchemeChange}
             onThemeChange={onThemeChange}
+            appearanceLocked={isTransitioning}
             onDeviceNameChange={handleDeviceNameChange}
             onDeviceNameSave={handleDeviceNameSave}
             onLaunchAtStartupChange={handleLaunchAtStartupChange}
