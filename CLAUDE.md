@@ -1,7 +1,11 @@
+# Claude Code 入口
+
+本仓库的协作约定、构建命令、UI 摘要与 GitNexus 说明见 **[`AGENTS.md`](./AGENTS.md)**（权威正文）。
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **planarclip** (3583 symbols, 6789 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **planarclip** (3588 symbols, 6787 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

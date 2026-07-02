@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件是 PlanarClip 项目的**统一编码代理说明**，供 Cursor、Claude Code 等 AI 编码工具自动加载。原先独立的 `CLAUDE.md` 已合并至本文档；`CLAUDE.md` 仅保留为指向本文件的入口。更完整的产品与开发说明见 [`README.md`](./README.md)；前端 UI 与视觉规范见 [`docs/UI_GUIDE.md`](./docs/UI_GUIDE.md)。
+本文件是 PlanarClip 项目的**统一编码代理说明**，供 Cursor、Claude Code 等 AI 编码工具自动加载。原先独立的 `CLAUDE.md` 已合并至本文档；`CLAUDE.md` 仅保留为指向本文件的入口。更完整的产品与开发说明见 [`README.md`](./README.md)；前端 UI 与视觉规范见 [`Docs/UI_GUIDE.md`](./Docs/UI_GUIDE.md)。
 
 ## 基本协作约定
 
@@ -112,20 +112,21 @@ planarclip/                  # 仓库根目录（pnpm workspace）
 │       │   ├── storage/     # 本地 JSON 配置加载/保存
 │       │   └── tray/        # 系统托盘相关实现
 │       ├── tauri.conf.json  # Tauri 配置：窗口 1280×820、默认隐藏、托盘图标
+│       ├── tauri.dev.conf.json # 开发合并配置（静默启动 create: false 等）
 │       └── capabilities/
 ```
 
 ## 当前状态
 
-- 桌面端主流程已可用：文本剪贴板同步、局域网设备发现、6 位配对码确认、可信设备持久化、托盘驻留、三栏 UI（剪贴板 / 设备 / 设置）。
+- 桌面端主流程已可用：文本 / 图片 / 文件剪贴板同步（Windows 双机验证）、局域网设备发现、6 位配对码与熟悉设备、托盘驻留、三栏 UI（剪贴板 / 设备 / 设置）。
 - 配对弹层（`PairingModal`）支持按目标设备展示、可切换局域网设备列表、60 秒倒计时与配对码轮换（会话级动态码 + `rotate_pairing_code`）。
+- 启动与窗口：支持开机自启与**静默启动**（仅托盘）；主窗 `create: false`，首次点托盘冷启动 WebView；关窗默认 **hide 到托盘**（保留 WebView，非预暖）；2026-07 **方案 E** 冷启动优化（`get_shell_bootstrap` / `get_shell_deferred`、`notify_main_ui_ready`、设置页懒加载）。
 - 浏览器预览模式（`pnpm dev:web`）只能查看 UI；连接与配对能力需在 Tauri 桌面应用中体验。
-- 图片与文件剪贴板同步（Windows 局域网直连；2026-06-29 双机验证：大图分块、截图粘贴为文件、文件批次与关同步文件名回退）。
 - 默认局域网直连端口为 `19876`；前端开发服务器端口为 `1420`，HMR 端口为 `1421`。
 
 ## UI 与前端视觉
 
-**完整规范**见 [`docs/UI_GUIDE.md`](./docs/UI_GUIDE.md)（用户文案、交互、设计令牌、组件 class 契约、动效、浮层 z-index、Figma 对照、样式入口）。
+**完整规范**见 [`Docs/UI_GUIDE.md`](./Docs/UI_GUIDE.md)（用户文案、交互、设计令牌、组件 class 契约、动效、浮层 z-index、Figma 对照、样式入口）。
 
 修改 `Apps/src/app/components` 或 `styles/` 时须遵循该文档。以下为代理须始终记住的摘要：
 
@@ -145,7 +146,7 @@ planarclip/                  # 仓库根目录（pnpm workspace）
 
 ## Figma MCP
 
-视觉与 Figma 对照流程见 [`docs/UI_GUIDE.md` §10](./docs/UI_GUIDE.md#10-figma-与设计对照)。使用 `figma-mcp-go` 时优先 `get_design_context`；有副作用的 Figma 操作须先确认；MCP 权限在 IDE 的 MCP 配置中维护。
+视觉与 Figma 对照流程见 [`Docs/UI_GUIDE.md` §10](./Docs/UI_GUIDE.md#10-figma-与设计对照)。使用 `figma-mcp-go` 时优先 `get_design_context`；有副作用的 Figma 操作须先确认；MCP 权限在 IDE 的 MCP 配置中维护。
 
 ## GitNexus — 代码智能
 
@@ -154,7 +155,7 @@ planarclip/                  # 仓库根目录（pnpm workspace）
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **planarclip** (3583 symbols, 6789 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **planarclip** (3588 symbols, 6787 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

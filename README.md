@@ -1,34 +1,35 @@
 # PlanarClip
 
-PlanarClip 是一个基于 **Tauri 2 + React 18 + TypeScript + Rust** 构建的跨设备剪贴板同步桌面应用。
+PlanarClip（安装包产品名 **二向贴**）是一个基于 **Tauri 2 + React 18 + TypeScript + Rust** 构建的跨设备剪贴板同步桌面应用。
 
 当前版本已经完成桌面端主流程：
 
-- 文本剪贴板监听与会话级历史摘要
+- 文本 / 图片 / 文件剪贴板监听与同步（Windows 已双机验证；macOS 文件链路未全面接入）
 - 局域网设备自动发现与直连
-- 6 位配对码确认、会话级动态配对码与 60 秒倒计时轮换、可信设备持久化
+- 6 位配对码确认、会话级动态配对码与 60 秒倒计时轮换、熟悉设备持久化
 - 配对弹层支持按目标设备展示、可切换设备列表与入站连接确认
-- 托盘驻留、窗口显隐与基础桌面交互
-- 外观设置持久化（明暗模式 / 主题色）
+- 托盘驻留、静默启动（仅托盘）、关窗收起到托盘（保留 WebView，再次打开更快）
+- 2026-07 冷启动首屏优化：分级 shell IPC、设置页懒加载、主窗 UI 就绪后再展示
+- 外观与行为设置持久化（明暗模式 / 主题色、启动项、同步开关、系统通知等）
 
 ## 当前能力
 
 ### 已实现
 
-- 剪贴板文本自动同步
-- 局域网设备发现与连接
-- 配对码验证、会话级动态码轮换与连接请求确认
-- 最近 12 条文本同步历史展示
+- 剪贴板文本 / 图片 / 文件自动同步（Windows；2026-06-29 双机联调：大图分块、批次、资源管理器粘贴）
+- 局域网设备发现与连接、熟悉设备 / 信任与自动接受入站
+- 配对码验证、会话级动态码轮换与连接请求确认；入站连接系统通知（可关闭）
+- 剪贴板历史摘要（默认 100 条，可选 25 / 50 / 100 / 200 / 500；列表或网格视图）
 - 设备页、剪贴板页、设置页三栏桌面 UI
-- 系统托盘入口与关闭窗口后驻留后台
-- 外观设置保存到本地配置文件
+- 系统托盘、开机自启、静默启动、关窗收起到托盘或直接退出
+- 同步相关设置（图片 / 文件开关、大小上限、接收文件保存目录等）
 
 ### 当前限制
 
-- 图片 / 文件同步已在 Windows 桌面端实现并完成主要双机联调（2026-06-29：单文件、13 文件批次共 122.5 MB、资源管理器粘贴）；macOS 文件同步未接入
-- 浏览器预览模式只能查看 UI，连接能力需在桌面应用中体验
-- 默认局域网直连端口为 `19876`
-- 项目里仍保留部分网络模块演进空间，但当前用户主路径以桌面端局域网连接为主
+- macOS 上图片 / 文件同步未与 Windows 同级验证
+- 浏览器预览模式（`pnpm dev:web`）只能查看 UI，连接与配对需在 Tauri 桌面应用中体验
+- 默认局域网直连端口为 `19876`；后端当前仍维持单条活跃连接会话
+- 静默启动下首次点托盘仍需冷启动 WebView（已做首屏优化，无后台预暖主窗）
 
 ## 技术栈
 
@@ -106,31 +107,28 @@ pnpm tauri build
 2. 在“设备”页可查看已发现的局域网设备，点击连接后打开配对弹层，并可在弹层内切换目标设备。
 3. 若对方主动请求连接，应用会弹出配对确认弹层，请让对方输入你设备上显示的配对码。
 4. 建立连接后，文本剪贴板变化会自动同步。
-5. 在“剪贴板”页可查看最近同步摘要，在“设置”页可调整主题外观。
-6. 关闭主窗口时应用默认收回托盘，不会直接退出进程。
+5. 在“剪贴板”页可查看最近同步摘要；在“设置”页可调整外观、启动项（开机自启 / 静默启动）、同步能力与关窗行为。
+6. 开启**静默启动**时，启动后仅显示托盘，首次点托盘打开主界面（冷启动 WebView）；再次打开通常更快（窗口 hide 后保留实例）。
+7. 关闭主窗口时默认**收起到托盘**；可在设置中改为**直接退出**。连接流程详见 [`Docs/CONNECTION.md`](./Docs/CONNECTION.md)。
 
 ## 前端页面
 
-- **剪贴板页**：展示文本同步历史、时间、大小与来源摘要
+- **剪贴板页**：展示同步历史（文本 / 图片 / 文件摘要）、时间、大小与来源
 - **设备页**：展示局域网设备、连接状态、发起连接 / 断开连接入口
-- **设置页**：保存背景模式与主题色，并展示当前同步能力边界
+- **设置页**：外观、启动、应用行为、连接、同步、剪贴板展示等分组设置
 
 ## Tauri 命令
 
-当前前端主要通过以下命令与 Rust 层通信：
+前端通过 `invoke` 调用 Rust 命令；完整列表见 `Apps/src-tauri/src/lib.rs` 中的 `generate_handler!`。按领域归纳如下：
 
-- `get_status`
-- `get_pairing_code`
-- `rotate_pairing_code`
-- `get_ui_settings`
-- `save_ui_settings`
-- `get_clipboard_history`
-- `get_lan_devices`
-- `pair`
-- `connect_lan`
-- `submit_pairing_code`
-- `reject_connection`
-- `disconnect`
+| 领域 | 代表命令 |
+|------|----------|
+| Shell / 窗口 | `get_shell_bootstrap`、`get_shell_deferred`、`notify_main_ui_ready` |
+| 状态与配对 | `get_status`、`get_pairing_code`、`rotate_pairing_code`、`end_pairing_session`、`pair`、`submit_pairing_code`、`submit_responder_pairing_code` |
+| 连接 | `get_lan_devices`、`refresh_lan_devices`、`connect_lan`、`accept_connection`、`reject_connection`、`timeout_incoming_connection`、`disconnect`、`disconnect_peer`、`get_pending_connection_request`、`get_connected_peer(s)` |
+| 设备信任 | `get_trusted_peers`、`remove_trusted_peer`、`set_peer_auto_accept` |
+| 剪贴板 | `get_clipboard_history`、`copy_clipboard_history_entry`、`send_clipboard_history_entry`、`clear_clipboard_history`、`resolve_history_thumbnail`、`get_clipboard_settings`、`save_clipboard_settings` |
+| 设置 | `get_ui_settings`、`save_ui_settings`、`get_startup_settings`、`save_startup_settings`、`get_app_behavior_settings`、`save_app_behavior_settings`、`get_connection_settings`、`save_connection_settings`、`get_sync_settings`、`save_sync_settings`、`pick_sync_files_save_dir`、`save_sync_files_save_dir` |
 
 ## 项目结构
 
@@ -139,6 +137,7 @@ planarclip/
 ├── package.json             # workspace 根：转发脚本
 ├── pnpm-workspace.yaml
 ├── pnpm-lock.yaml
+├── Docs/                    # UI 规范、连接流程等产品文档
 ├── Apps/
 │   ├── package.json
 │   ├── index.html
@@ -147,6 +146,7 @@ planarclip/
 │   │   ├── app/
 │   │   │   ├── components/
 │   │   │   │   ├── common/      # 通用小组件
+│   │   │   │   ├── ui/          # UI 规范薄组件
 │   │   │   │   ├── layout/      # 侧栏与右侧概览面板
 │   │   │   │   ├── overlays/    # 配对弹层、入站连接确认
 │   │   │   │   └── pages/       # 剪贴板 / 设备 / 设置页面
@@ -166,7 +166,8 @@ planarclip/
 │       │   ├── tray/            # 托盘菜单与行为
 │       │   ├── lib.rs           # Tauri 命令、状态管理、应用装配
 │       │   └── main.rs          # Rust 入口
-│       └── tauri.conf.json      # Tauri 窗口与打包配置
+│       ├── tauri.conf.json      # Tauri 窗口与打包配置（主窗 create: false 等）
+│       └── tauri.dev.conf.json  # 开发合并配置（与静默启动对齐）
 ```
 
 ## 配置文件
@@ -181,13 +182,13 @@ planarclip/
 
 当前会保存的核心配置包括：
 
-- 设备名称
-- 密钥对
-- 最近配对设备 / 已信任设备
-- TCP 端口
-- 局域网开关
-- UI 明暗模式
-- UI 主题色
+- 设备名称、密钥对、TCP 端口、局域网开关
+- 熟悉设备（`trusted_peers`）及入站是否自动接受
+- UI 明暗模式、主题色
+- 开机自启（`launch_at_startup`）、静默启动（`silent_start`）
+- 关窗行为（`close_window_action`：`tray` / `exit`）、系统通知开关
+- 自动连接熟悉设备、剪贴板自动同步、图片 / 文件同步及大小上限、接收文件保存目录
+- 剪贴板历史条目与展示条数、视图模式（`list` / `grid`）
 
 ## 当前状态
 
@@ -202,14 +203,16 @@ planarclip/
 | 剪贴板历史摘要展示 | ✅ 已实现 |
 | 图片同步 | ✅ Windows 已验证（inline / 大图分块 / 资源管理器粘贴，2026-06-29） |
 | 文件同步 | ✅ Windows 已验证（单文件 + 13 文件批次 + 资源管理器粘贴，2026-06-29） |
-| 桌面通知提醒 | 🚧 未实现 |
+| 入站连接等系统通知 | ✅ 已实现（设置中可关闭） |
+| 静默启动 + 冷启动首屏优化 | ✅ 2026-07（无 WebView 预暖） |
 
 ## 项目文档
 
 | 文件 | 用途 |
 |------|------|
 | [`README.md`](./README.md) | 产品介绍、安装运行、能力边界与配置文件说明（面向开发者与用户） |
-| [`docs/UI_GUIDE.md`](./docs/UI_GUIDE.md) | **项目级 UI 规范**：文案与交互、设计令牌、组件模式、动画、浮层与 Figma 对照 |
+| [`Docs/UI_GUIDE.md`](./Docs/UI_GUIDE.md) | **项目级 UI 规范**：文案与交互、设计令牌、组件模式、动画、浮层与 Figma 对照 |
+| [`Docs/CONNECTION.md`](./Docs/CONNECTION.md) | **连接与配对**产品流程（熟悉 / 信任、设备分区、配对场景） |
 | [`AGENTS.md`](./AGENTS.md) | 统一编码代理说明：协作约定、构建命令、UI 摘要与链接、GitNexus 与 MCP 约定（面向 Cursor / Claude Code 等 AI 工具） |
 | [`CLAUDE.md`](./CLAUDE.md) | 指向 `AGENTS.md` 的 Claude Code 入口（内容已合并，不再单独维护） |
 | [`Plans/`](./Plans/) | 功能方案讨论与执行记录 |
@@ -218,4 +221,4 @@ planarclip/
 
 - 项目当前以桌面端体验为主，若只运行 Web 预览，连接相关能力会显示为预览态提示。
 - 若需要体验完整链路，请使用 `pnpm dev` 启动 Tauri 桌面应用。
-- 使用 AI 编码工具协作时，请优先阅读 [`AGENTS.md`](./AGENTS.md)；做前端 UI 改动时另读 [`docs/UI_GUIDE.md`](./docs/UI_GUIDE.md)。
+- 使用 AI 编码工具协作时，请优先阅读 [`AGENTS.md`](./AGENTS.md)；做前端 UI 改动时另读 [`Docs/UI_GUIDE.md`](./Docs/UI_GUIDE.md)。
