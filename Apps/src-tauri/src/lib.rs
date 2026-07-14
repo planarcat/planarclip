@@ -3216,12 +3216,17 @@ pub fn run() {
                             monitor.run().await;
                         },
                         async move {
+                            let provider = std::sync::Arc::new(
+                                sync::out::RegistryOutProvider::new(
+                                    connections_bg.clone(),
+                                    app_handle_bg.clone(),
+                                ),
+                            );
                             let engine = sync::engine::SyncEngine::new(
                                 clip_rx,
-                                connections_bg,
+                                provider,
                                 transfer_slots_bg,
                                 config_bg,
-                                app_handle_bg,
                             );
                             engine.run().await;
                         },

@@ -144,3 +144,117 @@ pub enum HandshakeMessage {
         service_profile: String,
     },
 }
+
+
+// ---- inline unit tests ----
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signal_message_clipboard_roundtrip() {
+        // 帧编解码回环：Rust <-> JSON <-> Rust 必须无损，
+        // 这是双端保持协议兼容的基本前提。
+        let msg = SignalMessage::Clipboard {
+            payload: "hello 你好".to_string(),
+            hash: "deadbeef".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"clipboard\""));
+        assert!(json.contains("\"hello 你好\""));
+
+        let decoded: SignalMessage = serde_json::from_str(&json).unwrap();
+        match decoded {
+            SignalMessage::Clipboard { payload, hash } => {
+                assert_eq!(payload, "hello 你好");
+                assert_eq!(hash, "deadbeef");
+            }
+            _ => panic!("expected Clipboard variant"),
+        }
+    }
+
+    #[test]
+    fn signal_message_file_batch_end_tag_matches_wire_name() {
+        let msg = SignalMessage::ClipboardFileBatchEnd {
+            batch_id: "b1".into(),
+            file_count: 3,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"clipboard_file_batch_end\""));
+    }
+
+    #[test]
+    fn transfer_cancel_reason_is_optional() {
+        // reason 缺省时应能反序列化，避免旧版发送方不带 reason 时崩溃
+        let json = r#"{"type":"transfer_cancel","transfer_id":"t1"}"#;
+        let decoded: SignalMessage = serde_json::from_str(json).unwrap();
+        match decoded {
+            SignalMessage::TransferCancel { transfer_id, reason } => {
+                assert_eq!(transfer_id, "t1");
+                assert!(reason.is_none());
+            }
+            _ => panic!("expected TransferCancel"),
+        }
+    }
+
+    #[test]
+    fn handshake_presence_query_and_reply_wire_names_are_stable() {
+        // Presence 探测的 wire type 名称是跨版本契约（见 presence-probe 主题）
+        let query = HandshakeMessage::PresenceQuery {
+            querier_peer_id: "abcd".into(),
+        };
+        let reply = HandshakeMessage::PresenceReply {
+            peer_id: "abcd".into(),
+            device_name: "planarcat".into(),
+            service_profile: "release".into(),
+        };
+        assert!(serde_json::to_string(&query).unwrap().contains("\"type\":\"presence_query\""));
+        assert!(serde_json::to_string(&reply).unwrap().contains("\"type\":\"presence_reply\""));
+    }
+
+    #[test]
+    fn handshake_connect_request_requires_confirmation_default_false() {
+        // 缺省 requires_confirmation 必须解析为 false，保证旧发起方兼容
+        let json = r#"{
+            "type":"connect_request",
+            "device_name":"A",
+            "peer_id":"pa",
+            "public_key":"aa"
+        }"#;
+        let decoded: HandshakeMessage = serde_json::from_str(json).unwrap();
+        match decoded {
+            HandshakeMessage::ConnectRequest { requires_confirmation, .. } => {
+                assert!(!requires_confirmation);
+            }
+            _ => panic!("expected ConnectRequest"),
+        }
+    }
+
+    #[test]
+    fn auth_result_success_serialization_omits_none_fields_readably() {
+        // 序列化后即使字段是 null 也不能改变 tag 名
+        let msg = HandshakeMessage::AuthResult {
+            success: true,
+            peer_name: Some("A".into()),
+            public_key: None,
+            reason: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"auth_result\""));
+        assert!(json.contains("\"success\":true"));
+    }
+
+    #[test]
+    fn clipboard_file_meta_item_roundtrip() {
+        let item = ClipboardFileMetaItem {
+            file_name: "readme.md".into(),
+            size_bytes: 42,
+            content_hash: "cafebabe".into(),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        let decoded: ClipboardFileMetaItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.file_name, "readme.md");
+        assert_eq!(decoded.size_bytes, 42);
+        assert_eq!(decoded.content_hash, "cafebabe");
+    }
+}

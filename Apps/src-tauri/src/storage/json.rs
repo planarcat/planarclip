@@ -99,3 +99,111 @@ pub fn save_config(config: &AppConfig) {
         let _ = std::fs::write(&path, json);
     }
 }
+
+
+// ---- inline unit tests ----
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // config_path() 依赖平台专用环境变量（Windows: APPDATA, macOS/Linux: HOME）。
+    // 修改环境变量在测试线程间共享，用互斥锁避免并发用例互相干扰。
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn env_key() -> &'static str {
+        if cfg!(target_os = "windows") {
+            "APPDATA"
+        } else {
+            "HOME"
+        }
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(dir: &std::path::Path) -> (Self, std::sync::MutexGuard<'static, ()>) {
+            let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let key = env_key();
+            let previous = std::env::var(key).ok();
+            std::env::set_var(key, dir);
+            (Self { key, previous }, guard)
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    #[test]
+    fn app_config_default_has_empty_optionals() {
+        let cfg = AppConfig::default();
+        assert!(cfg.device_name.is_empty());
+        assert!(cfg.key_pair.is_none());
+        assert!(cfg.trusted_peers.is_none());
+        assert!(cfg.tcp_port.is_none());
+    }
+
+    #[test]
+    fn load_config_returns_default_when_file_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_guard, _lock) = EnvGuard::set(dir.path());
+        // 目录内无 CONFIG_FILE_NAME 时应回退到默认值，不 panic
+        let cfg = load_config();
+        assert!(cfg.device_name.is_empty());
+    }
+
+    #[test]
+    fn load_config_returns_default_when_file_is_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_guard, _lock) = EnvGuard::set(dir.path());
+        let path = config_path();
+        std::fs::write(&path, "{ not valid json").unwrap();
+        // 损坏的 JSON 必须回退默认，绝不能 panic 影响应用启动
+        let cfg = load_config();
+        assert!(cfg.device_name.is_empty());
+        assert!(cfg.trusted_peers.is_none());
+    }
+
+    #[test]
+    fn save_then_load_roundtrip_preserves_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_guard, _lock) = EnvGuard::set(dir.path());
+        let mut cfg = AppConfig::default();
+        cfg.device_name = "planarcat-win11".into();
+        cfg.tcp_port = Some(19876);
+        cfg.trusted_peers = Some(vec![TrustedPeerData {
+            name: "A".into(),
+            public_key: vec![1, 2, 3, 4],
+            peer_id: "abcd".into(),
+            last_ip: Some("192.168.0.10".into()),
+            auto_accept: Some(true),
+        }]);
+        save_config(&cfg);
+
+        let loaded = load_config();
+        assert_eq!(loaded.device_name, "planarcat-win11");
+        assert_eq!(loaded.tcp_port, Some(19876));
+        let peers = loaded.trusted_peers.expect("trusted_peers preserved");
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].peer_id, "abcd");
+        assert_eq!(peers[0].auto_accept, Some(true));
+    }
+
+    #[test]
+    fn trusted_peer_auto_accept_defaults_to_none_when_missing() {
+        // 老版本配置里没有 auto_accept 字段时，反序列化后必须为 None
+        let json = r#"[{"name":"A","public_key":[1,2],"peer_id":"pa","last_ip":null}]"#;
+        let peers: Vec<TrustedPeerData> = serde_json::from_str(json).unwrap();
+        assert_eq!(peers.len(), 1);
+        assert!(peers[0].auto_accept.is_none());
+    }
+}
