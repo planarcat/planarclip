@@ -167,6 +167,8 @@ export function SettingsPageRoute({
       onClipboardHistoryLimitChange={(limit) => {
         void handleHistoryLimitChange(limit);
       }}
+      tauriAvailable={tauriAvailable}
+      callCommand={callCommand}
     />
   );
 }

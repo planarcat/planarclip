@@ -212,6 +212,18 @@ impl ClipboardMonitor {
 
                 if self.should_emit_clipboard_change(hash) {
                     self.track_clipboard_state(hash);
+                    let (clip_kind, clip_size) = match &snapshot {
+                        ClipboardSnapshot::Text(s) => ("text", s.len()),
+                        ClipboardSnapshot::Image { png_bytes, .. } => ("image", png_bytes.len()),
+                        ClipboardSnapshot::FileList { files } => ("files", files.len()),
+                        ClipboardSnapshot::Empty => ("empty", 0),
+                    };
+                    tracing::info!(
+                        target: "clipboard",
+                        origin = "local",
+                        summary = %crate::logging::redact_content(clip_kind, clip_size, &hash[..]),
+                        "clipboard event emitted"
+                    );
                     let _ = self.tx.send(ClipboardEvent::local(snapshot));
                 } else {
                     self.note_observed_clipboard_sequence();

@@ -34,6 +34,7 @@ import type {
   TrustedPeerPayload,
 } from "./types";
 import { buildDevices } from "./utils/device";
+import { logger } from "./utils/logger";
 import { MSG_PAIRING_CODE_REFRESHED, normalizeUserMessage } from "./utils/message";
 import { loadPreviewUiSettings } from "./utils/settings";
 import type { ThemePickOrigin } from "./utils/themeTransition";
@@ -54,7 +55,12 @@ const callCommand: CommandExecutor = async function <T>(command: string, args?: 
     throw new Error("当前是浏览器预览模式，请在桌面应用中体验连接能力。");
   }
 
-  return invoke<T>(command, args);
+  try {
+    return await invoke<T>(command, args);
+  } catch (error) {
+    logger.error("ipc", `command "${command}" failed: ${normalizeUserMessage(error, "命令执行失败")}`);
+    throw error;
+  }
 };
 
 export default function App() {

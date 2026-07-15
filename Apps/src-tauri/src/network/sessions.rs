@@ -37,6 +37,13 @@ impl ConnectionRegistry {
     }
 
     pub fn insert(&mut self, peer_id: String, session: ConnectionSession) {
+        tracing::info!(
+            target: "connection",
+            peer_id = %crate::logging::redact_peer(&peer_id),
+            peer_name = %session.peer_name,
+            generation = session.session_generation,
+            "connection established"
+        );
         self.sessions.insert(peer_id, session);
     }
 
@@ -45,11 +52,22 @@ impl ConnectionRegistry {
     }
 
     pub fn remove(&mut self, peer_id: &str) -> Option<ConnectionSession> {
-        self.sessions.remove(peer_id)
+        let session = self.sessions.remove(peer_id);
+        if let Some(session) = session.as_ref() {
+            tracing::info!(
+                target: "connection",
+                peer_id = %crate::logging::redact_peer(peer_id),
+                peer_name = %session.peer_name,
+                "connection removed"
+            );
+        }
+        session
     }
 
     pub fn drain_all(&mut self) -> Vec<(String, ConnectionSession)> {
-        self.sessions.drain().collect()
+        let drained: Vec<_> = self.sessions.drain().collect();
+        tracing::info!(target: "connection", count = drained.len(), "all connections drained");
+        drained
     }
 
     pub fn connected_peer_ids(&self) -> Vec<String> {

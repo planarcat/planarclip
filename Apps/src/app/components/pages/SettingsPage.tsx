@@ -9,8 +9,9 @@ import {
   SURFACE_REVEAL_SELECT,
   SURFACE_REVEAL_TEXT_FIELD,
 } from "../../constants/surfaceReveal";
-import type { ColorScheme, CloseWindowAction, SettingAvailability, ThemeColor } from "../../types";
+import type { ColorScheme, CloseWindowAction, CommandExecutor, SettingAvailability, ThemeColor } from "../../types";
 import type { ThemePickOrigin } from "../../utils/themeTransition";
+import { DiagnosticsPanel } from "../common/DiagnosticsPanel";
 import { SettingBadge } from "../common/SettingBadge";
 import { SettingToggleControl } from "../common/SettingToggle";
 import { ThemeSwatch } from "../common/ThemeSwatch";
@@ -63,6 +64,8 @@ type SettingsPageProps = {
   isSavingClipboardSettings: boolean;
   clipboardSettingsLoaded: boolean;
   onClipboardHistoryLimitChange: (limit: number) => void;
+  tauriAvailable: boolean;
+  callCommand: CommandExecutor;
 };
 
 export function SettingsPage({
@@ -112,6 +115,8 @@ export function SettingsPage({
   isSavingClipboardSettings,
   clipboardSettingsLoaded,
   onClipboardHistoryLimitChange,
+  tauriAvailable,
+  callCommand,
 }: SettingsPageProps) {
   const [maxFileMbDraft, setMaxFileMbDraft] = useState(String(maxFileMb));
 
@@ -516,6 +521,11 @@ export function SettingsPage({
             <SettingBadge availability={item.availability} />
           </div>
         ))}
+      </div>
+
+      <p className="mb-3 text-[13px] font-medium text-primary">诊断与日志</p>
+      <div className="mb-6 rounded-xl border border-border bg-card px-4">
+        <DiagnosticsPanel tauriAvailable={tauriAvailable} callCommand={callCommand} />
       </div>
     </ScrollArea>
   );

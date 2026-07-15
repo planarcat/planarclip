@@ -13,6 +13,7 @@ mod app_profile;
 mod auto_connect;
 mod clipboard;
 mod crypto;
+mod logging;
 mod network;
 mod platform;
 mod storage;
@@ -2745,26 +2746,29 @@ async fn handle_incoming_connection(
         .await = None;
 }
 
-fn init_tracing() {
-    use tracing_subscriber::EnvFilter;
+#[tauri::command]
+async fn get_diagnostic_settings(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.config.lock().await.verbose_log.unwrap_or(false))
+}
 
-    // Dev builds hide mdns-sd interface noise on multi-NIC hosts; override via RUST_LOG.
-    let default_filter = if cfg!(debug_assertions) {
-        "info,mdns_sd=off"
-    } else {
-        "info"
-    };
-
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(default_filter)),
-        )
-        .init();
+#[tauri::command]
+async fn save_diagnostic_settings(
+    state: tauri::State<'_, AppState>,
+    verbose_log: bool,
+) -> Result<bool, String> {
+    {
+        let mut config = state.config.lock().await;
+        config.verbose_log = Some(verbose_log);
+        storage_json::save_config(&config);
+    }
+    logging::set_verbose(verbose_log);
+    tracing::info!(target: "logging", verbose = verbose_log, "diagnostic verbosity updated");
+    Ok(verbose_log)
 }
 
 pub fn run() {
-    init_tracing();
+    // File-rotated, non-blocking logging; guard flushes the writer on process exit.
+    let _log_guard = logging::init();
 
     match storage::staging::gc_staging() {
         Ok(removed) if removed > 0 => tracing::info!("staging GC removed {removed} expired item(s)"),
@@ -2778,6 +2782,8 @@ pub fn run() {
 
     let key_pair = load_or_create_key_pair(&mut config);
     storage_json::save_config(&config);
+
+    logging::set_verbose(config.verbose_log.unwrap_or(false));
 
     let silent_tray_startup = config.silent_start.unwrap_or(false);
     let mut context = tauri::generate_context!();
@@ -3283,6 +3289,10 @@ pub fn run() {
             timeout_incoming_connection,
             disconnect,
             disconnect_peer,
+            logging::frontend_log,
+            logging::open_log_dir,
+            get_diagnostic_settings,
+            save_diagnostic_settings,
         ])
         .build(context)
         .expect("error while building tauri application")

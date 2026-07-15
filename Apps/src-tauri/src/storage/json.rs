@@ -33,6 +33,8 @@ pub struct AppConfig {
     pub clipboard_history_limit: Option<usize>,
     /// Clipboard history UI layout: `"list"` or `"grid"` (default grid when unset).
     pub clipboard_view_mode: Option<String>,
+    /// When true, raise the log level to debug for diagnostics (runtime + persisted).
+    pub verbose_log: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
