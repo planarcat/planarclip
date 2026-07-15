@@ -1139,7 +1139,9 @@ fn snapshot_from_history_entry(entry: &ClipboardHistoryEntry) -> Result<clipboar
 
 fn write_history_snapshot_to_clipboard(snapshot: &clipboard::types::ClipboardSnapshot) {
     match snapshot {
-        clipboard::types::ClipboardSnapshot::Text(text) => ClipboardMonitor::write_clipboard(text),
+        clipboard::types::ClipboardSnapshot::Text(text) => {
+            ClipboardMonitor::write_clipboard(text);
+        }
         clipboard::types::ClipboardSnapshot::Image {
             png_bytes,
             width,

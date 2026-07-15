@@ -551,6 +551,54 @@ async fn finalize_received_image(
     let _ = clip_tx.send(ClipboardEvent::remote(snapshot, peer_name.to_string()));
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum IngestTextOutcome {
+    Applied,
+    Duplicate,
+    WriteFailed,
+}
+
+/// Apply a received text clipboard payload with dedup + write ordering that
+/// survives transient write failures.
+///
+/// The dedup entry is only marked **after** a successful write. If writing
+/// fails (e.g. the clipboard is momentarily locked by another app on Windows),
+/// we leave the dedup table untouched so a subsequent retry of the same
+/// payload is not silently dropped. This prevents the "miss once, miss
+/// forever" failure mode where a single failed write poisons the dedup ring.
+async fn ingest_received_text(
+    payload: String,
+    hash: [u8; 32],
+    dedup: &Arc<Mutex<DedupStore>>,
+    clip_tx: &broadcast::Sender<ClipboardEvent>,
+    peer_name: &str,
+    writer: impl Fn(&str) -> bool,
+) -> IngestTextOutcome {
+    {
+        let guard = dedup.lock().await;
+        if guard.has_seen(&hash) {
+            return IngestTextOutcome::Duplicate;
+        }
+    }
+
+    if !writer(&payload) {
+        tracing::warn!(
+            "Received clipboard text but failed to write it; will retry on next sync"
+        );
+        return IngestTextOutcome::WriteFailed;
+    }
+
+    {
+        let mut guard = dedup.lock().await;
+        guard.mark_seen(hash);
+    }
+
+    tracing::info!("Received remote clipboard: {} chars", payload.len());
+    let snapshot = ClipboardSnapshot::Text(payload);
+    let _ = clip_tx.send(ClipboardEvent::remote(snapshot, peer_name.to_string()));
+    IngestTextOutcome::Applied
+}
+
 fn report_receive_transfer_progress(
     file_session: &FileReceiveSession,
     file_progress: &mut Option<TransferProgressReporter>,
@@ -915,18 +963,15 @@ async fn handle_incoming_signal(
                 }
             };
 
-            {
-                let mut d = dedup.lock().await;
-                if d.has_seen(&hash_bytes) {
-                    return true;
-                }
-                d.mark_seen(hash_bytes);
-            }
-
-            tracing::info!("Received remote clipboard: {} chars", payload.len());
-            ClipboardMonitor::write_clipboard(&payload);
-            let snapshot = ClipboardSnapshot::Text(payload);
-            let _ = clip_tx.send(ClipboardEvent::remote(snapshot, peer_name.to_string()));
+            ingest_received_text(
+                payload,
+                hash_bytes,
+                dedup,
+                clip_tx,
+                peer_name,
+                |text| ClipboardMonitor::write_clipboard(text),
+            )
+            .await;
             true
         }
         SignalMessage::ClipboardImageInline {
@@ -1270,5 +1315,108 @@ impl ConnectionManager {
         });
 
         handle
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clipboard::types::ClipboardOrigin;
+
+    fn text_hash(text: &str) -> [u8; 32] {
+        *blake3::hash(text.as_bytes()).as_bytes()
+    }
+
+    #[tokio::test]
+    async fn ingest_text_write_failure_does_not_poison_dedup_allows_retry() {
+        // Regression: 接收端写剪贴板失败时不应 mark_seen，否则同一段文字
+        // 会因去重表被污染而"一次收不到永远收不到"。
+        let dedup: Arc<Mutex<DedupStore>> = Arc::new(Mutex::new(DedupStore::new(128)));
+        let (tx, _rx) = broadcast::channel::<ClipboardEvent>(4);
+        let hash = text_hash("hello");
+
+        // 第一次：写入失败
+        let outcome = ingest_received_text(
+            "hello".to_string(),
+            hash,
+            &dedup,
+            &tx,
+            "peer",
+            |_| false,
+        )
+        .await;
+        assert!(matches!(outcome, IngestTextOutcome::WriteFailed));
+        assert!(
+            !dedup.lock().await.has_seen(&hash),
+            "写入失败时不应污染去重表，否则重发会被永久拦截"
+        );
+
+        // 第二次：同一段文字重发，写入成功
+        let outcome = ingest_received_text(
+            "hello".to_string(),
+            hash,
+            &dedup,
+            &tx,
+            "peer",
+            |text| {
+                assert_eq!(text, "hello");
+                true
+            },
+        )
+        .await;
+        assert!(matches!(outcome, IngestTextOutcome::Applied));
+        assert!(
+            dedup.lock().await.has_seen(&hash),
+            "写入成功后才应标记去重"
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_text_duplicate_skips_writer() {
+        // 已见过的内容应直接跳过，不调用 writer。
+        let dedup: Arc<Mutex<DedupStore>> = Arc::new(Mutex::new(DedupStore::new(128)));
+        let (tx, _rx) = broadcast::channel::<ClipboardEvent>(4);
+        let hash = text_hash("hello");
+        dedup.lock().await.mark_seen(hash);
+
+        let outcome = ingest_received_text(
+            "hello".to_string(),
+            hash,
+            &dedup,
+            &tx,
+            "peer",
+            |_| panic!("去重命中不应调用 writer"),
+        )
+        .await;
+        assert!(matches!(outcome, IngestTextOutcome::Duplicate));
+    }
+
+    #[tokio::test]
+    async fn ingest_text_success_marks_dedup_and_emits_remote_event() {
+        let dedup: Arc<Mutex<DedupStore>> = Arc::new(Mutex::new(DedupStore::new(128)));
+        let (tx, mut rx) = broadcast::channel::<ClipboardEvent>(4);
+        let hash = text_hash("hello");
+
+        let outcome = ingest_received_text(
+            "hello".to_string(),
+            hash,
+            &dedup,
+            &tx,
+            "peerA",
+            |_| true,
+        )
+        .await;
+        assert!(matches!(outcome, IngestTextOutcome::Applied));
+        assert!(dedup.lock().await.has_seen(&hash));
+
+        let event = rx.try_recv().expect("应发出 remote 事件");
+        match &event.origin {
+            ClipboardOrigin::Remote { peer_name } => assert_eq!(peer_name.as_str(), "peerA"),
+            other => panic!("期望 Remote 来源，实际 {other:?}"),
+        }
+        match &event.snapshot {
+            ClipboardSnapshot::Text(t) => assert_eq!(t.as_str(), "hello"),
+            other => panic!("期望 Text 快照，实际 {other:?}"),
+        }
     }
 }

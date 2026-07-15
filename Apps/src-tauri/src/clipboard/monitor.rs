@@ -480,14 +480,37 @@ impl ClipboardMonitor {
         Self::set_self_writing(false);
     }
 
-    pub fn write_clipboard(text: &str) {
+    pub fn write_clipboard(text: &str) -> bool {
         let hash = *blake3::hash(text.as_bytes()).as_bytes();
         Self::register_suppressed_write(hash);
         Self::set_self_writing(true);
-        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-            let _ = clipboard.set_text(text);
-        }
+        let ok = Self::write_text_with_retry(text);
         Self::set_self_writing(false);
+        if !ok {
+            tracing::warn!("failed to write clipboard text; content will be retried on next sync");
+        }
+        ok
+    }
+
+    /// Write text with bounded retries. The Windows clipboard is frequently
+    /// locked for a few milliseconds by other apps; a single arboard attempt
+    /// fails in that window. Image writes already use `clipboard_win`'s
+    /// `new_attempts(10)` for the same reason — text writes must match that
+    /// reliability or transient failures become permanent (the caller treats a
+    /// failed write as "do not mark dedup, allow retry").
+    fn write_text_with_retry(text: &str) -> bool {
+        for attempt in 0..10u32 {
+            match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text)) {
+                Ok(()) => return true,
+                Err(error) => {
+                    if attempt == 0 {
+                        tracing::debug!("clipboard text write failed (will retry): {error}");
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        false
     }
 
     pub fn write_clipboard_image(png_bytes: &[u8], width: u32, height: u32) {
