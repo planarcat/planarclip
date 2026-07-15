@@ -87,7 +87,6 @@ export default function App() {
   const [incomingRequest, setIncomingRequest] = useState<ConnectionRequestPayload | null>(null);
   const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
   const [isRefreshingDevices, setIsRefreshingDevices] = useState(false);
-  const [autoSyncClipboard, setAutoSyncClipboard] = useState(true);
 
   useEffect(() => {
     if (!TAURI_AVAILABLE) {
@@ -190,7 +189,6 @@ export default function App() {
   const handleShellDeferred = useCallback(
     (deferred: ShellDeferredPayload) => {
       applyDesktopClipboardSettings(deferred.clipboard_settings);
-      setAutoSyncClipboard(deferred.auto_sync_clipboard);
     },
     [applyDesktopClipboardSettings],
   );
@@ -431,7 +429,6 @@ export default function App() {
                 void handleClearHistory();
               }}
               onActionMessage={setLastMessage}
-              showManualSync={!autoSyncClipboard}
             />
             <DevicesPanel
               devices={devices}

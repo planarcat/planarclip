@@ -22,11 +22,9 @@ import { ScrollArea } from "../ui/ScrollArea";
 function ClipPreview({
   clip,
   onActionMessage,
-  showManualSync,
 }: {
   clip: ClipEntry;
   onActionMessage?: (message: string) => void;
-  showManualSync?: boolean;
 }) {
   if (clip.type === "image" && clip.imagePreviewUrl) {
     return (
@@ -34,7 +32,6 @@ function ClipPreview({
         clip={clip}
         variant="list"
         onActionMessage={onActionMessage}
-        showManualSync={showManualSync}
       />
     );
   }
@@ -43,7 +40,7 @@ function ClipPreview({
     clip.type === "file" ? (
       <FileClipPreview clip={clip} variant="list" />
     ) : (
-      <ClipTextPreview clip={clip} lineClamp={3} onActionMessage={onActionMessage} showManualSync={showManualSync} />
+      <ClipTextPreview clip={clip} lineClamp={3} onActionMessage={onActionMessage} />
     );
 
   return <div className={`p-3 ${CLIP_LIST_PREVIEW_SURFACE}`}>{body}</div>;
@@ -97,8 +94,6 @@ type ClipboardPageProps = {
 
   onActionMessage?: (message: string) => void;
 
-  showManualSync?: boolean;
-
 };
 
 
@@ -118,8 +113,6 @@ export function ClipboardPage({
   onClearHistory,
 
   onActionMessage,
-
-  showManualSync = false,
 
 }: ClipboardPageProps) {
 
@@ -270,7 +263,6 @@ export function ClipboardPage({
                     <div className="opacity-0 transition-opacity group-hover:opacity-100">
                       <ClipHistoryActions
                         clip={clip}
-                        showSendButton={showManualSync}
                         onActionMessage={onActionMessage}
                       />
                     </div>
@@ -279,7 +271,7 @@ export function ClipboardPage({
 
                 </div>
 
-                <ClipPreview clip={clip} onActionMessage={onActionMessage} showManualSync={showManualSync} />
+                <ClipPreview clip={clip} onActionMessage={onActionMessage} />
 
               </div>
 
@@ -316,7 +308,6 @@ export function ClipboardPage({
                     <div className="ml-auto opacity-0 transition-opacity group-hover:opacity-100">
                       <ClipHistoryActions
                         clip={clip}
-                        showSendButton={showManualSync}
                         onActionMessage={onActionMessage}
                       />
                     </div>
