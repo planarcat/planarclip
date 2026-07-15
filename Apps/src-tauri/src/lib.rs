@@ -2868,7 +2868,7 @@ pub fn run() {
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip(format!("{APP_DISPLAY_NAME} 剪贴板同步"))
+                .tooltip(format!("{APP_DISPLAY_NAME}"))
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_tray_icon_event(|tray, event| {
