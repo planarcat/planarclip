@@ -20,6 +20,7 @@ tokio-tungstenite = "0.24"
 futures-util = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 mdns-sd = "0.11"
 thiserror = "2"
 hostname = "0.4"
@@ -29,6 +30,7 @@ base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
 dirs = "6"
 rfd = "0.15"
+async-trait = "0.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 clipboard-win = { version = "5", features = ["std"] }
@@ -55,6 +57,10 @@ windows-sys = { version = "0.59", features = [
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSArray", "NSString", "NSURL"] }
 objc2-app-kit = { version = "0.3", features = ["NSPasteboard"] }
+
+[dev-dependencies]
+pretty_assertions = "1"
+tempfile = "3"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -38,6 +38,43 @@ pub fn shell_file_icon(path: &Path, size: u32) -> Option<Vec<u8>> {
     }
 }
 
+/// Resolve a file-type icon by extension (e.g. "txt") without a real file on disk.
+/// SHGetFileInfo with SHGFI_USEFILEATTRIBUTES returns the registered icon for the type.
+pub fn shell_file_icon_by_ext(ext: &str, size: u32) -> Option<Vec<u8>> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let result = try_shell_file_icon_by_ext(ext, size);
+        CoUninitialize();
+        result
+    }
+}
+
+unsafe fn try_shell_file_icon_by_ext(ext: &str, size: u32) -> Option<Vec<u8>> {
+    use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
+    use windows::Win32::UI::Shell::SHGFI_USEFILEATTRIBUTES;
+
+    let dotted = if ext.starts_with('.') {
+        ext.to_string()
+    } else {
+        format!(".{ext}")
+    };
+    let wide = wide_null(OsStr::new(&dotted));
+    let mut info = SHFILEINFOW::default();
+    let result = SHGetFileInfoW(
+        PCWSTR(wide.as_ptr()),
+        FILE_ATTRIBUTE_NORMAL,
+        Some(&mut info as *mut _),
+        std::mem::size_of::<SHFILEINFOW>() as u32,
+        SHGFI_ICON | SHGFI_LARGEICON | SHGFI_USEFILEATTRIBUTES,
+    );
+    if result == 0 || info.hIcon.0.is_null() {
+        return None;
+    }
+    let png = icon_to_png(info.hIcon, size);
+    let _ = DestroyIcon(info.hIcon);
+    png
+}
+
 unsafe fn try_shell_content_thumbnail(path: &Path, max_edge: u32) -> Option<Vec<u8>> {
     let wide = wide_null(path.as_os_str());
     let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None).ok()?;

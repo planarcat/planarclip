@@ -376,6 +376,23 @@ where
 
     AckWaiter::unregister(ack_registry, &transfer_id).await;
 
+    match &transfer_result {
+        Ok(()) => tracing::info!(
+            target: "transfer",
+            transfer_id = %transfer_id,
+            kind = "image",
+            bytes = png_bytes.len(),
+            chunks = chunk_total,
+            "image send completed"
+        ),
+        Err(reason) => tracing::warn!(
+            target: "transfer",
+            transfer_id = %transfer_id,
+            kind = "image",
+            "image send failed: {reason}"
+        ),
+    }
+
     if transfer_result.is_err() {
         send_signal(SignalMessage::TransferCancel {
             transfer_id,
@@ -761,6 +778,25 @@ where
     .await;
 
     AckWaiter::unregister(ack_registry, &transfer_id).await;
+
+    match &transfer_result {
+        Ok(()) => tracing::info!(
+            target: "transfer",
+            transfer_id = %transfer_id,
+            kind = "file",
+            name = %file_name,
+            bytes = total_bytes,
+            chunks = chunk_total,
+            "file send completed"
+        ),
+        Err(reason) => tracing::warn!(
+            target: "transfer",
+            transfer_id = %transfer_id,
+            kind = "file",
+            name = %file_name,
+            "file send failed: {reason}"
+        ),
+    }
 
     if transfer_result.is_err() {
         send_signal(SignalMessage::TransferCancel {

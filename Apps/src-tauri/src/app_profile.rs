@@ -33,15 +33,14 @@ pub fn tcp_probe_port_candidates(primary: u16) -> Vec<u16> {
     }
 }
 
-#[cfg(debug_assertions)]
-pub const MDNS_SERVICE_TYPE: &str = "_planarclip-dev._tcp.local.";
-
-#[cfg(not(debug_assertions))]
+/// Unified mDNS service type -- dev and release share it so instances discover
+/// each other by peer_id, not by build profile.
 pub const MDNS_SERVICE_TYPE: &str = "_planarclip._tcp.local.";
 
 /// Legacy mDNS fullname prefix for entries discovered before `service_fullname` was tracked.
-pub fn mdns_service_fullname_prefix(device_name: &str) -> String {
-    format!("{device_name}{MDNS_SERVICE_TYPE}")
+/// The mDNS instance name is the peer id, so the prefix is keyed by peer id.
+pub fn mdns_service_fullname_prefix(peer_id: &str) -> String {
+    format!("{peer_id}{MDNS_SERVICE_TYPE}")
 }
 
 /// Build profile label returned in presence replies (`dev` or `release`).

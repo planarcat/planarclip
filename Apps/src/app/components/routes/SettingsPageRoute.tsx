@@ -1,5 +1,6 @@
 import { SettingsPage } from "../pages/SettingsPage";
 import { useAppBehaviorSettings } from "../../hooks/useAppBehaviorSettings";
+import { useBroadcastState, setTcpPort } from "../../hooks/useBroadcastState";
 import { useClipboardSettings } from "../../hooks/useClipboardSettings";
 import { useConnectionSettings } from "../../hooks/useConnectionSettings";
 import { useStartupSettings } from "../../hooks/useStartupSettings";
@@ -38,6 +39,8 @@ export function SettingsPageRoute({
   onDeviceNameChange,
   onDeviceNameSave,
 }: SettingsPageRouteProps) {
+  const broadcastState = useBroadcastState(tauriAvailable);
+
   const {
     launchAtStartup,
     silentStart,
@@ -139,6 +142,10 @@ export function SettingsPageRoute({
       isSavingConnectionSettings={isSavingConnectionSettings}
       connectionSettingsLoaded={connectionSettingsLoaded}
       onAutoConnectTrustedChange={handleAutoConnectTrustedChange}
+      broadcastState={broadcastState}
+      onPortChange={(port) => {
+        void setTcpPort(port);
+      }}
       syncImages={syncImages}
       syncFiles={syncFiles}
       maxFileMb={maxFileMb}
@@ -167,6 +174,8 @@ export function SettingsPageRoute({
       onClipboardHistoryLimitChange={(limit) => {
         void handleHistoryLimitChange(limit);
       }}
+      tauriAvailable={tauriAvailable}
+      callCommand={callCommand}
     />
   );
 }

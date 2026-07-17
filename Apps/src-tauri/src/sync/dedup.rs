@@ -25,3 +25,53 @@ impl DedupStore {
         self.seen.insert(hash);
     }
 }
+
+
+// ---- inline unit tests ----
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_store_never_matches() {
+        let store = DedupStore::new(8);
+        assert!(!store.has_seen(&[1u8; 32]));
+    }
+
+    #[test]
+    fn mark_then_check_returns_true_for_same_hash() {
+        let mut store = DedupStore::new(8);
+        let hash = [7u8; 32];
+        store.mark_seen(hash);
+        assert!(store.has_seen(&hash));
+    }
+
+    #[test]
+    fn different_hashes_are_distinct() {
+        let mut store = DedupStore::new(8);
+        let a = [1u8; 32];
+        let b = [2u8; 32];
+        store.mark_seen(a);
+        assert!(store.has_seen(&a));
+        assert!(!store.has_seen(&b));
+    }
+
+    #[test]
+    fn full_store_evicts_all_previous_entries() {
+        // simple eviction: clear all when full（当前实现语义）
+        let mut store = DedupStore::new(2);
+        let a = [1u8; 32];
+        let b = [2u8; 32];
+        let c = [3u8; 32];
+        store.mark_seen(a);
+        store.mark_seen(b);
+        assert!(store.has_seen(&a));
+        assert!(store.has_seen(&b));
+
+        // 第三个触发 clear，再插入 c
+        store.mark_seen(c);
+        assert!(store.has_seen(&c));
+        assert!(!store.has_seen(&a));
+        assert!(!store.has_seen(&b));
+    }
+}

@@ -1,6 +1,7 @@
 /**
  * Free dev ports before `tauri dev` starts Vite + the desktop app.
- * Avoids "Port 1420 is already in use" when a previous dev session left node/planarclip running.
+ * Clears a leftover dev session (node/vite + planarclip-dev) on ports 1420/1421/19877.
+ * Never touches planarclip.exe so the release build can run alongside dev.
  */
 import { execSync, spawnSync } from "node:child_process";
 import { platform } from "node:os";
@@ -69,11 +70,11 @@ function processName(pid) {
 
 function shouldKill(name) {
   if (!name) return false;
+  // Only free dev-session artifacts (vite/node + the dev binary itself).
+  // planarclip.exe is the release build and must stay online alongside dev.
   return (
     name.includes("node") ||
-    name === "planarclip.exe" ||
     name === "planarclip-dev.exe" ||
-    name === "planarclip" ||
     name === "planarclip-dev"
   );
 }
@@ -94,17 +95,14 @@ function killPid(pid) {
 function killDevDesktopProcesses() {
   const sys = platform();
   if (sys === "win32") {
-    for (const image of ["planarclip.exe", "planarclip-dev.exe"]) {
-      spawnSync("taskkill", ["/IM", image, "/F", "/T"], { stdio: "ignore" });
-    }
+    // Only stop a leftover dev binary; leave the release build (planarclip.exe) running.
+    spawnSync("taskkill", ["/IM", "planarclip-dev.exe", "/F", "/T"], { stdio: "ignore" });
     return;
   }
-  for (const name of ["planarclip-dev", "planarclip"]) {
-    try {
-      execSync(`pkill -x ${name}`, { stdio: "ignore" });
-    } catch {
-      /* not running */
-    }
+  try {
+    execSync(`pkill -x planarclip-dev`, { stdio: "ignore" });
+  } catch {
+    /* not running */
   }
 }
 

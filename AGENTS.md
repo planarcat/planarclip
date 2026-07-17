@@ -31,6 +31,27 @@ pnpm preview:web     # 预览前端构建结果
 也可进入 `Apps/` 直接执行同名脚本（workspace 内仍可用）。
 
 命名约定：`pnpm <动作>` 表示完整应用流程，`pnpm <动作>:web` 表示仅执行前端 Web 流程。前端开发服务器端口为 1420，HMR 端口为 1421。`tauri.conf.json` 通过 `beforeDevCommand` / `beforeBuildCommand` 调用 `pnpm dev:web` 与 `pnpm build:web`（在 `Apps/` 目录上下文中执行）。
+## 测试
+
+仓库测试基建由 Vitest（前端） + `cargo test`（Rust）组成。根目录常用脚本：
+
+```bash
+pnpm test              # 全量：先跑 Vitest，再跑 cargo test（Rust 单测）
+pnpm test:web          # 仅前端 Vitest（jsdom 环境）
+pnpm test:web:watch    # Vitest 监听模式
+pnpm test:web:coverage # 前端覆盖率（v8 provider，产物在 Apps/coverage/）
+pnpm test:rust         # 仅 Rust 单元测试与 doc test
+```
+
+测试文件位置：
+
+- 前端：**就近**放到 `Apps/src/**/__tests__/*.test.{ts,tsx}`；测试基础设施在 `Apps/src/test/`（`setup.ts` + `tauri-mock.ts`）
+- Rust：**内联** `#[cfg(test)] mod tests` 就近写在被测模块底部；跨模块集成测试可放到 `Apps/src-tauri/tests/`（当前未启用，见 Plans 归档）
+
+Tauri IPC 在前端测试中被 mock：用 `mockInvoke(command, handler)` 注册返回值、`emitTauriEvent(event, payload)` 模拟 Rust 侧广播；`resetTauriMocks()` 由 `beforeEach` 自动调用。
+
+覆盖率**当前不设阈值**（基线见相关 Plans 文档），仅供参考不作硬门禁。CI 尚未接入。
+
 
 ## 工作区命令：手动 vs 载入自动
 
@@ -155,24 +176,25 @@ planarclip/                  # 仓库根目录（pnpm workspace）
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **planarclip** (3588 symbols, 6787 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **planarclip** (3280 symbols, 6808 relationships, 277 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
-> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
+> Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
 ## Always Do
 
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
+- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
+- **MUST run `detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows. For regression review, compare against the default branch: `detect_changes({scope: "compare", base_ref: "master"})`.
 - **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
+- When exploring unfamiliar code, use `query({search_query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
+- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `context({name: "symbolName"})`.
+- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
 
 ## Never Do
 
-- NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
+- NEVER edit a function, class, or method without first running `impact` on it.
 - NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
-- NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
+- NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
+- NEVER commit changes without running `detect_changes()` to check affected scope.
 
 ## Resources
 

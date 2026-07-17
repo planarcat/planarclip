@@ -52,11 +52,10 @@ export type ClipEntry = {
   direction: "sent" | "received";
   size: string;
   timestamp: Date;
-  imagePreviewUrl?: string;
+  mediaRef?: string;
   fileCount?: number;
   fileNames?: string[];
   previewKind?: "thumbnail" | "icon";
-  thumbnailRef?: string;
 };
 
 export type ThemeColor = {
@@ -103,12 +102,18 @@ export type ClipboardSettingsPayload = {
   view_mode: ViewMode;
 };
 
+export type BroadcastState =
+  | { state: "Active"; port: number }
+  | { state: "PortConflict"; port: number }
+  | { state: "Inactive"; port: number; reason: string };
+
 export type ShellBootstrapPayload = {
   ui_settings: UiSettingsPayload;
   status: string;
   pairing_code: string;
   connected_peers: ConnectedPeerPayload[];
   pending_connection_request: ConnectionRequestPayload | null;
+  broadcast_state: BroadcastState;
 };
 
 export type ShellDeferredPayload = {
@@ -134,11 +139,10 @@ export type ClipboardHistoryPayload = {
   direction: "sent" | "received";
   timestamp_ms: number;
   size_label?: string | null;
-  image_data_url?: string | null;
+  media_ref?: string | null;
   file_count?: number | null;
   file_names?: string[] | null;
   preview_kind?: string | null;
-  thumbnail_ref?: string | null;
 };
 
 export type LanDevicePayload = {

@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { ClipEntry } from "../../types";
+import { useHistoryMediaUrl } from "../../utils/clipboard";
 
 import { CLIP_LIST_PREVIEW_SURFACE } from "../../constants/clipPreviewSurface";
 import { IconButton } from "../ui/IconButton";
@@ -15,7 +16,6 @@ type ClipDetailModalProps = {
   clip: ClipEntry;
   onClose: () => void;
   onActionMessage?: (message: string) => void;
-  showManualSync?: boolean;
 };
 
 function ClipDetailModal({
@@ -23,10 +23,10 @@ function ClipDetailModal({
   clip,
   onClose,
   onActionMessage,
-  showManualSync,
 }: ClipDetailModalProps) {
   const { content } = clip;
-  const isImage = clip.type === "image" && Boolean(clip.imagePreviewUrl);
+  const imageUrl = useHistoryMediaUrl(clip.mediaRef);
+  const isImage = clip.type === "image" && (Boolean(imageUrl) || Boolean(clip.mediaRef));
   const title = isImage ? "图片预览" : "完整内容";
 
   useEffect(() => {
@@ -60,14 +60,20 @@ function ClipDetailModal({
           {title}
         </p>
         <div className="flex items-center gap-0.5">
-          <ClipHistoryActions clip={clip} showSendButton={showManualSync} onActionMessage={onActionMessage} />
+          <ClipHistoryActions clip={clip} onActionMessage={onActionMessage} />
           <IconButton onClick={onClose} title="关闭" aria-label="关闭">
             <X size={15} />
           </IconButton>
         </div>
       </div>
-      {isImage && clip.imagePreviewUrl ? (
-        <ClipImageZoomView src={clip.imagePreviewUrl} alt={content} resetKey={`${clip.id}-${open}`} />
+      {isImage ? (
+        imageUrl ? (
+          <ClipImageZoomView src={imageUrl} alt={content} resetKey={`${clip.id}-${open}`} />
+        ) : (
+          <div className="flex min-h-[200px] flex-1 items-center justify-center">
+            <span className="text-sm text-muted-foreground">图片加载中…</span>
+          </div>
+        )
       ) : (
         <ScrollArea className="min-h-0 flex-1 overflow-y-auto p-5">
           <p className="whitespace-pre-wrap break-all text-sm leading-relaxed text-foreground/90">{content}</p>
@@ -82,7 +88,6 @@ type ClipTextPreviewProps = {
   lineClamp: 3 | 4;
   className?: string;
   onActionMessage?: (message: string) => void;
-  showManualSync?: boolean;
 };
 
 export function ClipTextPreview({
@@ -90,7 +95,6 @@ export function ClipTextPreview({
   lineClamp,
   className = "",
   onActionMessage,
-  showManualSync,
 }: ClipTextPreviewProps) {
   const { content } = clip;
   const textRef = useRef<HTMLDivElement>(null);
@@ -143,7 +147,6 @@ export function ClipTextPreview({
         clip={clip}
         onClose={() => setOpen(false)}
         onActionMessage={onActionMessage}
-        showManualSync={showManualSync}
       />
     </>
   );
@@ -153,20 +156,29 @@ type ClipImagePreviewProps = {
   clip: ClipEntry;
   variant?: "list" | "grid";
   onActionMessage?: (message: string) => void;
-  showManualSync?: boolean;
 };
 
 export function ClipImagePreview({
   clip,
   variant = "list",
   onActionMessage,
-  showManualSync,
 }: ClipImagePreviewProps) {
   const [open, setOpen] = useState(false);
-  const url = clip.imagePreviewUrl;
+  const url = useHistoryMediaUrl(clip.mediaRef);
 
   if (!url) {
-    return null;
+    if (!clip.mediaRef) {
+      return null;
+    }
+    const placeholderClass = variant === "grid" ? "h-48" : "h-56";
+    return (
+      <div
+        className={`flex w-full items-center justify-center rounded-lg border border-border bg-secondary/30 ${placeholderClass}`}
+        aria-label="图片加载中"
+      >
+        <span className="text-xs text-muted-foreground">加载中…</span>
+      </div>
+    );
   }
 
   const maxThumbClass = variant === "grid" ? "max-h-48" : "max-h-56";
@@ -194,7 +206,6 @@ export function ClipImagePreview({
         clip={clip}
         onClose={() => setOpen(false)}
         onActionMessage={onActionMessage}
-        showManualSync={showManualSync}
       />
     </>
   );

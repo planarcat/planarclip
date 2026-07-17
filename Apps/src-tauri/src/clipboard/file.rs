@@ -477,7 +477,7 @@ pub fn image_snapshot_from_single_file(files: &[ClipboardFileItem]) -> Option<Cl
     snapshot_from_png_bytes(png_bytes)
 }
 
-pub fn history_preview_for_files(files: &[ClipboardFileItem]) -> Option<String> {
+pub fn history_preview_for_files(files: &[ClipboardFileItem], entry_id: &str) -> Option<String> {
     if files.len() != 1 || !is_image_file_name(&files[0].file_name) {
         return None;
     }
@@ -499,7 +499,7 @@ pub fn history_preview_for_files(files: &[ClipboardFileItem]) -> Option<String> 
     let mut png_bytes = Vec::new();
     rgba.write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)
         .ok()?;
-    Some(png_data_url(&png_bytes))
+    crate::storage::history_media::write_media(entry_id, &png_bytes).ok()
 }
 
 pub fn history_summary_for_files(files: &[ClipboardFileItem]) -> String {
@@ -615,5 +615,81 @@ mod tests {
         assert_eq!(entries[0].source_path, file_path);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn file_meta_hash_is_deterministic() {
+        let a = file_meta_hash("a.txt", 100);
+        let b = file_meta_hash("a.txt", 100);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn file_meta_hash_changes_with_name_or_size() {
+        // 元数据哈希是"同一文件不重复下载"的判据，name/size 任一变化必须换 hash
+        let base = file_meta_hash("a.txt", 100);
+        assert_ne!(base, file_meta_hash("b.txt", 100));
+        assert_ne!(base, file_meta_hash("a.txt", 101));
+    }
+
+    #[test]
+    fn file_list_hash_ignores_input_order() {
+        // 目标：两端排序不同时也应得到相同的整体列表哈希
+        let a = ClipboardFileItem {
+            file_name: "a.txt".into(),
+            size_bytes: 1,
+            content_hash: [1u8; 32],
+            source_path: None,
+        };
+        let b = ClipboardFileItem {
+            file_name: "b.txt".into(),
+            size_bytes: 2,
+            content_hash: [2u8; 32],
+            source_path: None,
+        };
+        let h1 = file_list_hash(&[a.clone(), b.clone()]);
+        let h2 = file_list_hash(&[b, a]);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn is_image_file_name_recognises_common_extensions() {
+        for name in ["a.png", "b.JPG", "c.jpeg", "d.webp", "e.gif", "f.bmp"] {
+            assert!(is_image_file_name(name), "should recognise: {name}");
+        }
+        assert!(!is_image_file_name("readme.md"));
+        assert!(!is_image_file_name("noext"));
+    }
+
+    #[test]
+    fn file_list_summary_handles_single_and_batch() {
+        let single = vec![ClipboardFileItem {
+            file_name: "a.txt".into(),
+            size_bytes: 42,
+            content_hash: [0u8; 32],
+            source_path: None,
+        }];
+        assert_eq!(file_list_summary(&single), "a.txt");
+
+        let batch = vec![
+            single[0].clone(),
+            ClipboardFileItem {
+                file_name: "b.txt".into(),
+                size_bytes: 42,
+                content_hash: [0u8; 32],
+                source_path: None,
+            },
+        ];
+        assert_eq!(file_list_summary(&batch), "a.txt 等 2 个文件");
+
+        // 空列表使用兜底文案
+        assert_eq!(file_list_summary(&[]), "[文件]");
+    }
+
+    #[test]
+    fn is_user_limit_error_matches_known_messages() {
+        assert!(is_user_limit_error(FILE_TRANSFER_LIMIT_MESSAGE));
+        assert!(is_user_limit_error(EMPTY_FOLDER_SYNC_MESSAGE));
+        assert!(!is_user_limit_error("some other error"));
     }
 }

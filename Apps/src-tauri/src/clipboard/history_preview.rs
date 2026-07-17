@@ -3,46 +3,33 @@ use std::path::Path;
 use image::GenericImageView;
 
 use crate::clipboard::file::is_image_file_name;
-use crate::storage::history_thumbs;
+use crate::storage::history_media;
 
 pub const PREVIEW_MAX_BYTES: u64 = 10 * 1024 * 1024;
 const PREVIEW_MAX_EDGE: u32 = 480;
 
 pub struct PreviewResult {
     pub kind: &'static str,
-    pub thumbnail_ref: String,
+    pub media_ref: Option<String>,
 }
 
+/// Generate a content thumbnail for a file (image/video/etc.). Type icons are
+/// NOT stored -- the frontend renders them from the file type, so identical
+/// types reuse the same icon with zero storage.
 pub fn generate_and_store_preview(
     path: &Path,
     file_name: &str,
     size_bytes: u64,
     entry_id: &str,
 ) -> Option<PreviewResult> {
-    if !path.is_file() {
-        return None;
-    }
-
-    let png_bytes;
-    let kind;
-
     if size_bytes <= PREVIEW_MAX_BYTES {
         if let Some(bytes) = content_thumbnail_bytes(path, file_name) {
-            png_bytes = bytes;
-            kind = "thumbnail";
-        } else {
-            let icon_bytes = file_icon_bytes(path)?;
-            png_bytes = icon_bytes;
-            kind = "icon";
+            let media_ref = history_media::write_media(entry_id, &bytes).ok()?;
+            return Some(PreviewResult { kind: "thumbnail", media_ref: Some(media_ref) });
         }
-    } else {
-        let icon_bytes = file_icon_bytes(path)?;
-        png_bytes = icon_bytes;
-        kind = "icon";
     }
-
-    let thumbnail_ref = history_thumbs::write_png(entry_id, &png_bytes).ok()?;
-    Some(PreviewResult { kind, thumbnail_ref })
+    // No content thumbnail available -> frontend renders a type icon (not stored).
+    Some(PreviewResult { kind: "icon", media_ref: None })
 }
 
 fn content_thumbnail_bytes(path: &Path, file_name: &str) -> Option<Vec<u8>> {
@@ -59,19 +46,6 @@ fn content_thumbnail_bytes(path: &Path, file_name: &str) -> Option<Vec<u8>> {
     }
 
     None
-}
-
-fn file_icon_bytes(path: &Path) -> Option<Vec<u8>> {
-    #[cfg(windows)]
-    {
-        return crate::platform::windows::thumbnail::shell_file_icon(path, 128);
-    }
-
-    #[cfg(not(windows))]
-    {
-        let _ = path;
-        None
-    }
 }
 
 fn decode_image_thumbnail(path: &Path) -> Option<Vec<u8>> {

@@ -9,8 +9,9 @@ import {
   SURFACE_REVEAL_SELECT,
   SURFACE_REVEAL_TEXT_FIELD,
 } from "../../constants/surfaceReveal";
-import type { ColorScheme, CloseWindowAction, SettingAvailability, ThemeColor } from "../../types";
+import type { BroadcastState, ColorScheme, CloseWindowAction, CommandExecutor, SettingAvailability, ThemeColor } from "../../types";
 import type { ThemePickOrigin } from "../../utils/themeTransition";
+import { DiagnosticsPanel } from "../common/DiagnosticsPanel";
 import { SettingBadge } from "../common/SettingBadge";
 import { SettingToggleControl } from "../common/SettingToggle";
 import { ThemeSwatch } from "../common/ThemeSwatch";
@@ -63,6 +64,10 @@ type SettingsPageProps = {
   isSavingClipboardSettings: boolean;
   clipboardSettingsLoaded: boolean;
   onClipboardHistoryLimitChange: (limit: number) => void;
+  tauriAvailable: boolean;
+  callCommand: CommandExecutor;
+  broadcastState?: BroadcastState;
+  onPortChange: (port: number) => void;
 };
 
 export function SettingsPage({
@@ -112,6 +117,10 @@ export function SettingsPage({
   isSavingClipboardSettings,
   clipboardSettingsLoaded,
   onClipboardHistoryLimitChange,
+  tauriAvailable,
+  callCommand,
+  broadcastState,
+  onPortChange,
 }: SettingsPageProps) {
   const [maxFileMbDraft, setMaxFileMbDraft] = useState(String(maxFileMb));
 
@@ -331,7 +340,12 @@ export function SettingsPage({
 
       <p className="mb-3 text-[13px] font-medium text-primary">连接</p>
       <div className="mb-6 rounded-xl border border-border bg-card px-4">
-        <div className="flex items-center justify-between gap-4 py-3.5">
+        <PortField
+          broadcastState={broadcastState}
+          onPortChange={onPortChange}
+          disabled={!connectionSettingsLoaded}
+        />
+        <div className="flex items-center justify-between gap-4 border-t border-border py-3.5">
           <div>
             <p className="text-sm font-medium text-primary">自动连接熟悉设备</p>
             <p className="mt-0.5 text-[13px] font-medium leading-6 text-muted-foreground">
@@ -517,6 +531,74 @@ export function SettingsPage({
           </div>
         ))}
       </div>
+
+      <p className="mb-3 text-[13px] font-medium text-primary">诊断与日志</p>
+      <div className="mb-6 rounded-xl border border-border bg-card px-4">
+        <DiagnosticsPanel tauriAvailable={tauriAvailable} callCommand={callCommand} />
+      </div>
     </ScrollArea>
+  );
+}
+
+function PortField({
+  broadcastState,
+  onPortChange,
+  disabled,
+}: {
+  broadcastState?: BroadcastState;
+  onPortChange: (port: number) => void;
+  disabled: boolean;
+}) {
+  const currentPort = broadcastState?.port ?? 0;
+  const [draft, setDraft] = useState(currentPort ? String(currentPort) : "");
+
+  useEffect(() => {
+    if (currentPort) {
+      setDraft(String(currentPort));
+    }
+  }, [currentPort]);
+
+  const commit = () => {
+    const value = Number(draft);
+    if (Number.isInteger(value) && value >= 1024 && value <= 65535 && value !== currentPort) {
+      onPortChange(value);
+    } else {
+      setDraft(currentPort ? String(currentPort) : "");
+    }
+  };
+
+  const conflict = broadcastState?.state === "PortConflict";
+
+  return (
+    <div className="flex items-center justify-between gap-4 py-3.5">
+      <div>
+        <p className="text-sm font-medium text-primary">监听端口</p>
+        <p className="mt-0.5 text-[13px] font-medium leading-6 text-muted-foreground">
+          局域网发现与连接使用的端口；被占用时应用不会广播，但仍可查询其他设备。
+        </p>
+      </div>
+      <div className="flex flex-col items-end gap-1">
+        <input
+          type="number"
+          min={1024}
+          max={65535}
+          value={draft}
+          disabled={disabled}
+          aria-label="监听端口"
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commit();
+            }
+          }}
+          className={`w-24 px-3 py-2 ${SURFACE_REVEAL_TEXT_FIELD} ${conflict ? "border-red-500" : ""}`}
+        />
+        {conflict && (
+          <span className="text-[11px] font-medium text-red-500">端口 {currentPort} 被占用</span>
+        )}
+      </div>
+    </div>
   );
 }

@@ -13,6 +13,7 @@ mod app_profile;
 mod auto_connect;
 mod clipboard;
 mod crypto;
+mod logging;
 mod network;
 mod platform;
 mod storage;
@@ -87,6 +88,264 @@ pub struct AppState {
     pub main_window_ui_ready: Arc<std::sync::atomic::AtomicBool>,
     /// When Some, a new main WebView was built and is waiting for UI ready (or timeout) before show.
     pub main_window_reveal_steal_focus: Arc<std::sync::Mutex<Option<bool>>>,
+    pub broadcast_state: Arc<Mutex<BroadcastState>>,
+    pub broadcast_handles: Arc<Mutex<Option<BroadcastHandles>>>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(tag = "state")]
+pub enum BroadcastState {
+    Active { port: u16 },
+    PortConflict { port: u16 },
+    Inactive { port: u16, reason: String },
+}
+
+pub(crate) struct BroadcastHandles {
+    discovery_daemon: Option<network::discovery::ServiceDaemon>,
+    discovery_task: tauri::async_runtime::JoinHandle<()>,
+    presence_task: tauri::async_runtime::JoinHandle<()>,
+    listener_task: Option<tauri::async_runtime::JoinHandle<()>>,
+    listener_event_task: Option<tauri::async_runtime::JoinHandle<()>>,
+}
+
+/// Start mDNS discovery + TCP listener + presence refresh + auto-connect for `port`.
+/// Returns handles so the caller can stop the broadcast later (e.g. on port change).
+async fn start_broadcast(app: &tauri::AppHandle, port: u16, register_self: bool, with_listener: bool) -> Result<BroadcastHandles, String> {
+    let state = app.state::<AppState>();
+    let app_key_pair = state.key_pair.clone();
+    let key_pair = state
+        .key_pair
+        .blocking_lock()
+        .clone()
+        .ok_or_else(|| "key pair not ready".to_string())?;
+    let device_name = normalize_stored_device_name(&state.config.blocking_lock().device_name);
+    let peer_id = key_pair.fingerprint();
+    let lan_devices = state.lan_devices.clone();
+    let pending_accept_tx = state.pending_accept_tx.clone();
+    let pending_reject_tx = state.pending_reject_tx.clone();
+    let connections = state.connections.clone();
+    let connection_generation = state.connection_generation.clone();
+    let config = state.config.clone();
+    let clip_tx = state.clip_tx.clone();
+    let app_handle = app.clone();
+
+    let (discovery_tx, mut discovery_rx) = mpsc::unbounded_channel::<DiscoveryEvent>();
+    let daemon = discovery::start_discovery(&device_name, &peer_id, port, register_self, discovery_tx)
+        .map_err(|e| format!("mDNS discovery failed: {e}"))?;
+
+    let discovery_task = {
+        let lan_devices = lan_devices.clone();
+        let app_handle = app_handle.clone();
+        let verify_key_pair = app_key_pair.clone();
+        let verify_cooldown = state.peer_offline_cooldown.clone();
+        let auto_connect_deps = auto_connect::AutoConnectDeps {
+            config: config.clone(),
+            key_pair: app_key_pair.clone(),
+            connections: connections.clone(),
+            connection_generation: connection_generation.clone(),
+            clip_tx: clip_tx.clone(),
+            pending_initiator: state.pending_initiator.clone(),
+            pending_outbound: state.pending_outbound.clone(),
+            outbound_abort: state.outbound_abort.clone(),
+            outbound_handshake_active: state.outbound_handshake_active.clone(),
+            pending_connection_request: state.pending_connection_request.clone(),
+            tcp_port: port,
+        };
+        tauri::async_runtime::spawn(async move {
+            while let Some(event) = discovery_rx.recv().await {
+                match event {
+                    DiscoveryEvent::Added(candidate) => {
+                        let verify_key_pair = verify_key_pair.clone();
+                        let verify_cooldown = verify_cooldown.clone();
+                        let verify_lan_devices = lan_devices.clone();
+                        let verify_app = app_handle.clone();
+                        let auto_connect_deps = auto_connect_deps.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if is_peer_in_offline_cooldown(&verify_cooldown, &candidate.peer_id)
+                                .await
+                            {
+                                return;
+                            }
+                            let Some(querier_peer_id) =
+                                local_querier_peer_id(&verify_key_pair).await
+                            else {
+                                return;
+                            };
+                            let probe_ports =
+                                app_profile::tcp_probe_port_candidates(port);
+                            let Some(presence) = direct::probe_planarclip_presence(
+                                &candidate.ip,
+                                &probe_ports,
+                                &querier_peer_id,
+                                Some(&candidate.peer_id),
+                                LAN_PROBE_TIMEOUT,
+                            )
+                            .await
+                            else {
+                                return;
+                            };
+
+                            let mut confirmed = candidate;
+                            apply_presence_probe(&mut confirmed, &presence);
+                            tracing::info!(
+                                "LAN device confirmed: {} ({}) via presence probe",
+                                confirmed.name,
+                                confirmed.ip
+                            );
+                            if !upsert_presence_confirmed_device(
+                                &verify_lan_devices,
+                                confirmed.clone(),
+                                &verify_app,
+                            )
+                            .await
+                            {
+                                return;
+                            }
+
+                            auto_connect::maybe_auto_connect_discovered_device(
+                                &auto_connect_deps,
+                                &verify_app,
+                                &confirmed,
+                            )
+                            .await;
+                        });
+                    }
+                    DiscoveryEvent::Removed { service_fullname } => {
+                        let mut devices = lan_devices.lock().await;
+                        let before = devices.len();
+                        devices.retain(|d| !lan_device_matches_removal(d, &service_fullname));
+                        if devices.len() != before {
+                            tracing::info!("LAN device removed: {}", service_fullname);
+                            let updated = devices.clone();
+                            drop(devices);
+                            let _ = app_handle.emit("lan-devices-changed", &updated);
+                        }
+                    }
+                }
+            }
+        })
+    };
+
+    let presence_task = {
+        let probe_lan_devices = lan_devices.clone();
+        let probe_connections = connections.clone();
+        let probe_config = config.clone();
+        let probe_key_pair = app_key_pair.clone();
+        let probe_cooldown = state.peer_offline_cooldown.clone();
+        let probe_app_handle = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            loop {
+                refresh_lan_presence(
+                    &probe_config,
+                    &probe_key_pair,
+                    &probe_lan_devices,
+                    &probe_connections,
+                    &probe_cooldown,
+                    port,
+                    &probe_app_handle,
+                )
+                .await;
+                tokio::time::sleep(LAN_PROBE_INTERVAL).await;
+            }
+        })
+    };
+
+    {
+        let startup_deps = auto_connect::AutoConnectDeps {
+            config: config.clone(),
+            key_pair: state.key_pair.clone(),
+            connections: connections.clone(),
+            connection_generation: connection_generation.clone(),
+            clip_tx: clip_tx.clone(),
+            pending_initiator: state.pending_initiator.clone(),
+            pending_outbound: state.pending_outbound.clone(),
+            outbound_abort: state.outbound_abort.clone(),
+            outbound_handshake_active: state.outbound_handshake_active.clone(),
+            pending_connection_request: state.pending_connection_request.clone(),
+            tcp_port: port,
+        };
+        let startup_app_handle = app_handle.clone();
+        let startup_lan_devices = lan_devices.clone();
+        tauri::async_runtime::spawn(async move {
+            auto_connect::auto_connect_trusted_on_startup(
+                startup_deps,
+                startup_app_handle,
+                startup_lan_devices,
+            )
+            .await;
+        });
+    }
+
+    let (listener_task, listener_event_task) = if with_listener {
+        let (listener_tx, mut listener_rx) = mpsc::unbounded_channel::<ListenerEvent>();
+        let presence_responder = direct::PresenceResponder {
+            config: config.clone(),
+            key_pair: app_key_pair.clone(),
+        };
+        let listener_task = tauri::async_runtime::spawn(async move {
+            if let Err(e) = direct::run_listener(port, presence_responder, listener_tx).await {
+                tracing::error!("TCP listener error: {}", e);
+            }
+        });
+
+        let listener_event_task = {
+            let app_handle = app_handle.clone();
+            let connections_listener = connections.clone();
+            let connection_generation_listener = connection_generation.clone();
+            let clip_tx = clip_tx.clone();
+            let pending_accept_tx = pending_accept_tx.clone();
+            let pending_reject_tx = pending_reject_tx.clone();
+            let key_pair = key_pair.clone();
+            let config = config.clone();
+            tauri::async_runtime::spawn(async move {
+                while let Some(event) = listener_rx.recv().await {
+                    match event {
+                        ListenerEvent::Incoming(req) => {
+                            handle_incoming_connection(
+                                req,
+                                key_pair.clone(),
+                                config.clone(),
+                                app_handle.clone(),
+                                connections_listener.clone(),
+                                connection_generation_listener.clone(),
+                                clip_tx.clone(),
+                                pending_accept_tx.clone(),
+                                pending_reject_tx.clone(),
+                            )
+                            .await;
+                        }
+                    }
+                }
+            })
+        };
+
+        (Some(listener_task), Some(listener_event_task))
+    } else {
+        (None, None)
+    };
+
+    Ok(BroadcastHandles {
+        discovery_daemon: Some(daemon),
+        discovery_task,
+        presence_task,
+        listener_task,
+        listener_event_task,
+    })
+}
+
+fn stop_broadcast(handles: BroadcastHandles) {
+    if let Some(daemon) = handles.discovery_daemon {
+        let _ = daemon.shutdown();
+    }
+    handles.discovery_task.abort();
+    handles.presence_task.abort();
+    if let Some(task) = handles.listener_task {
+        task.abort();
+    }
+    if let Some(task) = handles.listener_event_task {
+        task.abort();
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -155,6 +414,7 @@ struct ShellBootstrapPayload {
     pairing_code: String,
     connected_peers: Vec<ConnectedPeerPayload>,
     pending_connection_request: Option<window::ConnectionRequestPayload>,
+    broadcast_state: BroadcastState,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -225,8 +485,8 @@ fn lan_device_matches_removal(device: &LanDevice, service_fullname: &str) -> boo
         return device.service_fullname == service_fullname;
     }
 
-    // Entries discovered before service_fullname was tracked still use display name.
-    service_fullname.starts_with(&app_profile::mdns_service_fullname_prefix(&device.name))
+    // Entries discovered before service_fullname was tracked still match by peer id.
+    service_fullname.starts_with(&app_profile::mdns_service_fullname_prefix(&device.peer_id))
 }
 
 const LAN_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -771,13 +1031,7 @@ fn clipboard_settings_from_config(config: &AppConfig) -> ClipboardSettingsPayloa
 
 fn load_clipboard_history_from_config(config: &AppConfig) -> Vec<ClipboardHistoryEntry> {
     let limit = normalized_clipboard_history_limit(config.clipboard_history_limit);
-    config
-        .clipboard_history
-        .clone()
-        .unwrap_or_default()
-        .into_iter()
-        .take(limit)
-        .collect()
+    storage::history::load_history().into_iter().take(limit).collect()
 }
 
 pub(crate) async fn is_peer_connected(
@@ -788,12 +1042,10 @@ pub(crate) async fn is_peer_connected(
 }
 
 async fn persist_clipboard_history(
-    config: &Arc<Mutex<AppConfig>>,
+    _config: &Arc<Mutex<AppConfig>>,
     history: &[ClipboardHistoryEntry],
 ) {
-    let mut cfg = config.lock().await;
-    cfg.clipboard_history = Some(history.to_vec());
-    storage_json::save_config(&cfg);
+    storage::history::save_history(history);
 }
 
 fn sync_autostart(app: &tauri::AppHandle, launch_at_startup: bool) -> Result<(), String> {
@@ -1010,6 +1262,8 @@ fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHist
                 timestamp_ms: event.timestamp_ms,
                 size_label: None,
                 image_data_url: None,
+                image_ref: None,
+                media_ref: None,
                 file_count: None,
                 file_names: None,
                 preview_kind: None,
@@ -1020,25 +1274,43 @@ fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHist
             png_bytes,
             width,
             height,
-        } => Some(ClipboardHistoryEntry {
-            id: format!("{}-{}", event.timestamp_ms, &hash[..8]),
-            content: format!("[图片] {width}×{height}"),
-            clip_type: "image".to_string(),
-            source_label,
-            direction,
-            timestamp_ms: event.timestamp_ms,
-            size_label: Some(clipboard::image::format_byte_size(png_bytes.len())),
-            image_data_url: Some(clipboard::image::png_data_url(png_bytes)),
-            file_count: None,
-            file_names: None,
-            preview_kind: None,
-            thumbnail_ref: None,
-        }),
+        } => {
+            let id = format!("{}-{}", event.timestamp_ms, &hash[..8]);
+            let media_ref = match storage::history_media::write_media(&id, png_bytes) {
+                Ok(reference) => Some(reference),
+                Err(error) => {
+                    tracing::warn!("failed to persist history image: {error}");
+                    None
+                }
+            };
+            Some(ClipboardHistoryEntry {
+                id,
+                content: format!("[图片] {width}×{height}"),
+                clip_type: "image".to_string(),
+                source_label,
+                direction,
+                timestamp_ms: event.timestamp_ms,
+                size_label: Some(clipboard::image::format_byte_size(png_bytes.len())),
+                image_data_url: None,
+                image_ref: None,
+                media_ref,
+                file_count: None,
+                file_names: None,
+                preview_kind: None,
+                thumbnail_ref: None,
+            })
+        }
         clipboard::types::ClipboardSnapshot::FileList { files } => {
             let is_single_image =
                 files.len() == 1 && clipboard::file::is_image_file_name(&files[0].file_name);
+            let id = format!("{}-{}", event.timestamp_ms, &hash[..8]);
+            let media_ref = if is_single_image {
+                clipboard::file::history_preview_for_files(files, &id)
+            } else {
+                None
+            };
             Some(ClipboardHistoryEntry {
-                id: format!("{}-{}", event.timestamp_ms, &hash[..8]),
+                id,
                 content: clipboard::file::history_summary_for_files(files),
                 clip_type: if is_single_image {
                     "image".to_string()
@@ -1049,11 +1321,9 @@ fn build_clipboard_history_entry(event: &ClipboardEvent) -> Option<ClipboardHist
                 direction,
                 timestamp_ms: event.timestamp_ms,
                 size_label: Some(clipboard::file::file_list_size_label(files)),
-                image_data_url: if is_single_image {
-                    clipboard::file::history_preview_for_files(files)
-                } else {
-                    None
-                },
+                image_data_url: None,
+                image_ref: None,
+                media_ref,
                 file_count: if is_single_image {
                     None
                 } else {
@@ -1106,8 +1376,8 @@ fn merge_clipboard_history(
     if history.len() > limit {
         let removed: Vec<ClipboardHistoryEntry> = history.drain(limit..).collect();
         for item in removed {
-            if let Some(thumbnail_ref) = item.thumbnail_ref {
-                let _ = storage::history_thumbs::delete_by_ref(&thumbnail_ref);
+            if let Some(media_ref) = item.media_ref {
+                let _ = storage::history_media::delete_by_ref(&media_ref);
             }
         }
     }
@@ -1139,7 +1409,9 @@ fn snapshot_from_history_entry(entry: &ClipboardHistoryEntry) -> Result<clipboar
 
 fn write_history_snapshot_to_clipboard(snapshot: &clipboard::types::ClipboardSnapshot) {
     match snapshot {
-        clipboard::types::ClipboardSnapshot::Text(text) => ClipboardMonitor::write_clipboard(text),
+        clipboard::types::ClipboardSnapshot::Text(text) => {
+            ClipboardMonitor::write_clipboard(text);
+        }
         clipboard::types::ClipboardSnapshot::Image {
             png_bytes,
             width,
@@ -1181,8 +1453,8 @@ fn promote_history_entry_clone(
     if history.len() > limit {
         let removed: Vec<ClipboardHistoryEntry> = history.drain(limit..).collect();
         for item in removed {
-            if let Some(thumbnail_ref) = item.thumbnail_ref {
-                let _ = storage::history_thumbs::delete_by_ref(&thumbnail_ref);
+            if let Some(media_ref) = item.media_ref {
+                let _ = storage::history_media::delete_by_ref(&media_ref);
             }
         }
     }
@@ -1699,14 +1971,113 @@ async fn clear_clipboard_history(
 
     let updated_history = Vec::new();
     persist_clipboard_history(&state.config, &updated_history).await;
-    let _ = storage::history_thumbs::clear_all();
+    let _ = storage::history_media::clear_all();
     let _ = app.emit("clipboard-history-changed", updated_history);
     Ok(())
 }
 
 #[tauri::command]
-fn resolve_history_thumbnail(thumbnail_ref: String) -> Result<String, String> {
-    storage::history_thumbs::resolve_data_url(&thumbnail_ref)
+fn read_history_media(media_ref: String) -> Result<String, String> {
+    storage::history_media::resolve_data_url(&media_ref)
+}
+
+/// Resolve a file-type icon by extension, cached per-extension under `cache/icons/`
+/// so identical types reuse one icon file (never stored per history entry).
+#[tauri::command]
+fn read_type_icon(ext: String) -> Result<String, String> {
+    let parent = storage::json::config_path()
+        .parent()
+        .ok_or("data dir unavailable")?
+        .to_path_buf();
+    let cache_dir = parent.join("cache").join("icons");
+    let safe_ext: String = ext
+        .trim_start_matches('.')
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    if safe_ext.is_empty() {
+        return Err("invalid extension".into());
+    }
+    let cache_path = cache_dir.join(format!("{safe_ext}.png"));
+    if cache_path.is_file() {
+        let bytes = std::fs::read(&cache_path).map_err(|e| format!("read type icon: {e}"))?;
+        return Ok(data_url_png(&bytes));
+    }
+    let png = generate_type_icon(&safe_ext).ok_or_else(|| "type icon unavailable".to_string())?;
+    std::fs::create_dir_all(&cache_dir).map_err(|e| format!("create type icon dir: {e}"))?;
+    std::fs::write(&cache_path, &png).map_err(|e| format!("write type icon: {e}"))?;
+    Ok(data_url_png(&png))
+}
+
+fn data_url_png(bytes: &[u8]) -> String {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    format!("data:image/png;base64,{}", BASE64.encode(bytes))
+}
+
+#[cfg(windows)]
+fn generate_type_icon(ext: &str) -> Option<Vec<u8>> {
+    platform::windows::thumbnail::shell_file_icon_by_ext(ext, 32)
+}
+
+#[cfg(not(windows))]
+fn generate_type_icon(_ext: &str) -> Option<Vec<u8>> {
+    None
+}
+
+/// Change the TCP listen port. If the new port is free, stop the old broadcast
+/// (if any) and start a new one; if not free, stop broadcasting and report conflict.
+#[tauri::command]
+async fn set_tcp_port(
+    port: u16,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<BroadcastState, String> {
+    if port < 1024 || port == 1420 || port == 1421 {
+        return Err("端口无效（需 1024–65535，且不能是 1420/1421）".to_string());
+    }
+    {
+        let mut config = state.config.lock().await;
+        config.tcp_port = Some(port);
+        storage_json::save_config(&config);
+    }
+
+    // Stop any existing broadcast before (re)starting on the new port.
+    if let Some(old) = state.broadcast_handles.lock().await.take() {
+        stop_broadcast(old);
+    }
+
+    let new_state = if direct::is_port_available(port) {
+        match start_broadcast(&app, port, true, true).await {
+            Ok(handles) => {
+                *state.broadcast_handles.lock().await = Some(handles);
+                BroadcastState::Active { port }
+            }
+            Err(e) => {
+                tracing::error!("start_broadcast failed: {e}");
+                BroadcastState::Inactive { port, reason: e }
+            }
+        }
+    } else {
+        tracing::warn!("port {} occupied, browse-only", port);
+        match start_broadcast(&app, port, false, false).await {
+            Ok(handles) => {
+                *state.broadcast_handles.lock().await = Some(handles);
+            }
+            Err(e) => {
+                tracing::error!("browse-only start failed: {e}");
+            }
+        }
+        BroadcastState::PortConflict { port }
+    };
+
+    *state.broadcast_state.lock().await = new_state.clone();
+    let _ = app.emit("broadcast-state-changed", &new_state);
+    Ok(new_state)
+}
+
+#[tauri::command]
+async fn get_broadcast_state(state: tauri::State<'_, AppState>) -> Result<BroadcastState, String> {
+    Ok(state.broadcast_state.lock().await.clone())
 }
 
 #[tauri::command]
@@ -1740,6 +2111,7 @@ async fn get_shell_bootstrap(state: tauri::State<'_, AppState>) -> Result<ShellB
 
     let connected_peers = state.connections.lock().await.connected_peers();
     let pending_connection_request = state.pending_connection_request.lock().await.clone();
+    let broadcast_state = state.broadcast_state.lock().await.clone();
 
     Ok(ShellBootstrapPayload {
         ui_settings,
@@ -1747,6 +2119,7 @@ async fn get_shell_bootstrap(state: tauri::State<'_, AppState>) -> Result<ShellB
         pairing_code,
         connected_peers,
         pending_connection_request,
+        broadcast_state,
     })
 }
 
@@ -2415,6 +2788,123 @@ fn load_or_create_key_pair(config: &mut AppConfig) -> KeyPair {
     kp
 }
 
+/// Resolve the active instance directory before logging initializes.
+///
+/// Order: reuse an existing `<peer_id>/` dir -> migrate legacy flat config ->
+/// create a fresh identity. Returns the instance paths, the key pair, and the
+/// loaded (or default) config so `run()` can continue without re-loading.
+fn bootstrap_instance() -> (crate::storage::paths::InstancePaths, KeyPair, AppConfig) {
+    use crate::storage::paths;
+
+    let root = paths::data_root();
+    let _ = std::fs::create_dir_all(&root);
+
+    if let Some(peer_id) = paths::scan_instance_dirs(&root) {
+        let instance = paths::InstancePaths::new(&peer_id);
+        let _ = instance.ensure_dir();
+        let mut config = storage_json::load_config_at(&instance.config_path());
+        let key_pair = load_or_create_key_pair(&mut config);
+        eprintln!("[bootstrap] using instance {peer_id}");
+        return (instance, key_pair, config);
+    }
+
+    let legacy = paths::legacy_config_path();
+    if legacy.exists() {
+        let mut config = storage_json::load_config_at(&legacy);
+        let key_pair = load_or_create_key_pair(&mut config);
+        let peer_id = key_pair.fingerprint();
+        let instance = paths::InstancePaths::new(&peer_id);
+        let _ = instance.ensure_dir();
+        // Persist migrated config immediately so data lands even if later steps fail.
+        storage_json::save_config_at(&config, &instance.config_path());
+        if let Some(legacy_parent) = legacy.parent() {
+            paths::migrate_history_thumbs(legacy_parent, &instance.dir);
+        }
+        eprintln!("[bootstrap] migrated legacy config into instance {peer_id}");
+        return (instance, key_pair, config);
+    }
+
+    let mut config = AppConfig::default();
+    let key_pair = load_or_create_key_pair(&mut config);
+    let peer_id = key_pair.fingerprint();
+    let instance = paths::InstancePaths::new(&peer_id);
+    let _ = instance.ensure_dir();
+    eprintln!("[bootstrap] created fresh instance {peer_id}");
+    (instance, key_pair, config)
+}
+
+/// Migrate legacy inline base64 and legacy `history_thumbs/`/`history_images/` refs
+/// into unified `history_media/` files with `media_ref`. Type-icon thumbnails are
+/// dropped (the frontend renders type icons now).
+fn migrate_history_media(config: &mut AppConfig) {
+    if let Some(parent) = storage::json::config_path().parent() {
+        let moved = storage::history_media::migrate_legacy_dir(parent);
+        if moved > 0 {
+            tracing::info!("migrated {moved} legacy media files into history_media/");
+        }
+    }
+
+    let mut migrated = 0;
+    if let Some(history) = config.clipboard_history.as_mut() {
+        migrated += migrate_media_refs(history);
+    }
+
+    let mut history = storage::history::load_history();
+    if !history.is_empty() {
+        let n = migrate_media_refs(&mut history);
+        if n > 0 {
+            storage::history::save_history(&history);
+            migrated += n;
+        }
+    }
+
+    if migrated > 0 {
+        tracing::info!("migrated {migrated} history media refs");
+    }
+}
+
+fn migrate_media_refs(history: &mut [ClipboardHistoryEntry]) -> usize {
+    let mut count = 0;
+    for entry in history.iter_mut() {
+        if let Some(data_url) = entry.image_data_url.take() {
+            if let Ok(png_bytes) = clipboard::image::png_bytes_from_data_url(&data_url) {
+                if let Ok(reference) = storage::history_media::write_media(&entry.id, &png_bytes) {
+                    entry.media_ref = Some(reference);
+                    count += 1;
+                }
+            }
+        }
+        if entry.media_ref.is_none() {
+            if let Some(image_ref) = entry.image_ref.take() {
+                entry.media_ref = Some(rewrite_media_ref(&image_ref));
+                count += 1;
+            }
+        }
+        if entry.media_ref.is_none() && entry.preview_kind.as_deref() != Some("icon") {
+            if let Some(thumbnail_ref) = entry.thumbnail_ref.take() {
+                entry.media_ref = Some(rewrite_media_ref(&thumbnail_ref));
+                count += 1;
+            }
+        }
+        entry.thumbnail_ref = None;
+    }
+    count
+}
+
+fn rewrite_media_ref(legacy: &str) -> String {
+    let name = legacy.rsplit('/').next().unwrap_or(legacy);
+    format!("history_media/{name}")
+}
+
+/// Move `clipboard_history` out of config into a standalone `history.json`,
+/// so config carries only settings (no user content).
+fn migrate_history_to_file(config: &mut AppConfig) {
+    if let Some(history) = config.clipboard_history.take() {
+        storage::history::save_history(&history);
+        tracing::info!("migrated clipboard history to history.json ({} entries)", history.len());
+    }
+}
+
 async fn finalize_incoming_connection(
     conn: network::direct::DirectConnection,
     initiator_name: String,
@@ -2743,26 +3233,38 @@ async fn handle_incoming_connection(
         .await = None;
 }
 
-fn init_tracing() {
-    use tracing_subscriber::EnvFilter;
+#[tauri::command]
+async fn get_diagnostic_settings(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.config.lock().await.verbose_log.unwrap_or(false))
+}
 
-    // Dev builds hide mdns-sd interface noise on multi-NIC hosts; override via RUST_LOG.
-    let default_filter = if cfg!(debug_assertions) {
-        "info,mdns_sd=off"
-    } else {
-        "info"
-    };
-
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(default_filter)),
-        )
-        .init();
+#[tauri::command]
+async fn save_diagnostic_settings(
+    state: tauri::State<'_, AppState>,
+    verbose_log: bool,
+) -> Result<bool, String> {
+    {
+        let mut config = state.config.lock().await;
+        config.verbose_log = Some(verbose_log);
+        storage_json::save_config(&config);
+    }
+    logging::set_verbose(verbose_log);
+    tracing::info!(target: "logging", verbose = verbose_log, "diagnostic verbosity updated");
+    Ok(verbose_log)
 }
 
 pub fn run() {
-    init_tracing();
+    // Resolve the instance directory (migrating legacy data on first run of the
+    // new layout) before logging so log_dir/staging/thumbs target the instance.
+    let (instance, key_pair, mut config) = bootstrap_instance();
+    crate::storage::paths::set_instance(instance);
+
+    // File-rotated, non-blocking logging; guard flushes the writer on process exit.
+    let _log_guard = logging::init();
+    tracing::info!(
+        "instance dir: {}",
+        crate::storage::paths::current_config_path().display()
+    );
 
     match storage::staging::gc_staging() {
         Ok(removed) if removed > 0 => tracing::info!("staging GC removed {removed} expired item(s)"),
@@ -2770,12 +3272,23 @@ pub fn run() {
         _ => {}
     }
 
-    let mut config = storage_json::load_config();
     config.device_name = normalize_stored_device_name(&config.device_name);
     normalize_trusted_peers(&mut config);
-
-    let key_pair = load_or_create_key_pair(&mut config);
+    // Migrate legacy inline image base64 and legacy media dirs into history_media/.
+    migrate_history_media(&mut config);
+    // Move clipboard_history out of config into history.json (config stays small).
+    migrate_history_to_file(&mut config);
+    // key_pair already resolved in bootstrap_instance; persist normalized config.
     storage_json::save_config(&config);
+
+    // GC orphan media files not referenced by history.
+    let media_refs: Vec<String> = storage::history::load_history()
+        .iter()
+        .filter_map(|e| e.media_ref.clone())
+        .collect();
+    storage::history_media::gc_orphans(&media_refs);
+
+    logging::set_verbose(config.verbose_log.unwrap_or(false));
 
     let silent_tray_startup = config.silent_start.unwrap_or(false);
     let mut context = tauri::generate_context!();
@@ -2819,6 +3332,11 @@ pub fn run() {
         pending_responder_submit_tx: Arc::new(Mutex::new(None)),
         main_window_ui_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         main_window_reveal_steal_focus: Arc::new(std::sync::Mutex::new(None)),
+        broadcast_state: Arc::new(Mutex::new(BroadcastState::Inactive {
+            port: tcp_port,
+            reason: "starting".to_string(),
+        })),
+        broadcast_handles: Arc::new(Mutex::new(None)),
     };
 
     tauri::Builder::default()
@@ -2892,229 +3410,46 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            let app_key_pair = app.state::<AppState>().key_pair.clone();
             let app_handle = app.handle().clone();
-            let device_name = normalize_stored_device_name(&app.state::<AppState>().config.blocking_lock().device_name);
-            let peer_id = key_pair.fingerprint();
-            let lan_devices = app.state::<AppState>().lan_devices.clone();
             let clipboard_history = app.state::<AppState>().clipboard_history.clone();
-            let pending_accept_tx = app.state::<AppState>().pending_accept_tx.clone();
-            let pending_reject_tx = app.state::<AppState>().pending_reject_tx.clone();
+            let config = app.state::<AppState>().config.clone();
             let connections = app.state::<AppState>().connections.clone();
             let transfer_slots = app.state::<AppState>().transfer_slots.clone();
-            let connection_generation = app.state::<AppState>().connection_generation.clone();
-            let config = app.state::<AppState>().config.clone();
 
-            let (discovery_tx, mut discovery_rx) = mpsc::unbounded_channel::<DiscoveryEvent>();
-
-            match discovery::start_discovery(&device_name, &peer_id, tcp_port, discovery_tx) {
-                Ok(daemon) => {
-                    std::thread::spawn(move || {
-                        let _daemon = daemon;
-                        loop {
-                            std::thread::sleep(std::time::Duration::from_secs(3600));
-                        }
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("Failed to start mDNS discovery: {}", e);
-                }
-            }
-
-            {
-                let lan_devices = lan_devices.clone();
-                let app_handle = app_handle.clone();
-                let verify_key_pair = app_key_pair.clone();
-                let verify_cooldown = app.state::<AppState>().peer_offline_cooldown.clone();
-                let auto_connect_deps = auto_connect::AutoConnectDeps {
-                    config: config.clone(),
-                    key_pair: app_key_pair.clone(),
-                    connections: connections.clone(),
-                    connection_generation: connection_generation.clone(),
-                    clip_tx: clip_tx.clone(),
-                    pending_initiator: app.state::<AppState>().pending_initiator.clone(),
-                    pending_outbound: app.state::<AppState>().pending_outbound.clone(),
-                    outbound_abort: app.state::<AppState>().outbound_abort.clone(),
-                    outbound_handshake_active: app
-                        .state::<AppState>()
-                        .outbound_handshake_active
-                        .clone(),
-                    pending_connection_request: app.state::<AppState>().pending_connection_request.clone(),
-                    tcp_port,
-                };
-                tauri::async_runtime::spawn(async move {
-                    while let Some(event) = discovery_rx.recv().await {
-                        match event {
-                            DiscoveryEvent::Added(candidate) => {
-                                let verify_key_pair = verify_key_pair.clone();
-                                let verify_cooldown = verify_cooldown.clone();
-                                let verify_lan_devices = lan_devices.clone();
-                                let verify_app = app_handle.clone();
-                                let auto_connect_deps = auto_connect_deps.clone();
-                                tauri::async_runtime::spawn(async move {
-                                    if is_peer_in_offline_cooldown(&verify_cooldown, &candidate.peer_id)
-                                        .await
-                                    {
-                                        return;
-                                    }
-                                    let Some(querier_peer_id) =
-                                        local_querier_peer_id(&verify_key_pair).await
-                                    else {
-                                        return;
-                                    };
-                                    let probe_ports =
-                                        app_profile::tcp_probe_port_candidates(tcp_port);
-                                    let Some(presence) = direct::probe_planarclip_presence(
-                                        &candidate.ip,
-                                        &probe_ports,
-                                        &querier_peer_id,
-                                        Some(&candidate.peer_id),
-                                        LAN_PROBE_TIMEOUT,
-                                    )
-                                    .await
-                                    else {
-                                        return;
-                                    };
-
-                                    let mut confirmed = candidate;
-                                    apply_presence_probe(&mut confirmed, &presence);
-                                    tracing::info!(
-                                        "LAN device confirmed: {} ({}) via presence probe",
-                                        confirmed.name,
-                                        confirmed.ip
-                                    );
-                                    if !upsert_presence_confirmed_device(
-                                        &verify_lan_devices,
-                                        confirmed.clone(),
-                                        &verify_app,
-                                    )
-                                    .await
-                                    {
-                                        return;
-                                    }
-
-                                    auto_connect::maybe_auto_connect_discovered_device(
-                                        &auto_connect_deps,
-                                        &verify_app,
-                                        &confirmed,
-                                    )
-                                    .await;
-                                });
-                            }
-                            DiscoveryEvent::Removed { service_fullname } => {
-                                let mut devices = lan_devices.lock().await;
-                                let before = devices.len();
-                                devices.retain(|d| !lan_device_matches_removal(d, &service_fullname));
-                                if devices.len() != before {
-                                    tracing::info!("LAN device removed: {}", service_fullname);
-                                    let updated = devices.clone();
-                                    drop(devices);
-                                    let _ = app_handle.emit("lan-devices-changed", &updated);
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-
-            {
-                let probe_lan_devices = lan_devices.clone();
-                let probe_connections = connections.clone();
-                let probe_config = config.clone();
-                let probe_key_pair = app_key_pair.clone();
-                let probe_cooldown = app.state::<AppState>().peer_offline_cooldown.clone();
-                let probe_app_handle = app_handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(3)).await;
-                    loop {
-                        refresh_lan_presence(
-                            &probe_config,
-                            &probe_key_pair,
-                            &probe_lan_devices,
-                            &probe_connections,
-                            &probe_cooldown,
-                            tcp_port,
-                            &probe_app_handle,
-                        )
-                        .await;
-                        tokio::time::sleep(LAN_PROBE_INTERVAL).await;
-                    }
-                });
-            }
-
-            {
-                let startup_app_handle = app_handle.clone();
-                let startup_deps = auto_connect::AutoConnectDeps {
-                    config: config.clone(),
-                    key_pair: app.state::<AppState>().key_pair.clone(),
-                    connections: connections.clone(),
-                    connection_generation: connection_generation.clone(),
-                    clip_tx: clip_tx.clone(),
-                    pending_initiator: app.state::<AppState>().pending_initiator.clone(),
-                    pending_outbound: app.state::<AppState>().pending_outbound.clone(),
-                    outbound_abort: app.state::<AppState>().outbound_abort.clone(),
-                    outbound_handshake_active: app
-                        .state::<AppState>()
-                        .outbound_handshake_active
-                        .clone(),
-                    pending_connection_request: app.state::<AppState>().pending_connection_request.clone(),
-                    tcp_port,
-                };
-                let startup_lan_devices = lan_devices.clone();
-                tauri::async_runtime::spawn(async move {
-                    auto_connect::auto_connect_trusted_on_startup(
-                        startup_deps,
-                        startup_app_handle,
-                        startup_lan_devices,
-                    )
-                    .await;
-                });
-            }
-
-            let (listener_tx, mut listener_rx) = mpsc::unbounded_channel::<ListenerEvent>();
-
-            let presence_responder = direct::PresenceResponder {
-                config: config.clone(),
-                key_pair: app_key_pair.clone(),
-            };
-
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = direct::run_listener(tcp_port, presence_responder, listener_tx).await {
-                    tracing::error!("TCP listener error: {}", e);
-                }
-            });
-
+            // Start mDNS + TCP listener if the configured port is free; otherwise
+            // stay silent and prompt the user to pick another port.
             {
                 let app_handle = app_handle.clone();
-                let connections_listener = connections.clone();
-                let connection_generation_listener = connection_generation.clone();
-                let clip_tx = clip_tx.clone();
-                let pending_accept_tx = pending_accept_tx.clone();
-                let pending_reject_tx = pending_reject_tx.clone();
-                let key_pair = key_pair.clone();
-                let config = config.clone();
-
                 tauri::async_runtime::spawn(async move {
-                    while let Some(event) = listener_rx.recv().await {
-                        match event {
-                            ListenerEvent::Incoming(req) => {
-                                handle_incoming_connection(
-                                    req,
-                                    key_pair.clone(),
-                                    config.clone(),
-                                    app_handle.clone(),
-                                    connections_listener.clone(),
-                                    connection_generation_listener.clone(),
-                                    clip_tx.clone(),
-                                    pending_accept_tx.clone(),
-                                    pending_reject_tx.clone(),
-                                )
-                                .await;
+                    let state = app_handle.state::<AppState>();
+                    if direct::is_port_available(tcp_port) {
+                        match start_broadcast(&app_handle, tcp_port, true, true).await {
+                            Ok(handles) => {
+                                *state.broadcast_handles.lock().await = Some(handles);
+                                *state.broadcast_state.lock().await =
+                                    BroadcastState::Active { port: tcp_port };
+                            }
+                            Err(e) => {
+                                tracing::error!("start_broadcast failed: {e}");
+                                *state.broadcast_state.lock().await =
+                                    BroadcastState::Inactive { port: tcp_port, reason: e };
                             }
                         }
+                    } else {
+                        tracing::warn!("port {} occupied, browse-only", tcp_port);
+                        if let Ok(handles) =
+                            start_broadcast(&app_handle, tcp_port, false, false).await
+                        {
+                            *state.broadcast_handles.lock().await = Some(handles);
+                        }
+                        *state.broadcast_state.lock().await =
+                            BroadcastState::PortConflict { port: tcp_port };
                     }
+                    let bs = state.broadcast_state.lock().await.clone();
+                    let _ = app_handle.emit("broadcast-state-changed", &bs);
                 });
             }
+
 
             {
                 let app_handle = app_handle.clone();
@@ -3169,7 +3504,7 @@ pub fn run() {
                                             history.iter_mut().find(|item| item.id == find_entry_id)
                                         {
                                             item.preview_kind = Some(preview.kind.to_string());
-                                            item.thumbnail_ref = Some(preview.thumbnail_ref);
+                                            item.media_ref = preview.media_ref;
                                         }
                                         history.clone()
                                     };
@@ -3216,12 +3551,17 @@ pub fn run() {
                             monitor.run().await;
                         },
                         async move {
+                            let provider = std::sync::Arc::new(
+                                sync::out::RegistryOutProvider::new(
+                                    connections_bg.clone(),
+                                    app_handle_bg.clone(),
+                                ),
+                            );
                             let engine = sync::engine::SyncEngine::new(
                                 clip_rx,
-                                connections_bg,
+                                provider,
                                 transfer_slots_bg,
                                 config_bg,
-                                app_handle_bg,
                             );
                             engine.run().await;
                         },
@@ -3259,7 +3599,10 @@ pub fn run() {
             copy_clipboard_history_entry,
             send_clipboard_history_entry,
             clear_clipboard_history,
-            resolve_history_thumbnail,
+            read_history_media,
+            read_type_icon,
+            set_tcp_port,
+            get_broadcast_state,
             get_pending_connection_request,
             save_ui_settings,
             pair,
@@ -3276,6 +3619,10 @@ pub fn run() {
             timeout_incoming_connection,
             disconnect,
             disconnect_peer,
+            logging::frontend_log,
+            logging::open_log_dir,
+            get_diagnostic_settings,
+            save_diagnostic_settings,
         ])
         .build(context)
         .expect("error while building tauri application")
