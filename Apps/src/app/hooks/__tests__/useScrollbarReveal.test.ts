@@ -30,7 +30,7 @@ describe("useScrollbarReveal", () => {
   });
 
   it("root 为 null 时不注册事件", () => {
-    const { result } = renderHook(() => useScrollbarReveal(null));
+    renderHook(() => useScrollbarReveal(null));
     // 无副作用，不报错
   });
 
@@ -93,7 +93,7 @@ describe("useScrollbarReveal", () => {
   });
 
   it("卸载时清除事件监听和定时器", () => {
-    const { el, listeners } = createMockElement();
+    const { el } = createMockElement();
     const { unmount } = renderHook(() => useScrollbarReveal(el));
 
     unmount();

@@ -46,10 +46,10 @@ describe("useThemeTransition", () => {
     const onComplete = vi.fn();
 
     act(() => {
-      result.current.playBackgroundTransition("dark", { id: "cyan", light: { primary: "#fff" }, dark: { primary: "#000" } }, onComplete);
+      result.current.playBackgroundTransition("dark", { id: "cyan", label: "青色", light: { primary: "#fff", accent: "#0c4a6e", ring: "#fff" }, dark: { primary: "#000", accent: "#0e7490", ring: "#000" } }, onComplete);
     });
     act(() => {
-      result.current.playBackgroundTransition("light", { id: "cyan", light: { primary: "#fff" }, dark: { primary: "#000" } }, vi.fn());
+      result.current.playBackgroundTransition("light", { id: "cyan", label: "青色", light: { primary: "#fff", accent: "#0c4a6e", ring: "#fff" }, dark: { primary: "#000", accent: "#0e7490", ring: "#000" } }, vi.fn());
     });
 
     expect(onComplete).not.toHaveBeenCalled();
@@ -60,7 +60,7 @@ describe("useThemeTransition", () => {
     const onComplete = vi.fn();
 
     act(() => {
-      result.current.playBackgroundTransition("dark", { id: "cyan", light: { primary: "#fff" }, dark: { primary: "#000" } }, onComplete);
+      result.current.playBackgroundTransition("dark", { id: "cyan", label: "青色", light: { primary: "#fff", accent: "#0c4a6e", ring: "#fff" }, dark: { primary: "#000", accent: "#0e7490", ring: "#000" } }, onComplete);
     });
 
     expect(result.current.transitionState?.kind).toBe("background");
@@ -82,7 +82,7 @@ describe("useThemeTransition", () => {
   it("playThemeTransition 完整流程：expand → finalize", () => {
     const { result } = renderHook(() => useThemeTransition());
     const onComplete = vi.fn();
-    const theme = { id: "violet", light: { primary: "#7c3aed" }, dark: { primary: "#a78bfa" } };
+    const theme = { id: "violet", label: "紫色", light: { primary: "#7c3aed", accent: "#5b21b6", ring: "#7c3aed" }, dark: { primary: "#a78bfa", accent: "#7c3aed", ring: "#a78bfa" } };
 
     act(() => {
       result.current.playThemeTransition(theme, "dark", true, "palette", onComplete);
