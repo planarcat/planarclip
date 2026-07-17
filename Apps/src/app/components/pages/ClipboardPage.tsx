@@ -26,7 +26,7 @@ function ClipPreview({
   clip: ClipEntry;
   onActionMessage?: (message: string) => void;
 }) {
-  if (clip.type === "image" && clip.imagePreviewUrl) {
+  if (clip.type === "image" && clip.mediaRef) {
     return (
       <ClipImagePreview
         clip={clip}
@@ -64,7 +64,7 @@ function ClipPreviewGrid({
 
 
 
-  if (clip.type === "image" && clip.imagePreviewUrl) {
+  if (clip.type === "image" && clip.mediaRef) {
     return <ClipImagePreview clip={clip} variant="grid" onActionMessage={onActionMessage} />;
   }
 

@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronUp, File } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { ClipEntry } from "../../types";
-import { resolveHistoryThumbnailUrl } from "../../utils/clipboard";
+import { fileExtension, useHistoryMediaUrl, useTypeIconUrl } from "../../utils/clipboard";
 import { SURFACE_REVEAL_BG } from "../../constants/surfaceReveal";
 import { ClipTypeIcon } from "./ClipTypeIcon";
 
@@ -60,40 +60,37 @@ function FilePreviewImage({
 
 export function FileClipPreview({ clip, variant = "list" }: FileClipPreviewProps) {
   const [expanded, setExpanded] = useState(false);
-  const [thumbnailUrl, setThumbnailUrl] = useState<string | undefined>();
+  const mediaUrl = useHistoryMediaUrl(clip.mediaRef);
+  const iconExt =
+    clip.previewKind === "icon"
+      ? fileExtension(clip.fileNames?.[0] ?? clip.content)
+      : undefined;
+  const iconUrl = useTypeIconUrl(iconExt);
 
   const fileCount = clip.fileCount ?? clip.fileNames?.length ?? 1;
   const isMultiFile = fileCount > 1;
   const fileNames = clip.fileNames ?? (isMultiFile ? [] : [clip.content]);
   const canExpand = isMultiFile && fileNames.length > 0;
 
-  useEffect(() => {
-    if (!clip.thumbnailRef) {
-      setThumbnailUrl(undefined);
-      return;
-    }
-
-    let cancelled = false;
-    resolveHistoryThumbnailUrl(clip.thumbnailRef).then((url) => {
-      if (!cancelled) {
-        setThumbnailUrl(url);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [clip.thumbnailRef]);
-
   const preview = useMemo(() => {
-    if (thumbnailUrl) {
+    if (clip.previewKind === "icon") {
+      if (iconUrl) {
+        return (
+          <FilePreviewImage
+            url={iconUrl}
+            alt={clip.content}
+            compact={variant === "grid"}
+          />
+        );
+      }
+      return <ClipTypeIcon type="file" />;
+    }
+    if (mediaUrl) {
       return (
         <FilePreviewImage
-          url={thumbnailUrl}
+          url={mediaUrl}
           alt={clip.content}
           compact={variant === "grid"}
-          isIcon={clip.previewKind === "icon"}
-          onError={() => setThumbnailUrl(undefined)}
         />
       );
     }
@@ -111,7 +108,7 @@ export function FileClipPreview({ clip, variant = "list" }: FileClipPreviewProps
     }
 
     return null;
-  }, [clip.content, clip.previewKind, isMultiFile, thumbnailUrl, variant]);
+  }, [clip.content, clip.previewKind, isMultiFile, mediaUrl, iconUrl, variant]);
 
   if (isMultiFile) {
     return (
