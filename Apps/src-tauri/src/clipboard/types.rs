@@ -107,6 +107,12 @@ pub struct ClipboardHistoryEntry {
     pub size_label: Option<String>,
     #[serde(default)]
     pub image_data_url: Option<String>,
+    /// File reference (under `history_images/`) for image entries; replaces inline base64.
+    #[serde(default)]
+    pub image_ref: Option<String>,
+    /// Unified media reference (under `history_media/`) for image originals and file content thumbnails.
+    #[serde(default)]
+    pub media_ref: Option<String>,
     #[serde(default)]
     pub file_count: Option<u32>,
     #[serde(default)]

@@ -1,7 +1,7 @@
-use crate::app_profile::CONFIG_FILE_NAME;
 use crate::clipboard::types::ClipboardHistoryEntry;
+use crate::storage::paths;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct AppConfig {
@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub trusted_peers: Option<Vec<TrustedPeerData>>,
     pub ui_color_scheme: Option<String>,
     pub ui_theme_color: Option<String>,
+    /// Legacy field kept only to migrate old configs into `history.json`; new writes go to history.json.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub clipboard_history: Option<Vec<ClipboardHistoryEntry>>,
     pub launch_at_startup: Option<bool>,
     pub silent_start: Option<bool>,
@@ -60,30 +62,17 @@ pub struct TrustedPeerData {
 }
 
 pub fn config_path() -> PathBuf {
-    let mut path = dirs_next().unwrap_or_else(|| PathBuf::from("."));
-    path.push(CONFIG_FILE_NAME);
-    path
+    paths::current_config_path()
 }
 
-fn dirs_next() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("APPDATA").ok().map(PathBuf::from)
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::env::var("HOME").ok().map(|h| PathBuf::from(h).join("Library/Application Support"))
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config"))
-    }
-}
-
+#[allow(dead_code)]
 pub fn load_config() -> AppConfig {
-    let path = config_path();
+    load_config_at(&config_path())
+}
+
+pub fn load_config_at(path: &Path) -> AppConfig {
     if path.exists() {
-        std::fs::read_to_string(&path)
+        std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default()
@@ -93,12 +82,15 @@ pub fn load_config() -> AppConfig {
 }
 
 pub fn save_config(config: &AppConfig) {
-    let path = config_path();
+    save_config_at(config, &config_path());
+}
+
+pub fn save_config_at(config: &AppConfig, path: &Path) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Ok(json) = serde_json::to_string_pretty(config) {
-        let _ = std::fs::write(&path, json);
+        let _ = std::fs::write(path, json);
     }
 }
 

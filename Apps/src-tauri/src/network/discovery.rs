@@ -30,30 +30,35 @@ pub fn start_discovery(
     device_name: &str,
     local_peer_id: &str,
     port: u16,
+    register_self: bool,
     event_tx: mpsc::UnboundedSender<DiscoveryEvent>,
 ) -> Result<ServiceDaemon, mdns_sd::Error> {
     let daemon = ServiceDaemon::new()?;
 
-    let local_ip = local_ip_for_mdns();
-    let host_name = hostname();
+    if register_self {
+        let local_ip = local_ip_for_mdns();
+        let host_name = hostname();
 
-    let service_info = mdns_sd::ServiceInfo::new(
-        MDNS_SERVICE_TYPE,
-        device_name,
-        &host_name,
-        &local_ip,
-        port,
-        &[("peer_id", local_peer_id), ("device_name", device_name)][..],
-    )?;
+        let service_info = mdns_sd::ServiceInfo::new(
+            MDNS_SERVICE_TYPE,
+            local_peer_id,
+            &host_name,
+            &local_ip,
+            port,
+            &[("peer_id", local_peer_id), ("device_name", device_name)][..],
+        )?;
 
-    daemon.register(service_info)?;
-    tracing::info!(
-        "mDNS registered: {} ({}) on {}:{}",
-        device_name,
-        MDNS_SERVICE_TYPE,
-        local_ip,
-        port
-    );
+        daemon.register(service_info)?;
+        tracing::info!(
+            "mDNS registered: {} ({}) on {}:{}",
+            device_name,
+            MDNS_SERVICE_TYPE,
+            local_ip,
+            port
+        );
+    } else {
+        tracing::info!("mDNS browse-only (port conflict, not registering self)");
+    }
 
     let browse_rx = daemon.browse(MDNS_SERVICE_TYPE)?;
     let tx = event_tx;

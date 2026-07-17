@@ -477,7 +477,7 @@ pub fn image_snapshot_from_single_file(files: &[ClipboardFileItem]) -> Option<Cl
     snapshot_from_png_bytes(png_bytes)
 }
 
-pub fn history_preview_for_files(files: &[ClipboardFileItem]) -> Option<String> {
+pub fn history_preview_for_files(files: &[ClipboardFileItem], entry_id: &str) -> Option<String> {
     if files.len() != 1 || !is_image_file_name(&files[0].file_name) {
         return None;
     }
@@ -499,7 +499,7 @@ pub fn history_preview_for_files(files: &[ClipboardFileItem]) -> Option<String> 
     let mut png_bytes = Vec::new();
     rgba.write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)
         .ok()?;
-    Some(png_data_url(&png_bytes))
+    crate::storage::history_media::write_media(entry_id, &png_bytes).ok()
 }
 
 pub fn history_summary_for_files(files: &[ClipboardFileItem]) -> String {

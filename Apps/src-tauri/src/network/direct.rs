@@ -77,6 +77,11 @@ pub async fn tcp_connect(ip: &str, port: u16) -> Result<TcpStream, std::io::Erro
     Ok(stream)
 }
 
+/// Check whether a TCP port can be bound (i.e. is free for our listener).
+pub fn is_port_available(port: u16) -> bool {
+    std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
+}
+
 fn format_socket_addr(host: &str, port: u16) -> String {
     let trimmed = host.trim();
     if trimmed.contains(':') && !trimmed.starts_with('[') {
@@ -112,10 +117,6 @@ fn presence_reply_matches(
     else {
         return None;
     };
-
-    if service_profile != app_profile::service_profile_name() {
-        return None;
-    }
 
     if let Some(expected) = expected_peer_id {
         if peer_id != expected {
