@@ -58,8 +58,6 @@ export function DevicesPanel({
       <div className="space-y-2 p-3">
         {onlineDevices.length > 0 ? (
           onlineDevices.map((device) => {
-            const hostNameLabel = device.hostName?.trim();
-            const showHostName = Boolean(hostNameLabel && hostNameLabel.toLocaleLowerCase() !== device.name.trim().toLocaleLowerCase());
             const osLabel = device.os === "macos" ? "macOS" : "Windows";
             const isConnected = device.status === "connected";
             const disconnectTitle = `断开与 ${device.name} 的连接`;
@@ -84,7 +82,6 @@ export function DevicesPanel({
                       >
                         {device.name}
                       </p>
-                      {showHostName && <p className="mt-0.5 text-[13px] font-medium text-muted-foreground">主机名 {hostNameLabel}</p>}
                     </div>
                   </div>
                   {isConnected ? (

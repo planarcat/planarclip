@@ -69,10 +69,7 @@ function getOsLabel(device: Device) {
 }
 
 function getDeviceSubtitle(device: Device) {
-  const hostNameLabel = device.hostName?.trim();
-  return hostNameLabel && hostNameLabel.toLocaleLowerCase() !== device.name.trim().toLocaleLowerCase()
-    ? `主机名 ${hostNameLabel}`
-    : getOsLabel(device);
+  return getOsLabel(device);
 }
 
 function formatActivityMeta(device: Device) {
