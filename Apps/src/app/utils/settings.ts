@@ -20,8 +20,8 @@ function previewDefaultDeviceName() {
   return hostName || DEFAULT_DEVICE_NAME;
 }
 
-export function normalizeDeviceName(value?: string) {
-  const trimmed = value?.trim();
+export function normalizeDeviceName(value?: unknown) {
+  const trimmed = (typeof value === "string" ? value : "").trim();
   if (!trimmed || trimmed === DEFAULT_DEVICE_NAME || trimmed.toLowerCase() === "my device") {
     return previewDefaultDeviceName();
   }

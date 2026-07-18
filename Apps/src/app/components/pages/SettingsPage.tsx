@@ -1,5 +1,5 @@
-import { FolderOpen, Moon, RotateCcw, Save, Sun, SunMoon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { FolderOpen, Moon, RotateCcw, Sun, SunMoon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { APP_DISPLAY_NAME } from "../../constants/app";
 import { CLIPBOARD_HISTORY_LIMIT_OPTIONS } from "../../constants/clipboard";
 import { MAX_MAX_FILE_MB, MIN_MAX_FILE_MB } from "../../constants/sync";
@@ -145,6 +145,19 @@ export function SettingsPage({
     onMaxFileMbChange(nextValue);
   };
 
+  // Auto-save device name (debounced) -- no save button needed.
+  const onDeviceNameSaveRef = useRef(onDeviceNameSave);
+  onDeviceNameSaveRef.current = onDeviceNameSave;
+  const isFirstDeviceNameRender = useRef(true);
+  useEffect(() => {
+    if (isFirstDeviceNameRender.current) {
+      isFirstDeviceNameRender.current = false;
+      return;
+    }
+    const timer = setTimeout(() => onDeviceNameSaveRef.current(), 600);
+    return () => clearTimeout(timer);
+  }, [deviceName]);
+
   const settingRows: Array<{
     label: string;
     desc: string;
@@ -173,33 +186,22 @@ export function SettingsPage({
               </div>
               <SettingBadge availability="editable" />
             </div>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={deviceName}
-                maxLength={24}
-                placeholder="我的设备"
-                autoComplete="off"
-                disabled={isSaving}
-                onChange={(event) => onDeviceNameChange(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    onDeviceNameSave();
-                  }
-                }}
-                className={`flex-1 ${SURFACE_REVEAL_TEXT_FIELD}`}
-              />
-              <button
-                onClick={onDeviceNameSave}
-                disabled={isSaving}
-                className={`flex shrink-0 items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground ${SURFACE_REVEAL_BG} hover:bg-[var(--button-primary-hover-bg)] disabled:cursor-not-allowed disabled:opacity-50`}
-                title={isSaving ? "正在保存" : "保存设备名称"}
-                type="button"
-              >
-                <Save size={14} />
-              </button>
-            </div>
+            <input
+              type="text"
+              value={deviceName}
+              maxLength={24}
+              placeholder="我的设备"
+              autoComplete="off"
+              disabled={isSaving}
+              onChange={(event) => onDeviceNameChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  onDeviceNameSave();
+                }
+              }}
+              className={`w-full ${SURFACE_REVEAL_TEXT_FIELD}`}
+            />
           </div>
 
           <div>
