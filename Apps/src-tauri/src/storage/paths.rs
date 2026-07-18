@@ -1,33 +1,27 @@
 //! Per-instance data directory resolution.
 //!
-//! All app data lives under `<data_root>/<peer_id>/` (config.json, logs/,
-//! staging/, history_thumbs/). The active instance is resolved once at startup
-//! (before logging) and stored process-global so legacy `config_path()` and the
-//! derived `log_dir()`/`staging_root()`/`thumbs_root()` callers stay compatible.
-//!
-//! When the instance is not initialized (e.g. unit tests scoping via env vars),
-//! paths fall back to the legacy flat layout under the platform data base.
+//! The instance id lives in the **install directory** (`<exe_dir>/config.json`,
+//! `{ "id": "<peer_id>" }`), set on first launch. App data lives under
+//! `<data_root>/<id>/` (config.json, logs/, staging/, history_media/, ...).
+//! Multiple install directories (dev build, copied prod, etc.) each get their
+//! own id and data directory -- no scanning, no accidental sharing.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::SystemTime;
-
-use crate::app_profile;
 
 const APP_DATA_DIR_NAME: &str = "PlanarClip";
 const CONFIG_FILE_NAME: &str = "config.json";
-const HISTORY_THUMBS_DIR_NAME: &str = "history_thumbs";
 
-/// Resolved paths for the active instance, keyed by peer id.
+/// Resolved paths for the active instance, keyed by id.
 #[derive(Clone, Debug)]
 pub struct InstancePaths {
     pub dir: PathBuf,
 }
 
 impl InstancePaths {
-    pub fn new(peer_id: &str) -> Self {
+    pub fn new(id: &str) -> Self {
         Self {
-            dir: data_root().join(peer_id),
+            dir: data_root().join(id),
         }
     }
 
@@ -60,79 +54,48 @@ fn instance_option() -> Option<InstancePaths> {
         .clone()
 }
 
-/// Current config path: instance path when initialized, else legacy flat path.
+/// Current config path: instance path when initialized, else a flat fallback.
 pub fn current_config_path() -> PathBuf {
     match instance_option() {
         Some(p) => p.config_path(),
-        None => legacy_config_path(),
+        None => platform_data_base().join(CONFIG_FILE_NAME),
     }
 }
 
-/// `<data_base>/PlanarClip/`.
+/// `<data_base>/PlanarClip/` -- shared root; each instance lives under `<id>/`.
 pub fn data_root() -> PathBuf {
     platform_data_base().join(APP_DATA_DIR_NAME)
 }
 
-/// Legacy flat config path (pre-instance layout), used for migration reads and
-/// as a fallback when the instance is not initialized.
-pub fn legacy_config_path() -> PathBuf {
-    platform_data_base().join(app_profile::CONFIG_FILE_NAME)
+/// Path to the install-directory config (`<exe_dir>/config.json`) holding the
+/// instance id. `None` if the exe path can't be resolved.
+pub fn install_config_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?.to_path_buf();
+    Some(dir.join(CONFIG_FILE_NAME))
 }
 
-/// Scan a directory for instance subdirectories named by peer id.
-/// Returns the most recently modified one, or `None` if there are none.
-pub fn scan_instance_dirs(root: &Path) -> Option<String> {
-    let entries = std::fs::read_dir(root).ok()?;
-    let mut dirs: Vec<(String, SystemTime)> = Vec::new();
-    for entry in entries.flatten() {
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !is_valid_peer_id_dir(&name) {
-            continue;
-        }
-        let modified = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-        dirs.push((name, modified));
-    }
-    if dirs.is_empty() {
-        return None;
-    }
-    // Most recently modified wins; `--instance` selection is a follow-up.
-    dirs.sort_by(|a, b| b.1.cmp(&a.1));
-    Some(dirs[0].0.clone())
+#[derive(serde::Deserialize)]
+struct InstallConfig {
+    #[serde(default)]
+    id: Option<String>,
 }
 
-/// A peer id is a 16-char lowercase hex string (blake3 prefix, see crypto/keys).
-fn is_valid_peer_id_dir(name: &str) -> bool {
-    name.len() == 16 && name.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+/// Read the instance id from the install-directory config.
+pub fn read_install_id() -> Option<String> {
+    let path = install_config_path()?;
+    let content = std::fs::read_to_string(&path).ok()?;
+    let cfg: InstallConfig = serde_json::from_str(&content).ok()?;
+    cfg.id.filter(|s| !s.is_empty())
 }
 
-/// Copy legacy `history_thumbs/` into the instance directory during migration.
-/// Staging and logs are not migrated (temporary / regenerated).
-pub fn migrate_history_thumbs(legacy_parent: &Path, instance_dir: &Path) {
-    let src = legacy_parent.join(HISTORY_THUMBS_DIR_NAME);
-    if !src.is_dir() {
-        return;
-    }
-    let dst = instance_dir.join(HISTORY_THUMBS_DIR_NAME);
-    if std::fs::create_dir_all(&dst).is_err() {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(&src) else {
+/// Write the instance id into the install-directory config (first launch).
+pub fn write_install_id(id: &str) {
+    let Some(path) = install_config_path() else {
         return;
     };
-    for entry in entries.flatten() {
-        let from = entry.path();
-        if !from.is_file() {
-            continue;
-        }
-        let to = dst.join(entry.file_name());
-        let _ = std::fs::copy(&from, &to);
-    }
+    let json = format!("{{\"id\":\"{id}\"}}");
+    let _ = std::fs::write(&path, json);
 }
 
 fn platform_data_base() -> PathBuf {
@@ -161,36 +124,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn peer_id_dir_validates_16_lowercase_hex() {
-        assert!(is_valid_peer_id_dir("0123456789abcdef"));
-        assert!(!is_valid_peer_id_dir("0123456789ABCDEF")); // uppercase rejected
-        assert!(!is_valid_peer_id_dir("short")); // wrong length
-        assert!(!is_valid_peer_id_dir(&"g".repeat(16))); // non-hex
-    }
-
-    #[test]
-    fn migrate_history_thumbs_copies_files() {
-        let src_parent = tempfile::tempdir().unwrap();
-        let src_thumbs = src_parent.path().join(HISTORY_THUMBS_DIR_NAME);
-        std::fs::create_dir_all(&src_thumbs).unwrap();
-        std::fs::write(src_thumbs.join("a.png"), b"data").unwrap();
-
-        let instance = tempfile::tempdir().unwrap();
-        migrate_history_thumbs(src_parent.path(), instance.path());
-
-        assert!(instance
-            .path()
-            .join(HISTORY_THUMBS_DIR_NAME)
-            .join("a.png")
-            .exists());
-    }
-
-    #[test]
-    fn migrate_history_thumbs_noop_when_missing() {
-        let src_parent = tempfile::tempdir().unwrap();
-        let instance = tempfile::tempdir().unwrap();
-        // No history_thumbs under src -> no panic, nothing copied.
-        migrate_history_thumbs(src_parent.path(), instance.path());
-        assert!(!instance.path().join(HISTORY_THUMBS_DIR_NAME).exists());
+    fn instance_paths_join_id() {
+        let p = InstancePaths::new("abc123");
+        assert!(p.dir.ends_with("abc123"));
+        assert!(p.config_path().ends_with(CONFIG_FILE_NAME));
     }
 }

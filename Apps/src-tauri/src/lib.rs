@@ -2796,40 +2796,27 @@ fn load_or_create_key_pair(config: &mut AppConfig) -> KeyPair {
 fn bootstrap_instance() -> (crate::storage::paths::InstancePaths, KeyPair, AppConfig) {
     use crate::storage::paths;
 
-    let root = paths::data_root();
-    let _ = std::fs::create_dir_all(&root);
+    let _ = std::fs::create_dir_all(paths::data_root());
 
-    if let Some(peer_id) = paths::scan_instance_dirs(&root) {
-        let instance = paths::InstancePaths::new(&peer_id);
+    // Existing install directory with an id -> use it.
+    if let Some(id) = paths::read_install_id() {
+        let instance = paths::InstancePaths::new(&id);
         let _ = instance.ensure_dir();
         let mut config = storage_json::load_config_at(&instance.config_path());
         let key_pair = load_or_create_key_pair(&mut config);
-        eprintln!("[bootstrap] using instance {peer_id}");
+        eprintln!("[bootstrap] using instance {id}");
         return (instance, key_pair, config);
     }
 
-    let legacy = paths::legacy_config_path();
-    if legacy.exists() {
-        let mut config = storage_json::load_config_at(&legacy);
-        let key_pair = load_or_create_key_pair(&mut config);
-        let peer_id = key_pair.fingerprint();
-        let instance = paths::InstancePaths::new(&peer_id);
-        let _ = instance.ensure_dir();
-        // Persist migrated config immediately so data lands even if later steps fail.
-        storage_json::save_config_at(&config, &instance.config_path());
-        if let Some(legacy_parent) = legacy.parent() {
-            paths::migrate_history_thumbs(legacy_parent, &instance.dir);
-        }
-        eprintln!("[bootstrap] migrated legacy config into instance {peer_id}");
-        return (instance, key_pair, config);
-    }
-
+    // First launch for this install directory: generate a new identity.
     let mut config = AppConfig::default();
     let key_pair = load_or_create_key_pair(&mut config);
-    let peer_id = key_pair.fingerprint();
-    let instance = paths::InstancePaths::new(&peer_id);
+    let id = key_pair.fingerprint();
+    paths::write_install_id(&id);
+    let instance = paths::InstancePaths::new(&id);
     let _ = instance.ensure_dir();
-    eprintln!("[bootstrap] created fresh instance {peer_id}");
+    storage_json::save_config_at(&config, &instance.config_path());
+    eprintln!("[bootstrap] created instance {id}");
     (instance, key_pair, config)
 }
 
