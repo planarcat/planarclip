@@ -2585,6 +2585,7 @@ async fn connect_lan(
             Ok("awaiting_code".into())
         }
         Err(e) => {
+            tracing::error!("connect_lan to {}:{} failed: {:?}", ip, port, e);
             emit_connection_failed(&app, &e);
             Err(e.user_message())
         }

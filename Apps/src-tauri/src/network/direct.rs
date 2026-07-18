@@ -817,12 +817,7 @@ pub async fn responder_verify_code(
                 return Err(HandshakeError::Cancelled);
             }
             _ = tokio::time::sleep(std::time::Duration::from_secs(PAIRING_CODE_WAIT_SECS)) => {
-                let new_code = generate_pairing_code();
-                {
-                    let mut guard = pairing_code.lock().await;
-                    *guard = new_code.clone();
-                }
-                on_code_rotated(new_code);
+                return Err(HandshakeError::Timeout);
             }
         }
     }
