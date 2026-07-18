@@ -20,7 +20,7 @@ describe("useConnectionSettings", () => {
       }),
     );
 
-    expect(result.current.autoConnectTrusted).toBe(false);
+    expect(result.current.autoConnectTrusted).toBe(true);
     expect(result.current.connectionSettingsLoaded).toBe(true);
     expect(result.current.isSavingConnectionSettings).toBe(false);
     expect(callCommand).not.toHaveBeenCalled();
@@ -57,7 +57,7 @@ describe("useConnectionSettings", () => {
     await waitFor(() => {
       expect(result.current.connectionSettingsLoaded).toBe(true);
     });
-    expect(result.current.autoConnectTrusted).toBe(false);
+    expect(result.current.autoConnectTrusted).toBe(true);
   });
 
   it("浏览器预览模式：handleAutoConnectTrustedChange 仅更新本地状态", async () => {

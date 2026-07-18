@@ -171,6 +171,14 @@ async fn start_broadcast(app: &tauri::AppHandle, port: u16, register_self: bool,
                             if is_peer_in_offline_cooldown(&verify_cooldown, &candidate.peer_id)
                                 .await
                             {
+                                // Peer was offline recently; skip presence probe but still
+                                // attempt auto-connect (mDNS announce = likely back online).
+                                auto_connect::maybe_auto_connect_discovered_device(
+                                    &auto_connect_deps,
+                                    &verify_app,
+                                    &candidate,
+                                )
+                                .await;
                                 return;
                             }
                             let Some(querier_peer_id) =
@@ -955,7 +963,7 @@ fn startup_settings_from_config(config: &AppConfig) -> StartupSettingsPayload {
 
 fn connection_settings_from_config(config: &AppConfig) -> ConnectionSettingsPayload {
     ConnectionSettingsPayload {
-        auto_connect_trusted: config.auto_connect_trusted.unwrap_or(false),
+        auto_connect_trusted: config.auto_connect_trusted.unwrap_or(true),
     }
 }
 

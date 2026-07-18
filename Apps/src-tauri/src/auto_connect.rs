@@ -36,7 +36,7 @@ pub struct AutoConnectDeps {
 }
 
 pub fn auto_connect_trusted_enabled(config: &AppConfig) -> bool {
-    config.auto_connect_trusted.unwrap_or(false)
+    config.auto_connect_trusted.unwrap_or(true)
 }
 
 pub async fn can_initiate_outbound(deps: &AutoConnectDeps) -> bool {

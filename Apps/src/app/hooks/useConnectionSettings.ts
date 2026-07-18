@@ -3,7 +3,7 @@ import type { CommandExecutor, ConnectionSettingsPayload } from "../types";
 import { normalizeUserMessage } from "../utils/message";
 
 const DEFAULT_CONNECTION_SETTINGS: ConnectionSettingsPayload = {
-  auto_connect_trusted: false,
+  auto_connect_trusted: true,
 };
 
 type UseConnectionSettingsOptions = {
