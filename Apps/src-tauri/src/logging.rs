@@ -42,8 +42,16 @@ pub fn init() -> WorkerGuard {
         eprintln!("failed to create log dir {}: {error}", dir.display());
     }
 
-    let file_appender = tracing_appender::rolling::daily(&dir, log_file_prefix());
-    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+    let file_path = dir.join(format!("{}.log", current_date_string()));
+    let file: Box<dyn std::io::Write + Send + 'static> =
+        match std::fs::OpenOptions::new().create(true).append(true).open(&file_path) {
+            Ok(f) => Box::new(f),
+            Err(error) => {
+                eprintln!("failed to open log file {}: {error}", file_path.display());
+                Box::new(std::io::stderr())
+            }
+        };
+    let (file_writer, guard) = tracing_appender::non_blocking(file);
 
     let (filter_layer, reload_handle) = reload::Layer::new(build_filter(false));
     let _ = LEVEL_RELOAD.set(reload_handle);
@@ -99,12 +107,30 @@ pub fn set_verbose(verbose: bool) {
     }
 }
 
-fn log_file_prefix() -> &'static str {
-    if cfg!(debug_assertions) {
-        "planarclip-dev.log"
-    } else {
-        "planarclip.log"
-    }
+/// Current local date as `YYYY-MM-DD` for the log file name (e.g. `2026-07-18.log`).
+fn current_date_string() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let days = now.div_euclid(86400);
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Convert days since 1970-01-01 to (year, month, day) -- Howard Hinnant's algorithm.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m as u32, d as u32)
 }
 
 fn install_panic_hook() {
@@ -136,9 +162,8 @@ fn cleanup_old_logs(dir: &Path) {
         let path = entry.path();
         // Only touch our own rotated log files; never delete unrelated entries.
         let is_ours = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.starts_with("planarclip"))
+            .extension()
+            .map(|e| e == "log")
             .unwrap_or(false);
         if !is_ours {
             continue;
