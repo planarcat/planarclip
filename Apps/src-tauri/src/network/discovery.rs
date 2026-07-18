@@ -138,6 +138,18 @@ fn normalize_host_name(host_name: &str) -> String {
         .to_string()
 }
 
+/// All local IP addresses (across every interface) -- used to filter out
+/// same-machine instances discovered via mDNS (they advertise multiple IPs).
+pub fn local_ips() -> std::collections::HashSet<String> {
+    let mut ips = std::collections::HashSet::new();
+    if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
+        for (_, ip) in interfaces {
+            ips.insert(ip.to_string());
+        }
+    }
+    ips
+}
+
 pub fn local_ip_for_mdns() -> String {
     if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
         if let Some((_, ip)) = interfaces
