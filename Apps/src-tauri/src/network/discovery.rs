@@ -138,7 +138,7 @@ fn normalize_host_name(host_name: &str) -> String {
         .to_string()
 }
 
-fn local_ip_for_mdns() -> String {
+pub fn local_ip_for_mdns() -> String {
     if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
         if let Some((_, ip)) = interfaces
             .iter()

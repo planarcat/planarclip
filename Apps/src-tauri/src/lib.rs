@@ -121,6 +121,7 @@ async fn start_broadcast(app: &tauri::AppHandle, port: u16, register_self: bool,
         .ok_or_else(|| "key pair not ready".to_string())?;
     let device_name = normalize_stored_device_name(&state.config.lock().await.device_name);
     let peer_id = key_pair.fingerprint();
+    let local_ip = discovery::local_ip_for_mdns();
     let lan_devices = state.lan_devices.clone();
     let pending_accept_tx = state.pending_accept_tx.clone();
     let pending_reject_tx = state.pending_reject_tx.clone();
@@ -136,6 +137,7 @@ async fn start_broadcast(app: &tauri::AppHandle, port: u16, register_self: bool,
 
     let discovery_task = {
         let lan_devices = lan_devices.clone();
+        let local_ip = local_ip.clone();
         let app_handle = app_handle.clone();
         let verify_key_pair = app_key_pair.clone();
         let verify_cooldown = state.peer_offline_cooldown.clone();
@@ -161,7 +163,11 @@ async fn start_broadcast(app: &tauri::AppHandle, port: u16, register_self: bool,
                         let verify_lan_devices = lan_devices.clone();
                         let verify_app = app_handle.clone();
                         let auto_connect_deps = auto_connect_deps.clone();
+                        let local_ip = local_ip.clone();
                         tauri::async_runtime::spawn(async move {
+                            if candidate.ip == local_ip {
+                                return; // 本机另一实例,不显示
+                            }
                             if is_peer_in_offline_cooldown(&verify_cooldown, &candidate.peer_id)
                                 .await
                             {
