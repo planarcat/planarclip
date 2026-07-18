@@ -2601,12 +2601,25 @@ async fn submit_pairing_code(
         return Err("配对码必须为 6 位数字".into());
     }
 
-    let stream = state
-        .pending_initiator
-        .lock()
-        .await
-        .take()
-        .ok_or("当前没有待处理的连接")?;
+    let stream = {
+        let mut guard = state.pending_initiator.lock().await;
+        guard.take()
+    };
+    let stream = match stream {
+        Some(s) => s,
+        None => {
+            // watch_pending_initiator_peer briefly takes the stream every 300ms
+            // to poll (50ms window); retry once after it puts the stream back.
+            tracing::warn!("submit_pairing_code: pending_initiator None, retrying");
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+            state
+                .pending_initiator
+                .lock()
+                .await
+                .take()
+                .ok_or("当前没有待处理的连接")?
+        }
+    };
 
     match direct::initiator_send_code(stream, code).await {
         Ok(conn) => {
