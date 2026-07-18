@@ -115,10 +115,11 @@ async fn start_broadcast(app: &tauri::AppHandle, port: u16, register_self: bool,
     let app_key_pair = state.key_pair.clone();
     let key_pair = state
         .key_pair
-        .blocking_lock()
+        .lock()
+        .await
         .clone()
         .ok_or_else(|| "key pair not ready".to_string())?;
-    let device_name = normalize_stored_device_name(&state.config.blocking_lock().device_name);
+    let device_name = normalize_stored_device_name(&state.config.lock().await.device_name);
     let peer_id = key_pair.fingerprint();
     let lan_devices = state.lan_devices.clone();
     let pending_accept_tx = state.pending_accept_tx.clone();
